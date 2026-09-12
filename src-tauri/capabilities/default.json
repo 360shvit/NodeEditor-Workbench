@@ -1,0 +1,12 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "main-capability",
+  "description": "Least-privilege local desktop capability. Native dialogs and filesystem authority remain inside Rust commands; UI scaling may adjust only the current WebView zoom.",
+  "windows": [
+    "main"
+  ],
+  "permissions": [
+    "core:event:default",
+    "core:webview:allow-set-webview-zoom"
+  ]
+}

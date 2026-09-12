@@ -1,0 +1,42 @@
+name: Validate Tauri Windows
+
+on:
+  workflow_dispatch:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: windows-2025
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - uses: dtolnay/rust-toolchain@d1031067263f94b142dd6c0ce24c5eb9d02d52a0
+        with:
+          toolchain: 1.98.1
+      - name: Require checked dependency locks
+        shell: pwsh
+        run: |
+          if (-not (Test-Path 'package-lock.json')) { throw 'package-lock.json is required before public CI is enabled.' }
+          if (-not (Test-Path 'src-tauri/Cargo.lock')) { throw 'src-tauri/Cargo.lock is required before public CI is enabled.' }
+      - run: npm ci --ignore-scripts
+      - run: npm run release:check
+      - run: npm run test:github-updater-integration
+      - name: Strict application TypeScript check
+        run: node node_modules/typescript/bin/tsc -p tsconfig.app.json
+      - name: Run all registered self-contained regression suites
+        run: npm run test:rc-regression-matrix
+      - name: Require zero unused source carry
+        run: npm run audit:unused-carry
+      - name: Verify native tests with locked dependencies
+        run: cargo test --locked --manifest-path src-tauri/Cargo.toml

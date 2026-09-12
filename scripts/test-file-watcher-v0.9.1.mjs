@@ -1,0 +1,17 @@
+import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+const rust = readFileSync(new URL('../src-tauri/src/main.rs', import.meta.url), 'utf8');
+const runtime = readFileSync(new URL('../tauri-ui/tauri-runtime.js', import.meta.url), 'utf8');
+const store = readFileSync(new URL('../src/store.ts', import.meta.url), 'utf8');
+const persistence = readFileSync(new URL('../src/projects/projectPersistence.ts', import.meta.url), 'utf8');
+assert.match(rust, /RecommendedWatcher/);
+assert.match(rust, /RecursiveMode::Recursive/);
+assert.match(rust, /project-files-changed/);
+assert.match(rust, /watch_suppression/);
+assert.match(rust, /current == entry\.expected/);
+assert.match(runtime, /hgw:project-files-changed/);
+assert.match(store, /applyExternalWorkspaceReload/);
+assert.match(store, /changeSetTouchesPaths/);
+assert.match(store, /invalidatedHistory/);
+assert.doesNotMatch(persistence, /changeSet\s*:/i);
+console.log('v0.9.1 file watcher boundary OK');

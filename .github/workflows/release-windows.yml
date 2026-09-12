@@ -1,0 +1,113 @@
+name: Publish Windows Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: publish-windows-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    runs-on: windows-2025
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Require publish bootstrap
+        shell: pwsh
+        run: |
+          if (-not (Test-Path 'package-lock.json')) { throw 'package-lock.json is required.' }
+          if (-not (Test-Path 'src-tauri/Cargo.lock')) { throw 'src-tauri/Cargo.lock is required.' }
+          if ((Get-Content 'src-tauri/updater.pubkey' -Raw).Trim().StartsWith('UNCONFIGURED')) { throw 'Updater public key is not configured.' }
+          $contract = Get-Content 'release-spec/release-contract.json' -Raw | ConvertFrom-Json
+          if (-not $contract.updater.publication.publishable) { throw 'release-contract publication.publishable must be true before a tag can publish.' }
+          if ($contract.version.revision -ne 'r1') { throw 'A public release must use revision r1.' }
+          if ($env:GITHUB_REF_NAME -ne "v$($contract.version.semver)") { throw "Tag must exactly match v$($contract.version.semver)." }
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - uses: dtolnay/rust-toolchain@d1031067263f94b142dd6c0ce24c5eb9d02d52a0
+        with:
+          toolchain: 1.98.1
+      - run: npm ci --ignore-scripts
+      - run: npm run release:check
+      - run: npm run test:github-updater-integration
+      - name: Native tests
+        run: cargo test --locked --manifest-path src-tauri/Cargo.toml
+
+  publish:
+    needs: validate
+    runs-on: windows-2025
+    environment: release
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - uses: dtolnay/rust-toolchain@d1031067263f94b142dd6c0ce24c5eb9d02d52a0
+        with:
+          toolchain: 1.98.1
+      - run: npm ci --ignore-scripts
+      - name: Install pinned Tauri CLI
+        run: cargo install tauri-cli --version 2.11.0 --locked
+      - name: Build signed NSIS updater artifact
+        shell: pwsh
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          HGW_GITHUB_REPOSITORY: ${{ github.repository }}
+          HGW_DISTRIBUTION_KIND: installed
+        run: |
+          cargo tauri build --bundles nsis --config src-tauri/tauri.installer.conf.json -- --locked
+      - name: Stage allowlisted public release surface
+        shell: pwsh
+        env:
+          HGW_GITHUB_REPOSITORY: ${{ github.repository }}
+        run: |
+          node scripts/release-surface.mjs --installer-dir src-tauri/target/release/bundle/nsis --repository $env:GITHUB_REPOSITORY
+          node scripts/release-surface.mjs --check
+      - name: Publish version release from release/public only
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $contract = Get-Content 'release-spec/release-contract.json' -Raw | ConvertFrom-Json
+          $tag = "v$($contract.version.semver)"
+          gh release view $tag *> $null
+          if ($LASTEXITCODE -eq 0) { throw "Release $tag already exists; same-SemVer republish is forbidden." }
+          $assets = Get-ChildItem 'release/public' -File | ForEach-Object { $_.FullName }
+          $args = @('release', 'create', $tag) + $assets + @('--title', "Hytale Generator Workbench $tag", '--notes', "Signed Windows release generated from the checked allowlisted release surface.")
+          if ($contract.version.semver.Contains('-')) { $args += '--prerelease' }
+          & gh @args
+          if ($LASTEXITCODE -ne 0) { throw 'GitHub version release creation failed.' }
+      - name: Publish rolling updater manifests with channel isolation
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $contract = Get-Content 'release-spec/release-contract.json' -Raw | ConvertFrom-Json
+          $isPrerelease = $contract.version.semver.Contains('-')
+
+          gh release view updater-preview *> $null
+          if ($LASTEXITCODE -ne 0) {
+            gh release create updater-preview --prerelease --title 'Updater preview manifest' --notes 'Rolling signed Preview updater manifest.'
+          }
+          gh release upload updater-preview release/public/latest-preview.json --clobber
+          if ($LASTEXITCODE -ne 0) { throw 'Preview manifest publication failed.' }
+
+          if (-not $isPrerelease) {
+            gh release view updater-stable *> $null
+            if ($LASTEXITCODE -ne 0) {
+              gh release create updater-stable --prerelease --title 'Updater stable manifest' --notes 'Rolling signed Stable updater manifest.'
+            }
+            gh release upload updater-stable release/public/latest.json --clobber
+            if ($LASTEXITCODE -ne 0) { throw 'Stable manifest publication failed.' }
+          }

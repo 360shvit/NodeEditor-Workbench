@@ -1,0 +1,106 @@
+import fs from 'node:fs';
+import assert from 'node:assert/strict';
+
+const read = (path) => fs.readFileSync(path, 'utf8');
+const contract = JSON.parse(read('release-spec/release-contract.json'));
+assert.equal(contract.version.semver, '0.11.35');
+assert.match(contract.version.revision, /^r\d+$/);
+assert.equal(contract.version.display, `${contract.version.semver}-${contract.version.revision}`);
+assert.equal(contract.updater.enabled, true);
+assert.equal(contract.updater.channels.stable.manifestReleaseTag, 'updater-stable');
+assert.equal(contract.updater.channels.preview.manifestReleaseTag, 'updater-preview');
+assert.equal(contract.updater.publication.updaterVersionSource, 'version.semver');
+assert.equal(contract.updater.publication.allowSameSemverRepublish, false);
+assert.equal(contract.updater.publication.publishable, false);
+
+const cargo = read('src-tauri/Cargo.toml');
+assert.match(cargo, /tauri-plugin-updater = "=2\.11\.0"/);
+const installer = JSON.parse(read('src-tauri/tauri.installer.conf.json'));
+assert.equal(installer.bundle.createUpdaterArtifacts, true);
+assert.equal(installer.plugins.updater.windows.installMode, 'passive');
+
+const rust = read('src-tauri/src/main.rs');
+for (const token of ['check_for_update', 'install_update', 'pending_change_count', 'HGW_GITHUB_REPOSITORY', 'updater.pubkey', 'restart_after_install(true)', '.download(', '.install(&bytes)', 'phase: "blocked"', 'phase: "installing"']) {
+  assert.ok(rust.includes(token), `native updater missing ${token}`);
+}
+assert.ok(!rust.includes('.download_and_install('), 'install path must split verified download from final native install gate');
+assert.ok(rust.includes("payload.channel == \"stable\" && version.to_string().contains('-')"), 'Stable client must reject prerelease SemVer even if its manifest is mispublished');
+assert.ok(rust.includes('UPDATER_DISTRIBUTION_KIND == "installed"'), 'native updater must fail closed outside the installed NSIS distribution class');
+assert.ok(read('Build-Windows.cmd').includes('HGW_DISTRIBUTION_KIND=development'), 'raw Windows builds must compile as development/non-installed');
+assert.ok(read('Build-Windows-Installer.cmd').includes('HGW_DISTRIBUTION_KIND=installed'), 'local NSIS builds must compile as installed');
+assert.ok(read('Build-Windows-Installer.cmd').includes('HGW_GITHUB_REPOSITORY is not set'), 'local updater-enabled NSIS builds must require a real GitHub repository slug');
+const secondPendingIndex = rust.indexOf('let pending_changes = desktop.pending_change_count.load(Ordering::Relaxed);', rust.indexOf('let bytes = update'));
+const installIndex = rust.indexOf('.install(&bytes)');
+assert.ok(secondPendingIndex > 0 && secondPendingIndex < installIndex, 'native pending-change recheck must happen after download and immediately before install');
+
+const capability = read('src-tauri/capabilities/default.json');
+assert.ok(!capability.includes('updater:default'), 'webview must not receive updater plugin authority');
+const runtime = read('tauri-ui/tauri-runtime.js');
+assert.ok(runtime.includes('/api/app/update/check'));
+assert.ok(runtime.includes('/api/app/update/install'));
+assert.ok(runtime.includes("tauri.event.listen('app-update-progress'"));
+const bridge = read('src/io/desktopBridge.ts');
+assert.ok(bridge.includes('desktopCheckForUpdate'));
+assert.ok(bridge.includes('desktopInstallUpdate'));
+const settings = read('src/components/WorkbenchSettings.tsx');
+for (const token of ['Check and install', 'Install & restart', 'pendingChangeCount', 'hgw:app-update-progress', 'Downloaded and signature-verified', 'disabled={updateBusy}', 'closeSettings']) {
+  assert.ok(settings.includes(token), `updater UX missing ${token}`);
+}
+
+assert.equal(read('.nvmrc').trim(), '24.21.0');
+assert.match(read('rust-toolchain.toml'), /channel = "1\.98\.1"/);
+const workflow = read('.github/workflows/release-windows.yml');
+assert.equal((workflow.match(/runs-on: windows-2025/g) ?? []).length, 2, 'validate and publish jobs must use the explicit Windows 2025 runner image');
+for (const token of [
+  'actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683',
+  'actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020',
+  'dtolnay/rust-toolchain@d1031067263f94b142dd6c0ce24c5eb9d02d52a0',
+  'environment: release',
+  'TAURI_SIGNING_PRIVATE_KEY',
+  'release/public',
+  'release-surface.mjs',
+  'updater-stable',
+  'updater-preview',
+  "if (-not $isPrerelease)",
+  'publication.publishable',
+  'same-SemVer republish is forbidden',
+]) {
+  assert.ok(workflow.includes(token), `release workflow missing ${token}`);
+}
+assert.ok(workflow.includes('if ($LASTEXITCODE -eq 0)'), 'GitHub CLI release existence checks must use the external-process exit code');
+assert.ok(workflow.includes('HGW_DISTRIBUTION_KIND: installed'), 'GitHub NSIS build must compile the installed updater distribution class');
+assert.ok(!workflow.includes('tauri-apps/tauri-action@'), 'GitHub publication must not bypass the allowlisted release/public surface');
+assert.match(workflow, /permissions:\n\s+contents: read/);
+assert.match(workflow, /publish:[\s\S]*permissions:\n\s+contents: write/);
+
+const installerBuild = read('Build-Windows-Installer.cmd');
+assert.ok(installerBuild.includes('SIGNATURE_SOURCE'));
+assert.ok(installerBuild.includes('%SETUP_OUT%.sig'));
+
+const rootReadme = read('README.md');
+assert.ok(rootReadme.includes(`v${contract.version.display}`));
+assert.match(rootReadme, /native Tauri v2 updater integration/i);
+assert.ok(!rootReadme.includes('Updater is still disabled'));
+const releaseReadme = read('release-spec/README.md');
+assert.ok(releaseReadme.includes(`v${contract.version.display}`));
+assert.match(releaseReadme, /rechecks? pending/i);
+assert.ok(fs.existsSync('SECURITY.md'));
+assert.ok(!fs.existsSync('Package-Windows-Portable.cmd'));
+assert.ok(!fs.existsSync('PORTABLE_README.txt'));
+assert.ok(!fs.existsSync('Run-Windows.cmd'));
+assert.ok(!fs.existsSync('vite.config.ts'));
+assert.ok(!fs.existsSync('index.html'));
+assert.ok(!('vite' in JSON.parse(read('package.json')).dependencies));
+
+const pubkey = read('src-tauri/updater.pubkey').trim();
+if (contract.updater.publication.publishable) {
+  assert.ok(fs.existsSync('package-lock.json'), 'publishable tree must contain package-lock.json');
+  assert.ok(fs.existsSync('src-tauri/Cargo.lock'), 'publishable tree must contain src-tauri/Cargo.lock');
+  assert.ok(!pubkey.startsWith('UNCONFIGURED'), 'publishable tree must contain real updater public key');
+} else {
+  assert.ok(pubkey.length > 0, 'integration candidate must carry explicit updater key state');
+}
+assert.ok(fs.existsSync('THIRD_PARTY_NOTICES.txt'));
+assert.match(read('release-spec/README.md'), /private signing key must never be committed/i);
+
+console.log(`${contract.version.display} GitHub/updater deep-clean contract: PASS`);

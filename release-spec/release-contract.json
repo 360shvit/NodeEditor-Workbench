@@ -1,0 +1,78 @@
+{
+  "schemaVersion": 1,
+  "product": {
+    "name": "Hytale Generator Workbench",
+    "identifier": "com.hytalegenerator.workbench"
+  },
+  "version": {
+    "semver": "0.11.35",
+    "revision": "r10",
+    "display": "0.11.35-r10",
+    "milestone": "v0.11.35",
+    "milestoneName": "GitHub & Updater Integration",
+    "buildId": "v0.11.35-r10-public-repo-clean"
+  },
+  "validation": {
+    "profile": "github-updater-deep-clean-v1",
+    "featureFreeze": false,
+    "canonicalRunRequired": false
+  },
+  "updater": {
+    "prepared": true,
+    "enabled": true,
+    "integrationMilestone": "v0.11.35-r10",
+    "provider": "GitHub Releases",
+    "framework": "Tauri v2 updater",
+    "defaultChannel": "stable",
+    "channels": {
+      "stable": {
+        "manifestAsset": "latest.json",
+        "acceptPrerelease": false,
+        "description": "Stable channel accepts release versions only.",
+        "manifestReleaseTag": "updater-stable"
+      },
+      "preview": {
+        "manifestAsset": "latest-preview.json",
+        "acceptPrerelease": true,
+        "description": "Preview channel may accept RC/beta prereleases as well as stable releases.",
+        "manifestReleaseTag": "updater-preview"
+      }
+    },
+    "windows": {
+      "target": "windows-x86_64",
+      "installer": "nsis",
+      "plannedInstallMode": "passive",
+      "autoUpdateInstalledBuild": true,
+      "installMode": "passive"
+    },
+    "publication": {
+      "installerAssetPattern": "Hytale-Generator-Workbench_{version}_x64-setup.exe",
+      "installerSignaturePattern": "Hytale-Generator-Workbench_{version}_x64-setup.exe.sig",
+      "sha256Sidecars": true,
+      "publishable": false,
+      "updaterVersionSource": "version.semver",
+      "allowSameSemverRepublish": false,
+      "revisionPolicy": "Internal rN labels may identify QA artifacts only. Any new public updater release must bump SemVer; publishable releases use r1.",
+      "repositorySource": "HGW_GITHUB_REPOSITORY compile-time environment variable"
+    },
+    "integrity": {
+      "httpsRequired": true,
+      "tauriSignatureRequired": true,
+      "publicKeyCommittedAtIntegration": true,
+      "privateKeyInRepository": false,
+      "privateKeyPolicy": "Store only in protected release/CI secret storage; never commit or package it.",
+      "publicKeyPath": "src-tauri/updater.pubkey",
+      "bootstrapRequired": true,
+      "bootstrapPolicy": "Public publishing remains blocked until a real GitHub repository, committed updater public key, package-lock.json and src-tauri/Cargo.lock are present."
+    },
+    "lifecycle": {
+      "checkFailure": "non-fatal",
+      "offline": "non-fatal; keep current version",
+      "signatureFailure": "reject update and keep current version",
+      "downloadFailure": "keep current version; allow retry",
+      "pendingChanges": "download may complete, but do not install/restart: native authority rechecks pending project changes immediately before install and any new staged change blocks installation",
+      "restart": "explicit user-controlled install/restart step",
+      "nonInstalledBuild": "automatic updater disabled; only installed NSIS builds may configure or install updates"
+    }
+  }
+}

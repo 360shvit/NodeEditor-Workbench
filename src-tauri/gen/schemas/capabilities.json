@@ -1,0 +1,1 @@
+{"main-capability":{"identifier":"main-capability","description":"Least-privilege local desktop capability. Native dialogs and filesystem authority remain inside Rust commands; UI scaling may adjust only the current WebView zoom.","local":true,"windows":["main"],"permissions":["core:event:default","core:webview:allow-set-webview-zoom"]}}

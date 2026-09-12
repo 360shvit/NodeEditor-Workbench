@@ -1,0 +1,47 @@
+Hytale Generator Workbench Runtime
+
+Preact
+------
+The embedded desktop runtime includes a compact Preact-compatible renderer.
+Preact is licensed under the MIT License.
+Copyright (c) The Preact Authors.
+https://preactjs.com/
+
+The Workbench application source uses React/Zustand. The embedded Tauri frontend
+uses local compatibility modules so end-user startup requires neither npm/Node nor
+a development web server.
+
+Lucide
+------
+Selected Workbench UI icons use Lucide SVG geometry vendored into the source.
+Lucide is licensed under the ISC License.
+Copyright (c) Lucide Contributors.
+https://lucide.dev/
+
+The icon subset is stored locally so the embedded desktop runtime does not
+require a CDN, an icon font, or npm at end-user startup.
+
+
+Tauri Window State Plugin
+-------------------------
+The desktop host uses the official tauri-plugin-window-state crate to persist
+and restore native window size, position and maximized state.
+The Tauri plugins workspace is licensed under the Apache License 2.0 and MIT
+License, as applicable.
+Copyright (c) The Tauri Programme within The Commons Conservancy.
+https://github.com/tauri-apps/plugins-workspace
+
+Tauri Updater Plugin
+--------------------
+The installed desktop build uses the official tauri-plugin-updater crate for
+signed update discovery, download verification and Windows installation.
+The Tauri plugins workspace is licensed under Apache License 2.0 and MIT,
+as applicable.
+Copyright (c) The Tauri Programme within The Commons Conservancy.
+https://github.com/tauri-apps/plugins-workspace
+
+Compliance status
+-----------------
+This file records known directly shipped/runtime components. Before a public
+release, the committed package-lock.json and src-tauri/Cargo.lock must also be
+reviewed for the complete transitive dependency/license inventory.

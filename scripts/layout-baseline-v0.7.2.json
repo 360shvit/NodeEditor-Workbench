@@ -1,0 +1,109 @@
+{
+  "label": "v0.7.2 layout golden baseline",
+  "fixtures": {
+    "Ps_Atlantis_City_Cold_Dense.json": "fc81903263af4f99e682007f9862b7d9ca019e129847dc5c7852e440c4ccf286",
+    "Ps_Atlantis_City_Hot_Dense.json": "6f0ee5af4da0a871b7b9d1f26bae6de230147cbb9caa246dfe28d2602f40f493"
+  },
+  "cases": [
+    {
+      "name": "normalize-10-10-100",
+      "settings": {
+        "strategy": "normalize",
+        "horizontalGap": 10,
+        "verticalGap": 10,
+        "alignmentTolerance": 100,
+        "includeLive": true,
+        "floaterMode": "ignore"
+      },
+      "sha256": "e5dbe2f1544da6fb3a051229a6b35655c985bb4cc1c49328c87b6580e6072e38"
+    },
+    {
+      "name": "author-10-10-100",
+      "settings": {
+        "strategy": "author-normalize",
+        "horizontalGap": 10,
+        "verticalGap": 10,
+        "alignmentTolerance": 100,
+        "includeLive": true,
+        "floaterMode": "ignore"
+      },
+      "sha256": "de7d2105eab0a0dbccfe30fd3d82a3fbd1e857f0db668e0519963c8d6f788dea"
+    },
+    {
+      "name": "author-50-50-100",
+      "settings": {
+        "strategy": "author-normalize",
+        "horizontalGap": 50,
+        "verticalGap": 50,
+        "alignmentTolerance": 100,
+        "includeLive": true,
+        "floaterMode": "ignore"
+      },
+      "sha256": "0becd2397fe3b1abf4fe3f81c3825fc83df0af0e9e43bae09ce8d7a459c3f506"
+    },
+    {
+      "name": "author-100-100-100",
+      "settings": {
+        "strategy": "author-normalize",
+        "horizontalGap": 100,
+        "verticalGap": 100,
+        "alignmentTolerance": 100,
+        "includeLive": true,
+        "floaterMode": "ignore"
+      },
+      "sha256": "54927fccef5df4ad9df1bf4d90214057f9f8249a75ec53a09bbf98cee9d45420"
+    },
+    {
+      "name": "dag-auto-10-10",
+      "settings": {
+        "strategy": "dag-rebuild",
+        "horizontalGap": 10,
+        "verticalGap": 10,
+        "alignmentTolerance": 100,
+        "includeLive": true,
+        "floaterMode": "ignore",
+        "dagBranchDirection": "auto"
+      },
+      "sha256": "e7221b078d06055d47d4858e88a60a8fe0c20509cfefc21736abfa5caaf08f64"
+    },
+    {
+      "name": "dag-down-10-10",
+      "settings": {
+        "strategy": "dag-rebuild",
+        "horizontalGap": 10,
+        "verticalGap": 10,
+        "alignmentTolerance": 100,
+        "includeLive": true,
+        "floaterMode": "ignore",
+        "dagBranchDirection": "down"
+      },
+      "sha256": "e7221b078d06055d47d4858e88a60a8fe0c20509cfefc21736abfa5caaf08f64"
+    },
+    {
+      "name": "dag-up-10-10",
+      "settings": {
+        "strategy": "dag-rebuild",
+        "horizontalGap": 10,
+        "verticalGap": 10,
+        "alignmentTolerance": 100,
+        "includeLive": true,
+        "floaterMode": "ignore",
+        "dagBranchDirection": "up"
+      },
+      "sha256": "20ea280c00f5ddb88a142c37586747c8deb7aeb4806e80c2cd2a1f67cb80026b"
+    },
+    {
+      "name": "dag-type-10-10",
+      "settings": {
+        "strategy": "dag-rebuild",
+        "horizontalGap": 10,
+        "verticalGap": 10,
+        "alignmentTolerance": 100,
+        "includeLive": true,
+        "floaterMode": "ignore",
+        "dagBranchDirection": "type"
+      },
+      "sha256": "49d6e7d4c6115937e052d4e5b36f77012d27abe248122fd782b884041788847d"
+    }
+  ]
+}

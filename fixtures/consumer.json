@@ -1,0 +1,17 @@
+{
+  "$NodeId": "Sum.Density-44444444-4444-4444-4444-444444444444",
+  "Type": "Sum",
+  "Inputs": [{
+    "$NodeId": "Imported.Density-55555555-5555-5555-5555-555555555555",
+    "Type": "Imported",
+    "Name": "Ps-Rocks"
+  }, {
+    "$NodeId": "Exported.VectorProvider-66666666-6666-6666-6666-666666666666",
+    "Type": "Exported",
+    "ExportAs": "Shared-Name"
+  }, {
+    "$NodeId": "Exported.Density-77777777-7777-7777-7777-777777777777",
+    "Type": "Exported",
+    "ExportAs": "Shared-Name"
+  }]
+}

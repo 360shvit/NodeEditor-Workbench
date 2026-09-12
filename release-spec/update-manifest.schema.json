@@ -1,0 +1,53 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://hytale-generator-workbench.invalid/schemas/update-manifest-v1.json",
+  "title": "Hytale Generator Workbench static updater manifest",
+  "description": "Tauri v2 static updater JSON contract used by the signed GitHub publication pipeline.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "version",
+    "platforms"
+  ],
+  "properties": {
+    "version": {
+      "type": "string",
+      "pattern": "^v?[0-9]+\\.[0-9]+\\.[0-9]+(?:-[0-9A-Za-z.-]+)?(?:\\+[0-9A-Za-z.-]+)?$"
+    },
+    "notes": {
+      "type": "string"
+    },
+    "pub_date": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "platforms": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "windows-x86_64"
+      ],
+      "properties": {
+        "windows-x86_64": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "url",
+            "signature"
+          ],
+          "properties": {
+            "url": {
+              "type": "string",
+              "format": "uri",
+              "pattern": "^https://"
+            },
+            "signature": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        }
+      }
+    }
+  }
+}

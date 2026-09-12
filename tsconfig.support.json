@@ -1,0 +1,13 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2022", "DOM"],
+    "strict": true,
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "rootDir": "src/support",
+    "outDir": ".support-build",
+    "skipLibCheck": true
+  },
+  "include": ["src/support/runtimeDiagnostics.ts", "src/support/performanceTracing.ts"]
+}
