@@ -88,6 +88,22 @@ assert.ok(!workflow.includes('tauri-apps/tauri-action@'), 'GitHub publication mu
 assert.match(workflow, /permissions:\n\s+contents: read/);
 assert.match(workflow, /publish:[\s\S]*permissions:\n\s+contents: write/);
 
+const approvalWorkflow = read('.github/workflows/dependency-approval.yml');
+assert.match(approvalWorkflow, /pull_request_target:/, 'dependency approval must run from trusted base workflow');
+assert.match(approvalWorkflow, /pull_request_review:/, 'dependency approval must re-evaluate when reviews change');
+assert.match(approvalWorkflow, /pull-requests: read/, 'dependency approval needs read-only review metadata');
+assert.match(approvalWorkflow, /dependabot\[bot\]/, 'dependency approval must identify Dependabot PRs');
+assert.match(approvalWorkflow, /github\.repository_owner/, 'dependency approval must require repository-owner approval');
+assert.match(approvalWorkflow, /PR_HEAD_SHA/, 'dependency approval must bind approval to the current PR head');
+assert.match(approvalWorkflow, /\.commit_id ==/, 'dependency approval must compare the review commit to current head');
+assert.doesNotMatch(approvalWorkflow, /^\s*-\s+uses:/m, 'approval metadata workflow must not checkout or execute PR actions');
+
+const dependabot = read('.github/dependabot.yml');
+for (const ecosystem of ['npm', 'cargo', 'github-actions']) assert.ok(dependabot.includes(`package-ecosystem: "${ecosystem}"`));
+assert.match(dependabot, /version-update:semver-minor/);
+assert.match(dependabot, /version-update:semver-patch/);
+assert.doesNotMatch(dependabot, /version-update:semver-major/, 'major migrations must remain explicit/manual');
+
 const installerBuild = read('Build-Windows-Installer.cmd');
 assert.ok(installerBuild.includes('SIGNATURE_SOURCE'));
 assert.ok(installerBuild.includes('%SETUP_OUT%.sig'));
