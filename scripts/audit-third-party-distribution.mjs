@@ -172,23 +172,49 @@ const packages = [...classifyNpm(), ...classifyCargo(fullMetadata, targetMetadat
 const invalid = packages.filter((pkg) => !pkg.name || (pkg.ecosystem !== 'vendored' && !pkg.version));
 if (invalid.length) throw new Error(`Distribution classification contains package(s) without required identity metadata: ${invalid.map((pkg) => `${pkg.ecosystem}:${pkg.name}`).join(', ')}`);
 
-const missingLicense = packages.filter((pkg) => pkg.classification === 'runtime' && !pkg.license && !pkg.licenseFile);
+const runtimePackages = packages.filter((pkg) => pkg.classification === 'runtime');
+const missingLicense = runtimePackages.filter((pkg) => !pkg.license && !pkg.licenseFile);
 if (missingLicense.length) throw new Error(`Runtime-distributed package(s) lack license metadata: ${missingLicense.map((pkg) => `${pkg.ecosystem}:${pkg.name}@${pkg.version ?? 'vendored'}`).join(', ')}`);
 
 const counts = packages.reduce((acc, pkg) => {
   acc[pkg.classification] = (acc[pkg.classification] ?? 0) + 1;
   return acc;
 }, {});
-const runtimeLicenseExpressions = [...new Set(packages.filter((pkg) => pkg.classification === 'runtime').map((pkg) => pkg.license ?? `FILE:${pkg.licenseFile}`))].sort();
+const runtimeLicenseExpressions = [...new Set(runtimePackages.map((pkg) => pkg.license ?? `FILE:${pkg.licenseFile}`))].sort();
+const packageIdentity = (pkg) => `${pkg.ecosystem}:${pkg.name}@${pkg.version ?? 'vendored'}`;
+const mplRuntimePackages = runtimePackages
+  .filter((pkg) => /(^|[^A-Za-z0-9-])MPL-2\.0([^A-Za-z0-9-]|$)/.test(pkg.license ?? ''))
+  .map(packageIdentity)
+  .sort();
+const apacheRuntimePackages = runtimePackages
+  .filter((pkg) => /(^|[^A-Za-z0-9-])Apache-2\.0([^A-Za-z0-9-]|$)/.test(pkg.license ?? ''))
+  .map((pkg) => `${packageIdentity(pkg)} [${pkg.license}]`)
+  .sort();
+const compoundRuntimePackages = runtimePackages
+  .filter((pkg) => pkg.license && /\bAND\b|\bOR\b|\/|\bWITH\b/.test(pkg.license))
+  .map((pkg) => `${packageIdentity(pkg)} [${pkg.license}]`)
+  .sort();
+const licenseFileRuntimePackages = runtimePackages
+  .filter((pkg) => !pkg.license && pkg.licenseFile)
+  .map((pkg) => `${packageIdentity(pkg)} [FILE:${pkg.licenseFile}]`)
+  .sort();
+
 const report = {
-  schemaVersion: 1,
+  schemaVersion: 2,
   target,
   policy: {
     npmRuntimeModel: 'local-compatibility-modules-no-node_modules-code-shipped',
     cargoClassification: 'target-filtered dependency traversal; proc-macros/build-dependencies are build-only unless independently runtime-reachable',
+    licenseReview: 'runtime license expressions are classified, but compound/alternative expressions are not silently reduced to a chosen license',
   },
   counts,
   runtimeLicenseExpressions,
+  review: {
+    mplRuntimePackages,
+    apacheRuntimePackages,
+    compoundRuntimePackages,
+    licenseFileRuntimePackages,
+  },
   packages,
 };
 
@@ -201,3 +227,7 @@ if (output) {
 
 console.log(`Third-party distribution classification: PASS (${Object.entries(counts).map(([key, value]) => `${key}=${value}`).join(', ')})`);
 console.log(`Runtime license expressions/files: ${runtimeLicenseExpressions.join(', ')}`);
+console.log(`Runtime MPL-2.0 packages: ${mplRuntimePackages.length ? mplRuntimePackages.join(', ') : 'none'}`);
+console.log(`Runtime packages mentioning Apache-2.0: ${apacheRuntimePackages.length ? apacheRuntimePackages.join(', ') : 'none'}`);
+console.log(`Runtime compound/alternative license expressions: ${compoundRuntimePackages.length ? compoundRuntimePackages.join(', ') : 'none'}`);
+console.log(`Runtime license-file-only packages: ${licenseFileRuntimePackages.length ? licenseFileRuntimePackages.join(', ') : 'none'}`);
