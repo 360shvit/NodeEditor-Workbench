@@ -20,6 +20,11 @@ assert.match(cargo, /tauri-plugin-updater = "=2\.11\.0"/);
 const installer = JSON.parse(read('src-tauri/tauri.installer.conf.json'));
 assert.equal(installer.bundle.createUpdaterArtifacts, true);
 assert.equal(installer.plugins.updater.windows.installMode, 'passive');
+assert.equal(
+  installer.bundle.resources?.['../THIRD_PARTY_NOTICES.txt'],
+  'THIRD_PARTY_NOTICES.txt',
+  'Windows installer must bundle THIRD_PARTY_NOTICES.txt as an installed application resource',
+);
 
 const rust = read('src-tauri/src/main.rs');
 for (const token of ['check_for_update', 'install_update', 'pending_change_count', 'HGW_GITHUB_REPOSITORY', 'updater.pubkey', 'restart_after_install(true)', '.download(', '.install(&bytes)', 'phase: "blocked"', 'phase: "installing"']) {
