@@ -31,14 +31,14 @@ for (const token of [
   assert.ok(workflow.includes(token), `release-candidate workflow missing ${token}`);
 }
 
-assert.doesNotMatch(workflow, /^\s*push:/m, 'release-candidate workflow must not trigger on push');
-assert.doesNotMatch(workflow, /^\s*pull_request:/m, 'release-candidate workflow must not trigger on pull requests');
-assert.doesNotMatch(workflow, /contents:\s*write/, 'release-candidate workflow must not receive repository write permission');
-assert.doesNotMatch(workflow, /\bgh\s+release\b/i, 'release-candidate workflow must never publish a GitHub release');
-assert.doesNotMatch(workflow, /release\s+create/i, 'release-candidate workflow must never create a release');
-assert.doesNotMatch(workflow, /release\s+upload/i, 'release-candidate workflow must never upload to a GitHub release');
+assert.doesNotMatch(workflow, /^[ \t]*push:/m, 'release-candidate workflow must not trigger on push');
+assert.doesNotMatch(workflow, /^[ \t]*pull_request:/m, 'release-candidate workflow must not trigger on pull requests');
+assert.doesNotMatch(workflow, /contents:[ \t]*write/, 'release-candidate workflow must not receive repository write permission');
+assert.doesNotMatch(workflow, /\bgh[ \t]+release\b/i, 'release-candidate workflow must never publish a GitHub release');
+assert.doesNotMatch(workflow, /release[ \t]+create/i, 'release-candidate workflow must never create a release');
+assert.doesNotMatch(workflow, /release[ \t]+upload/i, 'release-candidate workflow must never upload to a GitHub release');
 
-const uses = [...workflow.matchAll(/^\s*-\s+uses:\s+([^\s#]+)/gm)].map((match) => match[1]);
+const uses = [...workflow.matchAll(/^[ \t]*-[ \t]+uses:[ \t]+([^\s#]+)/gm)].map((match) => match[1]);
 assert.ok(uses.length >= 4, 'release-candidate workflow must use pinned setup and artifact actions');
 for (const use of uses) {
   const split = use.lastIndexOf('@');
