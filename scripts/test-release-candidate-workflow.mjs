@@ -41,8 +41,11 @@ assert.doesNotMatch(workflow, /release[ \t]+upload/i, 'release-candidate workflo
 const uses = workflow
   .split(/\r?\n/)
   .map((line) => line.trim())
-  .filter((line) => line.startsWith('- uses: '))
-  .map((line) => line.slice('- uses: '.length).split(/[ \t]+#/)[0].trim());
+  .filter((line) => line.startsWith('- uses: ') || line.startsWith('uses: '))
+  .map((line) => {
+    const normalized = line.startsWith('- ') ? line.slice(2) : line;
+    return normalized.slice('uses: '.length).split(/[ \t]+#/)[0].trim();
+  });
 
 assert.ok(uses.length >= 4, `release-candidate workflow must use pinned setup and artifact actions; found ${uses.length}: ${uses.join(', ')}`);
 for (const use of uses) {
