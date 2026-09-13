@@ -18,7 +18,13 @@ if (contract.updater.publication.publishable) assert.equal(contract.version.revi
 const cargo = read('src-tauri/Cargo.toml');
 assert.match(cargo, /tauri-plugin-updater = "=2\.11\.0"/);
 const installer = JSON.parse(read('src-tauri/tauri.installer.conf.json'));
+const pubkey = read('src-tauri/updater.pubkey').trim();
 assert.equal(installer.bundle.createUpdaterArtifacts, true);
+assert.equal(
+  installer.plugins.updater.pubkey,
+  pubkey,
+  'Tauri bundler updater pubkey must match src-tauri/updater.pubkey',
+);
 assert.equal(installer.plugins.updater.windows.installMode, 'passive');
 assert.equal(
   installer.bundle.resources?.['../THIRD_PARTY_NOTICES.txt'],
@@ -128,7 +134,6 @@ assert.ok(!fs.existsSync('vite.config.ts'));
 assert.ok(!fs.existsSync('index.html'));
 assert.ok(!('vite' in JSON.parse(read('package.json')).dependencies));
 
-const pubkey = read('src-tauri/updater.pubkey').trim();
 if (contract.updater.publication.publishable) {
   assert.ok(fs.existsSync('package-lock.json'), 'publishable tree must contain package-lock.json');
   assert.ok(fs.existsSync('src-tauri/Cargo.lock'), 'publishable tree must contain src-tauri/Cargo.lock');
