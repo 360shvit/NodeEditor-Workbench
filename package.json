@@ -87,7 +87,8 @@
     "test:lockfile-bootstrap-contract-fix": "node scripts/test-lockfile-bootstrap-contract-fix-v0.11.35-r7.mjs",
     "test:windows-file-url-path-fix": "node scripts/test-windows-file-url-path-fix-v0.11.35-r8.mjs",
     "test:temp-release-dependency-context-fix": "node scripts/test-temp-release-dependency-context-fix-v0.11.35-r9.mjs",
-    "test:public-repo-clean": "node scripts/test-public-source-tree.mjs"
+    "test:public-repo-clean": "node scripts/test-public-source-tree.mjs",
+    "audit:third-party": "node scripts/audit-third-party-inventory.mjs"
   },
   "dependencies": {
     "react": "18.3.1",
