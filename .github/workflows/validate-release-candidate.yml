@@ -60,6 +60,9 @@ jobs:
       - name: Build third-party inventory evidence
         run: node scripts/audit-third-party-inventory.mjs --output evidence/third-party-inventory.json
 
+      - name: Build Windows distribution dependency evidence
+        run: node scripts/audit-third-party-distribution.mjs --target x86_64-pc-windows-msvc --output evidence/third-party-distribution.json
+
       - name: Install pinned Tauri CLI
         run: cargo install tauri-cli --version 2.11.0 --locked
 
@@ -93,6 +96,7 @@ jobs:
           path: |
             release/public/
             evidence/third-party-inventory.json
+            evidence/third-party-distribution.json
             evidence/release-public-sha256.txt
           if-no-files-found: error
           retention-days: 7
