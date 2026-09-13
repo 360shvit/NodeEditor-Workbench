@@ -55,6 +55,10 @@ jobs:
         run: npm run audit:unused-carry
       - name: Native tests
         run: cargo test --locked --manifest-path src-tauri/Cargo.toml
+      - name: Verify transitive third-party license metadata
+        run: npm run audit:third-party
+      - name: Verify Windows distribution dependency classification
+        run: node scripts/audit-third-party-distribution.mjs --target x86_64-pc-windows-msvc
 
   publish:
     needs: validate
@@ -75,6 +79,8 @@ jobs:
         with:
           toolchain: 1.98.1
       - run: npm ci --ignore-scripts
+      - name: Recheck Windows distribution dependency classification
+        run: node scripts/audit-third-party-distribution.mjs --target x86_64-pc-windows-msvc
       - name: Install pinned Tauri CLI
         run: cargo install tauri-cli --version 2.11.0 --locked
       - name: Build signed NSIS updater artifact
