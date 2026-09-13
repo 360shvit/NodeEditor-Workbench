@@ -1,0 +1,98 @@
+name: Validate Release Candidate
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: validate-release-candidate-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  candidate:
+    runs-on: windows-2025
+    timeout-minutes: 120
+    environment: release
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Require protected main candidate
+        shell: pwsh
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+        run: |
+          if ($env:GITHUB_REF -ne 'refs/heads/main') { throw 'Release-candidate validation may only run from main.' }
+          if (-not (Test-Path 'package-lock.json')) { throw 'package-lock.json is required.' }
+          if (-not (Test-Path 'src-tauri/Cargo.lock')) { throw 'src-tauri/Cargo.lock is required.' }
+          if ((Get-Content 'src-tauri/updater.pubkey' -Raw).Trim().StartsWith('UNCONFIGURED')) { throw 'Updater public key is not configured.' }
+          if ([string]::IsNullOrWhiteSpace($env:TAURI_SIGNING_PRIVATE_KEY)) { throw 'TAURI_SIGNING_PRIVATE_KEY is not configured in the protected release environment.' }
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      - uses: dtolnay/rust-toolchain@d1031067263f94b142dd6c0ce24c5eb9d02d52a0
+        with:
+          toolchain: 1.98.1
+
+      - run: npm ci --ignore-scripts
+      - run: npm run release:check
+      - run: npm run test:github-updater-integration
+
+      - name: Strict application TypeScript check
+        run: node node_modules/typescript/bin/tsc -p tsconfig.app.json
+
+      - name: Run all registered self-contained regression suites
+        run: npm run test:rc-regression-matrix
+
+      - name: Require zero unused source carry
+        run: npm run audit:unused-carry
+
+      - name: Native tests
+        run: cargo test --locked --manifest-path src-tauri/Cargo.toml
+
+      - name: Build third-party inventory evidence
+        run: node scripts/audit-third-party-inventory.mjs --output evidence/third-party-inventory.json
+
+      - name: Install pinned Tauri CLI
+        run: cargo install tauri-cli --version 2.11.0 --locked
+
+      - name: Build signed NSIS release candidate
+        shell: pwsh
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          HGW_GITHUB_REPOSITORY: ${{ github.repository }}
+          HGW_DISTRIBUTION_KIND: installed
+        run: |
+          cargo tauri build --bundles nsis --config src-tauri/tauri.installer.conf.json -- --locked
+
+      - name: Stage and validate non-published release surface
+        shell: pwsh
+        env:
+          HGW_GITHUB_REPOSITORY: ${{ github.repository }}
+        run: |
+          node scripts/release-surface.mjs --installer-dir src-tauri/target/release/bundle/nsis --repository $env:GITHUB_REPOSITORY
+          node scripts/release-surface.mjs --check
+          New-Item -ItemType Directory -Force -Path evidence | Out-Null
+          Get-ChildItem release/public -File | Sort-Object Name | ForEach-Object {
+            $hash = (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+            "$hash  $($_.Name)"
+          } | Set-Content -Encoding utf8 evidence/release-public-sha256.txt
+
+      - name: Upload candidate evidence only
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release-candidate-${{ github.sha }}
+          path: |
+            release/public/
+            evidence/third-party-inventory.json
+            evidence/release-public-sha256.txt
+          if-no-files-found: error
+          retention-days: 7
