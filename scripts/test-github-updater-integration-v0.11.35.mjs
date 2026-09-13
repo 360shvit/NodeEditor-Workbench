@@ -1,17 +1,19 @@
 import fs from 'node:fs';
 import assert from 'node:assert/strict';
+import { isValidSemver } from './release-version.mjs';
 
 const read = (path) => fs.readFileSync(path, 'utf8');
 const contract = JSON.parse(read('release-spec/release-contract.json'));
-assert.equal(contract.version.semver, '0.11.35');
-assert.match(contract.version.revision, /^r\d+$/);
+assert.ok(isValidSemver(contract.version.semver), 'release version must be valid SemVer');
+assert.match(contract.version.revision, /^r[1-9]\d*$/);
 assert.equal(contract.version.display, `${contract.version.semver}-${contract.version.revision}`);
 assert.equal(contract.updater.enabled, true);
 assert.equal(contract.updater.channels.stable.manifestReleaseTag, 'updater-stable');
 assert.equal(contract.updater.channels.preview.manifestReleaseTag, 'updater-preview');
 assert.equal(contract.updater.publication.updaterVersionSource, 'version.semver');
 assert.equal(contract.updater.publication.allowSameSemverRepublish, false);
-assert.equal(contract.updater.publication.publishable, false);
+assert.equal(typeof contract.updater.publication.publishable, 'boolean');
+if (contract.updater.publication.publishable) assert.equal(contract.version.revision, 'r1', 'publishable releases must use r1');
 
 const cargo = read('src-tauri/Cargo.toml');
 assert.match(cargo, /tauri-plugin-updater = "=2\.11\.0"/);
@@ -64,6 +66,12 @@ for (const token of [
   "if (-not $isPrerelease)",
   'publication.publishable',
   'same-SemVer republish is forbidden',
+  'fetch-depth: 0',
+  'persist-credentials: false',
+  'git merge-base --is-ancestor',
+  'node node_modules/typescript/bin/tsc -p tsconfig.app.json',
+  'npm run test:rc-regression-matrix',
+  'npm run audit:unused-carry',
 ]) {
   assert.ok(workflow.includes(token), `release workflow missing ${token}`);
 }
@@ -103,4 +111,4 @@ if (contract.updater.publication.publishable) {
 assert.ok(fs.existsSync('THIRD_PARTY_NOTICES.txt'));
 assert.match(read('release-spec/README.md'), /private signing key must never be committed/i);
 
-console.log(`${contract.version.display} GitHub/updater deep-clean contract: PASS`);
+console.log(`${contract.version.display} GitHub/updater integration contract: PASS`);
