@@ -5,6 +5,9 @@
     "targets": [
       "nsis"
     ],
+    "resources": {
+      "../THIRD_PARTY_NOTICES.txt": "THIRD_PARTY_NOTICES.txt"
+    },
     "windows": {
       "webviewInstallMode": {
         "type": "downloadBootstrapper",
