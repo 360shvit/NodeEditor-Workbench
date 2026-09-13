@@ -54,9 +54,6 @@ assert.match(read('rust-toolchain.toml'), /channel = "1\.98\.1"/);
 const workflow = read('.github/workflows/release-windows.yml');
 assert.equal((workflow.match(/runs-on: windows-2025/g) ?? []).length, 2, 'validate and publish jobs must use the explicit Windows 2025 runner image');
 for (const token of [
-  'actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683',
-  'actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020',
-  'dtolnay/rust-toolchain@d1031067263f94b142dd6c0ce24c5eb9d02d52a0',
   'environment: release',
   'TAURI_SIGNING_PRIVATE_KEY',
   'release/public',
@@ -74,6 +71,16 @@ for (const token of [
   'npm run audit:unused-carry',
 ]) {
   assert.ok(workflow.includes(token), `release workflow missing ${token}`);
+}
+const releaseUses = [...workflow.matchAll(/^\s*-\s+uses:\s+([^\s#]+)/gm)].map((match) => match[1]);
+assert.ok(releaseUses.length >= 6, 'release workflow must pin actions in both jobs');
+for (const use of releaseUses) {
+  const split = use.lastIndexOf('@');
+  assert.ok(split > 0, `release workflow action reference must contain @: ${use}`);
+  assert.match(use.slice(split + 1), /^[0-9a-f]{40}$/i, `release workflow action must use a full 40-character commit SHA: ${use}`);
+}
+for (const action of ['actions/checkout', 'actions/setup-node', 'dtolnay/rust-toolchain']) {
+  assert.ok(releaseUses.some((use) => use.startsWith(`${action}@`)), `release workflow must use ${action}`);
 }
 assert.ok(workflow.includes('if ($LASTEXITCODE -eq 0)'), 'GitHub CLI release existence checks must use the external-process exit code');
 assert.ok(workflow.includes('HGW_DISTRIBUTION_KIND: installed'), 'GitHub NSIS build must compile the installed updater distribution class');
