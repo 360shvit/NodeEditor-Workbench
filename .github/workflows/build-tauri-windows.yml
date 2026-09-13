@@ -32,6 +32,8 @@ jobs:
       - run: npm ci --ignore-scripts
       - run: npm run release:check
       - run: npm run test:github-updater-integration
+      - name: Verify release-candidate workflow remains non-publishing
+        run: node scripts/test-release-candidate-workflow.mjs
       - name: Strict application TypeScript check
         run: node node_modules/typescript/bin/tsc -p tsconfig.app.json
       - name: Run all registered self-contained regression suites
