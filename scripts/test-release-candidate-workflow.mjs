@@ -38,8 +38,13 @@ assert.doesNotMatch(workflow, /\bgh[ \t]+release\b/i, 'release-candidate workflo
 assert.doesNotMatch(workflow, /release[ \t]+create/i, 'release-candidate workflow must never create a release');
 assert.doesNotMatch(workflow, /release[ \t]+upload/i, 'release-candidate workflow must never upload to a GitHub release');
 
-const uses = [...workflow.matchAll(/^[ \t]*-[ \t]+uses:[ \t]+([^\s#]+)/gm)].map((match) => match[1]);
-assert.ok(uses.length >= 4, 'release-candidate workflow must use pinned setup and artifact actions');
+const uses = workflow
+  .split(/\r?\n/)
+  .map((line) => line.trim())
+  .filter((line) => line.startsWith('- uses: '))
+  .map((line) => line.slice('- uses: '.length).split(/[ \t]+#/)[0].trim());
+
+assert.ok(uses.length >= 4, `release-candidate workflow must use pinned setup and artifact actions; found ${uses.length}: ${uses.join(', ')}`);
 for (const use of uses) {
   const split = use.lastIndexOf('@');
   assert.ok(split > 0, `action reference must contain @: ${use}`);
