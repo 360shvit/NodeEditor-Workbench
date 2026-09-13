@@ -54,10 +54,25 @@ for (const path of [
   'fixtures/consumer.json',
 ]) assert.ok(exists(path), `${path} is deliberately retained`);
 
+function assertActionPins(file) {
+  const source = read(file);
+  const uses = [...source.matchAll(/^\s*-\s+uses:\s+([^\s#]+)/gm)].map((match) => match[1]);
+  assert.ok(uses.length > 0, `${file} must use pinned actions`);
+  for (const use of uses) {
+    const split = use.lastIndexOf('@');
+    assert.ok(split > 0, `${file}: action reference must contain @: ${use}`);
+    const ref = use.slice(split + 1);
+    assert.match(ref, /^[0-9a-f]{40}$/i, `${file}: action must be pinned to a full 40-character commit SHA: ${use}`);
+  }
+  return uses;
+}
+
 const validateWorkflow = read('.github/workflows/build-tauri-windows.yml');
 assert.match(validateWorkflow, /runs-on: windows-2025/);
-assert.match(validateWorkflow, /actions\/checkout@11bd71901bbe5b1630ceea73d27597364c9af683/);
-assert.match(validateWorkflow, /actions\/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020/);
-assert.match(validateWorkflow, /dtolnay\/rust-toolchain@d1031067263f94b142dd6c0ce24c5eb9d02d52a0/);
+const validateUses = assertActionPins('.github/workflows/build-tauri-windows.yml');
+for (const action of ['actions/checkout', 'actions/setup-node', 'dtolnay/rust-toolchain']) {
+  assert.ok(validateUses.some((use) => use.startsWith(`${action}@`)), `validation workflow must use ${action}`);
+}
+assertActionPins('.github/workflows/release-windows.yml');
 
 console.log(`${contract.version.display} deep-clean contract: PASS`);
