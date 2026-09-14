@@ -46,3 +46,11 @@ jobs:
         run: npm run audit:third-party
       - name: Classify Windows distribution dependencies
         run: node scripts/audit-third-party-distribution.mjs --target x86_64-pc-windows-msvc
+      - name: Generate Windows runtime third-party notices
+        run: node scripts/generate-third-party-notices.mjs --target x86_64-pc-windows-msvc --output THIRD_PARTY_NOTICES.txt
+      - name: Verify generated notice is nonempty and final
+        shell: pwsh
+        run: |
+          if (-not (Test-Path 'THIRD_PARTY_NOTICES.txt')) { throw 'Generated THIRD_PARTY_NOTICES.txt is missing.' }
+          if ((Get-Item 'THIRD_PARTY_NOTICES.txt').Length -lt 1024) { throw 'Generated THIRD_PARTY_NOTICES.txt is unexpectedly small.' }
+          if (Select-String -Path 'THIRD_PARTY_NOTICES.txt' -Pattern 'full transitive dependency/license inventory' -Quiet) { throw 'Obsolete incomplete-compliance wording remains in generated notices.' }
