@@ -6,7 +6,7 @@
       "nsis"
     ],
     "resources": {
-      "../.generated/THIRD_PARTY_NOTICES.txt": "THIRD_PARTY_NOTICES.txt"
+      "../THIRD_PARTY_NOTICES.txt": "THIRD_PARTY_NOTICES.txt"
     },
     "windows": {
       "webviewInstallMode": {
