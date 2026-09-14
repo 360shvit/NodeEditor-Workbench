@@ -22,4 +22,5 @@ Desktop.ini
 build/
 node_modules/
 /release/
+/.generated/
 src-tauri/target/
