@@ -7,6 +7,7 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const CARGO_MANIFEST = path.join(ROOT, 'src-tauri', 'Cargo.toml');
 const PACKAGE_LOCK = path.join(ROOT, 'package-lock.json');
 const DEFAULT_TARGET = 'x86_64-pc-windows-msvc';
+const MPL_2_LICENSE_URL = 'https://www.mozilla.org/MPL/2.0/';
 
 const args = process.argv.slice(2);
 function option(name) {
@@ -36,11 +37,22 @@ function packageIsProcMacro(pkg) {
   return (pkg.targets ?? []).some((targetInfo) => (targetInfo.kind ?? []).includes('proc-macro'));
 }
 
+function isRegistryPackage(pkg) {
+  return typeof pkg.source === 'string' && pkg.source.startsWith('registry+');
+}
+
 function sourceCodeUrl(pkg) {
-  if (typeof pkg.source === 'string' && pkg.source.startsWith('registry+')) {
+  if (isRegistryPackage(pkg)) {
     return `https://crates.io/crates/${encodeURIComponent(pkg.name)}/${encodeURIComponent(pkg.version)}`;
   }
   return pkg.repository ?? pkg.homepage ?? null;
+}
+
+function sourceArchiveUrl(pkg) {
+  if (isRegistryPackage(pkg)) {
+    return `https://crates.io/api/v1/crates/${encodeURIComponent(pkg.name)}/${encodeURIComponent(pkg.version)}/download`;
+  }
+  return null;
 }
 
 function discoverComplianceFiles(pkg) {
@@ -53,7 +65,7 @@ function discoverComplianceFiles(pkg) {
       if (!fs.statSync(absolute).isFile()) return;
       found.add(path.relative(packageDir, absolute).replaceAll('\\', '/'));
     } catch {
-      // A missing candidate is handled by the aggregate review below.
+      // A missing candidate is reported by the aggregate review below.
     }
   }
 
@@ -94,6 +106,7 @@ function normalizeCargoPackage(pkg, classification, reason) {
     source: pkg.source,
     repository: pkg.repository ?? null,
     sourceCodeUrl: classification === 'runtime' ? sourceCodeUrl(pkg) : null,
+    sourceArchiveUrl: classification === 'runtime' ? sourceArchiveUrl(pkg) : null,
     complianceFiles,
     noticeFiles: complianceFiles.filter((file) => /^NOTICE(?:$|[._-])/i.test(path.basename(file))),
   };
@@ -240,11 +253,13 @@ const mplRuntimePackages = mplRuntime.map(packageIdentity);
 const mplSourceAvailability = mplRuntime.map((pkg) => ({
   package: packageIdentity(pkg),
   sourceCodeUrl: pkg.sourceCodeUrl,
+  sourceArchiveUrl: pkg.sourceArchiveUrl,
+  licenseUrl: MPL_2_LICENSE_URL,
   complianceFiles: pkg.complianceFiles,
 }));
-const missingMplSource = mplRuntime.filter((pkg) => !pkg.sourceCodeUrl || pkg.complianceFiles.length === 0);
-if (missingMplSource.length) {
-  throw new Error(`MPL runtime package(s) lack source location or detected license material: ${missingMplSource.map(packageIdentity).join(', ')}`);
+const missingMplSourceReference = mplRuntime.filter((pkg) => !pkg.sourceCodeUrl);
+if (missingMplSourceReference.length) {
+  throw new Error(`MPL runtime package(s) lack a source-code reference: ${missingMplSourceReference.map(packageIdentity).join(', ')}`);
 }
 
 const apacheRuntimePackages = runtimePackages
@@ -263,6 +278,10 @@ const cargoRuntimeMissingComplianceFiles = runtimeCargoPackages
   .filter((pkg) => pkg.complianceFiles.length === 0)
   .map((pkg) => `${packageIdentity(pkg)} [${pkg.license ?? `FILE:${pkg.licenseFile}`}]`)
   .sort();
+const mplRuntimeMissingLocalLegalFiles = mplRuntime
+  .filter((pkg) => pkg.complianceFiles.length === 0)
+  .map(packageIdentity)
+  .sort();
 const cargoRuntimeNoticeFiles = runtimeCargoPackages
   .filter((pkg) => pkg.noticeFiles.length > 0)
   .map((pkg) => ({ package: packageIdentity(pkg), noticeFiles: pkg.noticeFiles }))
@@ -270,19 +289,20 @@ const cargoRuntimeNoticeFiles = runtimeCargoPackages
 const cargoRuntimeComplianceFileCount = runtimeCargoPackages.reduce((total, pkg) => total + pkg.complianceFiles.length, 0);
 
 const report = {
-  schemaVersion: 3,
+  schemaVersion: 4,
   target,
   policy: {
     npmRuntimeModel: 'local-compatibility-modules-no-node_modules-code-shipped',
     cargoClassification: 'target-filtered dependency traversal; proc-macros/build-dependencies are build-only unless independently runtime-reachable',
     licenseReview: 'runtime license expressions are classified, package legal files are discovered from Cargo source directories, and compound/alternative expressions are not silently reduced to a chosen license',
-    mplSourceAvailability: 'registry package source is referenced by exact crate name/version; the application does not vendor modified Cargo registry source',
+    mplSourceAvailability: 'MPL runtime registry packages must have an exact package/version source reference; absence of a root LICENSE/COPYING file in the published crate is reported but is not by itself treated as missing source availability',
   },
   counts,
   runtimeLicenseExpressions,
   review: {
     mplRuntimePackages,
     mplSourceAvailability,
+    mplRuntimeMissingLocalLegalFiles,
     apacheRuntimePackages,
     compoundRuntimePackages,
     licenseFileRuntimePackages,
@@ -306,8 +326,9 @@ console.log(`Runtime Cargo legal files discovered: ${cargoRuntimeComplianceFileC
 console.log(`Runtime Cargo packages without detected root legal material: ${cargoRuntimeMissingComplianceFiles.length ? cargoRuntimeMissingComplianceFiles.join(', ') : 'none'}`);
 console.log(`Runtime Cargo NOTICE files: ${cargoRuntimeNoticeFiles.length ? cargoRuntimeNoticeFiles.map((entry) => `${entry.package} => ${entry.noticeFiles.join('|')}`).join(', ') : 'none'}`);
 console.log(`Runtime MPL-2.0 packages: ${mplRuntimePackages.length ? mplRuntimePackages.join(', ') : 'none'}`);
+console.log(`Runtime MPL packages without local root legal files: ${mplRuntimeMissingLocalLegalFiles.length ? mplRuntimeMissingLocalLegalFiles.join(', ') : 'none'}`);
 for (const entry of mplSourceAvailability) {
-  console.log(`MPL source: ${entry.package} => ${entry.sourceCodeUrl}; legal=${entry.complianceFiles.join('|')}`);
+  console.log(`MPL source: ${entry.package} => ${entry.sourceCodeUrl}; archive=${entry.sourceArchiveUrl ?? 'n/a'}; license=${entry.licenseUrl}; legal=${entry.complianceFiles.join('|') || 'none-detected'}`);
 }
 console.log(`Runtime packages mentioning Apache-2.0: ${apacheRuntimePackages.length ? apacheRuntimePackages.join(', ') : 'none'}`);
 console.log(`Runtime compound/alternative license expressions: ${compoundRuntimePackages.length ? compoundRuntimePackages.join(', ') : 'none'}`);
