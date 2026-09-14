@@ -16,7 +16,7 @@ jobs:
     timeout-minutes: 120
     environment: release
     steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
           persist-credentials: false
@@ -32,7 +32,7 @@ jobs:
           if ((Get-Content 'src-tauri/updater.pubkey' -Raw).Trim().StartsWith('UNCONFIGURED')) { throw 'Updater public key is not configured.' }
           if ([string]::IsNullOrWhiteSpace($env:TAURI_SIGNING_PRIVATE_KEY)) { throw 'TAURI_SIGNING_PRIVATE_KEY is not configured in the protected release environment.' }
 
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version-file: .nvmrc
           cache: npm
@@ -48,15 +48,6 @@ jobs:
       - name: Strict application TypeScript check
         run: node node_modules/typescript/bin/tsc -p tsconfig.app.json
 
-      - name: Run all registered self-contained regression suites
-        run: npm run test:rc-regression-matrix
-
-      - name: Require zero unused source carry
-        run: npm run audit:unused-carry
-
-      - name: Native tests
-        run: cargo test --locked --manifest-path src-tauri/Cargo.toml
-
       - name: Build third-party inventory evidence
         run: node scripts/audit-third-party-inventory.mjs --output evidence/third-party-inventory.json
 
@@ -65,6 +56,15 @@ jobs:
 
       - name: Generate Windows runtime third-party notices
         run: node scripts/generate-third-party-notices.mjs --target x86_64-pc-windows-msvc --output THIRD_PARTY_NOTICES.txt --evidence evidence/third-party-notices.json
+
+      - name: Run all registered self-contained regression suites
+        run: npm run test:rc-regression-matrix
+
+      - name: Require zero unused source carry
+        run: npm run audit:unused-carry
+
+      - name: Native tests
+        run: cargo test --locked --manifest-path src-tauri/Cargo.toml
 
       - name: Install pinned Tauri CLI
         run: cargo install tauri-cli --version 2.11.0 --locked
