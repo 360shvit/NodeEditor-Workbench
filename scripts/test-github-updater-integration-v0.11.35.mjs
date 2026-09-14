@@ -27,6 +27,11 @@ assert.equal(
 );
 assert.equal(installer.plugins.updater.windows.installMode, 'passive');
 assert.equal(
+  installer.bundle.resources?.['../LICENSE'],
+  'LICENSE',
+  'Windows installer must bundle the project MIT LICENSE as an installed application resource',
+);
+assert.equal(
   installer.bundle.resources?.['../THIRD_PARTY_NOTICES.txt'],
   'THIRD_PARTY_NOTICES.txt',
   'Windows installer must bundle THIRD_PARTY_NOTICES.txt as an installed application resource',
