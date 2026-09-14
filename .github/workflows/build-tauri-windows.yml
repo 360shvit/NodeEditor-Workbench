@@ -36,12 +36,6 @@ jobs:
         run: node scripts/test-release-candidate-workflow.mjs
       - name: Strict application TypeScript check
         run: node node_modules/typescript/bin/tsc -p tsconfig.app.json
-      - name: Run all registered self-contained regression suites
-        run: npm run test:rc-regression-matrix
-      - name: Require zero unused source carry
-        run: npm run audit:unused-carry
-      - name: Verify native tests with locked dependencies
-        run: cargo test --locked --manifest-path src-tauri/Cargo.toml
       - name: Verify transitive third-party license metadata
         run: npm run audit:third-party
       - name: Classify Windows distribution dependencies
@@ -54,3 +48,9 @@ jobs:
           if (-not (Test-Path 'THIRD_PARTY_NOTICES.txt')) { throw 'Generated THIRD_PARTY_NOTICES.txt is missing.' }
           if ((Get-Item 'THIRD_PARTY_NOTICES.txt').Length -lt 1024) { throw 'Generated THIRD_PARTY_NOTICES.txt is unexpectedly small.' }
           if (Select-String -Path 'THIRD_PARTY_NOTICES.txt' -Pattern 'full transitive dependency/license inventory' -Quiet) { throw 'Obsolete incomplete-compliance wording remains in generated notices.' }
+      - name: Run all registered self-contained regression suites
+        run: npm run test:rc-regression-matrix
+      - name: Require zero unused source carry
+        run: npm run audit:unused-carry
+      - name: Verify native tests with locked dependencies
+        run: cargo test --locked --manifest-path src-tauri/Cargo.toml
