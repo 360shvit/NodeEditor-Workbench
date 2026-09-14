@@ -59,6 +59,8 @@ jobs:
         run: npm run audit:third-party
       - name: Verify Windows distribution dependency classification
         run: node scripts/audit-third-party-distribution.mjs --target x86_64-pc-windows-msvc
+      - name: Verify Windows runtime third-party notice generation
+        run: node scripts/generate-third-party-notices.mjs --target x86_64-pc-windows-msvc --output THIRD_PARTY_NOTICES.txt
 
   publish:
     needs: validate
@@ -81,6 +83,8 @@ jobs:
       - run: npm ci --ignore-scripts
       - name: Recheck Windows distribution dependency classification
         run: node scripts/audit-third-party-distribution.mjs --target x86_64-pc-windows-msvc
+      - name: Generate Windows runtime third-party notices
+        run: node scripts/generate-third-party-notices.mjs --target x86_64-pc-windows-msvc --output THIRD_PARTY_NOTICES.txt
       - name: Install pinned Tauri CLI
         run: cargo install tauri-cli --version 2.11.0 --locked
       - name: Build signed NSIS updater artifact
