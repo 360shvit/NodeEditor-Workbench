@@ -25,6 +25,7 @@ assert.match(runtime, /REPORT_SCHEMA_VERSION = 8/);
 
 assert.equal(installer.bundle.active, true);
 assert.deepEqual(installer.bundle.targets, ['nsis']);
+assert.equal(installer.bundle.resources['../LICENSE'], 'LICENSE');
 assert.equal(installer.bundle.resources['../THIRD_PARTY_NOTICES.txt'], 'THIRD_PARTY_NOTICES.txt');
 assert.equal(installer.bundle.windows.nsis.installMode, 'currentUser');
 assert.deepEqual(installer.bundle.windows.nsis.languages, ['English', 'German']);
