@@ -14,7 +14,7 @@ const runtime = read('src/support/runtimeDiagnostics.ts');
 const app = read('src/App.tsx');
 const buildId = read('BUILD_ID.txt');
 const readme = read('README.md');
-const notices = read('THIRD_PARTY_NOTICES.txt');
+const noticeGenerator = read('scripts/generate-third-party-notices.mjs');
 
 assert.equal(pkg.version, JSON.parse(read('release-spec/release-contract.json')).version.semver);
 assert.equal(tauri.version, JSON.parse(read('release-spec/release-contract.json')).version.semver);
@@ -79,7 +79,8 @@ assert.match(tauriRuntime, /app-close-requested/);
 assert.match(tauriRuntime, /project-files-changed/);
 
 assert.match(readme, /Build the user installer|Windows Installer/);
-assert.match(notices, /Tauri Window State Plugin/);
-assert.match(notices, /tauri-plugin-window-state/);
+assert.match(noticeGenerator, /tauri-plugin-window-state/);
+assert.match(noticeGenerator, /classification === 'runtime'/);
+assert.match(noticeGenerator, /legalTextSha256/);
 
 console.log('v0.11.11 Native Window Persistence regression checks passed');
