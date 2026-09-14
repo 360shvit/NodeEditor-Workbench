@@ -22,4 +22,5 @@ Desktop.ini
 build/
 node_modules/
 /release/
+/THIRD_PARTY_NOTICES.txt
 src-tauri/target/

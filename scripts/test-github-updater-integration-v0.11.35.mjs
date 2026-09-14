@@ -27,6 +27,11 @@ assert.equal(
 );
 assert.equal(installer.plugins.updater.windows.installMode, 'passive');
 assert.equal(
+  installer.bundle.resources?.['../LICENSE'],
+  'LICENSE',
+  'Windows installer must bundle the project MIT LICENSE as an installed application resource',
+);
+assert.equal(
   installer.bundle.resources?.['../THIRD_PARTY_NOTICES.txt'],
   'THIRD_PARTY_NOTICES.txt',
   'Windows installer must bundle THIRD_PARTY_NOTICES.txt as an installed application resource',
@@ -141,7 +146,10 @@ if (contract.updater.publication.publishable) {
 } else {
   assert.ok(pubkey.length > 0, 'integration candidate must carry explicit updater key state');
 }
-assert.ok(fs.existsSync('THIRD_PARTY_NOTICES.txt'));
+const noticeGenerator = read('scripts/generate-third-party-notices.mjs');
+assert.match(noticeGenerator, /audit-third-party-distribution\.mjs/, 'third-party notices must derive from the Windows distribution classification');
+assert.ok(installerBuild.includes('generate-third-party-notices.mjs --target x86_64-pc-windows-msvc --output THIRD_PARTY_NOTICES.txt'), 'local installer build must generate third-party notices before bundling');
+assert.ok(workflow.includes('generate-third-party-notices.mjs --target x86_64-pc-windows-msvc --output THIRD_PARTY_NOTICES.txt'), 'release workflow must generate third-party notices before bundling');
 assert.match(read('release-spec/README.md'), /private signing key must never be committed/i);
 
 console.log(`${contract.version.display} GitHub/updater integration contract: PASS`);

@@ -59,6 +59,13 @@ if errorlevel 1 (
   pause
   exit /b 1
 )
+where node >nul 2>nul
+if errorlevel 1 (
+  echo.
+  echo Node.js was not found. It is required to generate third-party notices.
+  pause
+  exit /b 1
+)
 
 for /f "tokens=*" %%V in ('cargo tauri --version 2^>nul') do set "TAURI_VERSION=%%V"
 echo !TAURI_VERSION! | findstr /c:"%TAURI_CLI_VERSION%" >nul
@@ -75,6 +82,16 @@ set "HGW_DISTRIBUTION_KIND=installed"
 
 set "CARGO_TARGET_DIR=%LOCALAPPDATA%\HytaleGeneratorWorkbench\cargo-target"
 if not exist "%CARGO_TARGET_DIR%" mkdir "%CARGO_TARGET_DIR%"
+
+echo.
+echo Generating Windows runtime third-party notices from checked dependencies...
+node scripts\generate-third-party-notices.mjs --target x86_64-pc-windows-msvc --output THIRD_PARTY_NOTICES.txt
+if errorlevel 1 (
+  echo.
+  echo Installer build BLOCKED: third-party notice generation failed.
+  pause
+  exit /b 1
+)
 
 echo.
 echo Building application and NSIS installer from the checked dependency lock...
