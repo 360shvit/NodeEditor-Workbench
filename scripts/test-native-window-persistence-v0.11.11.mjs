@@ -79,8 +79,9 @@ assert.match(tauriRuntime, /app-close-requested/);
 assert.match(tauriRuntime, /project-files-changed/);
 
 assert.match(readme, /Build the user installer|Windows Installer/);
-assert.match(noticeGenerator, /tauri-plugin-window-state/);
+assert.match(noticeGenerator, /audit-third-party-distribution\.mjs/);
 assert.match(noticeGenerator, /classification === 'runtime'/);
+assert.match(noticeGenerator, /pkg\.complianceFiles\?\.length/);
 assert.match(noticeGenerator, /legalTextSha256/);
 
 console.log('v0.11.11 Native Window Persistence regression checks passed');
