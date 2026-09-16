@@ -58,11 +58,18 @@ const r9 = read('scripts/test-temp-release-dependency-context-fix-v0.11.35-r9.mj
 assert.match(r9, /test-release-integrity-deep-v0\.11\.34\.mjs/);
 assert.doesNotMatch(r9, /const releaseIntegrity = read\('scripts\/test-release-integrity-v0\.11\.34\.mjs'\)/);
 
-const deep = 'node scripts/test-release-integrity-deep-v0.11.34.mjs';
+const deepScript = 'scripts/test-release-integrity-deep-v0.11.34.mjs';
+const deepCommand = `node ${deepScript}`;
+const prWorkflow = read('.github/workflows/build-tauri-windows.yml');
 const rcWorkflow = read('.github/workflows/validate-release-candidate.yml');
 const releaseWorkflow = read('.github/workflows/release-windows.yml');
-assert.ok(rcWorkflow.includes(deep), 'RC workflow must execute deep release-integrity validation');
-assert.ok(releaseWorkflow.includes(deep), 'publish validation must execute deep release-integrity validation');
+assert.ok(!prWorkflow.includes(deepCommand), 'normal PR/push validation must not execute the deep release-integrity mutation suite');
+assert.ok(rcWorkflow.includes(deepCommand), 'RC workflow must execute deep release-integrity validation');
+assert.ok(releaseWorkflow.includes(deepCommand), 'publish validation must execute deep release-integrity validation');
+assert.ok(
+  !Object.values(pkg.scripts ?? {}).some((command) => command.includes(deepScript)),
+  'deep release-integrity validation must stay outside auto-discovered package test scripts',
+);
 
 // Flag the most dangerous form of version coupling: asserting that the current release
 // identity equals a historical literal. Historical tests may branch on an old version to
