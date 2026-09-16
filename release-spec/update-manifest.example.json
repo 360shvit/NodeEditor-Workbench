@@ -1,10 +1,10 @@
 {
-  "version": "0.11.36-rc.1",
-  "notes": "Example only. 0.11.36-rc.1-r1 integration candidate; replace URL/signature during real GitHub publication.",
+  "version": "0.11.36-rc.2",
+  "notes": "Example only. 0.11.36-rc.2-r1 integration candidate; replace URL/signature during real GitHub publication.",
   "pub_date": "2026-09-10T00:00:00Z",
   "platforms": {
     "windows-x86_64": {
-      "url": "https://example.invalid/Hytale-Generator-Workbench_0.11.36-rc.1_x64-setup.exe",
+      "url": "https://example.invalid/Hytale-Generator-Workbench_0.11.36-rc.2_x64-setup.exe",
       "signature": "EXAMPLE_SIGNATURE_NOT_FOR_RELEASE"
     }
   }

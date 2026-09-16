@@ -2,7 +2,7 @@
 setlocal
 cd /d "%~dp0"
 
-echo Hytale Generator Workbench v0.11.36-rc.1-r1 - Windows Native Safety Matrix
+echo Hytale Generator Workbench v0.11.36-rc.2-r1 - Windows Native Safety Matrix
 
 where cargo >nul 2>nul
 if errorlevel 1 (
