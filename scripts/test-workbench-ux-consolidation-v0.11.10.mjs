@@ -51,7 +51,7 @@ assert.equal(tauri.version, JSON.parse(read('release-spec/release-contract.json'
 assert.match(cargo, new RegExp(`^version = "${pkg.version.replaceAll('.', '\\.')}"`, 'm'));
 assert.match(app, /RELEASE_MILESTONE, RELEASE_MILESTONE_NAME/);
 assert.match(runtime, /RELEASE_DISPLAY_VERSION/);
-assert.match(buildId, /v0\.11\.[0-9]+-r[0-9]+-[a-z0-9-]+/);
+assert.equal(buildId.trim(), JSON.parse(read('release-spec/release-contract.json')).version.buildId);
 
 // Persistent Explorer/Search preference is separate from transient contextual tool sidebars.
 assert.match(store, /export type SidebarView = 'explorer' \| 'search'/);

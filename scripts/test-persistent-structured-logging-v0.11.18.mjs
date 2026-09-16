@@ -16,7 +16,7 @@ const persistence = read('src/projects/projectPersistence.ts');
 assert.equal(pkg.version, JSON.parse(read('release-spec/release-contract.json')).version.semver);
 assert.equal(tauri.version, JSON.parse(read('release-spec/release-contract.json')).version.semver);
 assert.match(read('src-tauri/Cargo.toml'), new RegExp(`^version = "${pkg.version.replaceAll('.', '\\.') }"`, 'm'));
-assert.match(read('BUILD_ID.txt'), /v0\.11\.[0-9]+-r[0-9]+-[a-z0-9-]+/);
+assert.equal(read('BUILD_ID.txt').trim(), JSON.parse(read('release-spec/release-contract.json')).version.buildId);
 assert.match(read('src/App.tsx'), /RELEASE_MILESTONE, RELEASE_MILESTONE_NAME/);
 assert.match(runtime, /RELEASE_DISPLAY_VERSION/);
 assert.match(runtime, /REPORT_SCHEMA_VERSION = 8/);

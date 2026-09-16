@@ -20,7 +20,7 @@ const settings = read('src/components/WorkbenchSettings.tsx');
 assert.equal(pkg.version, JSON.parse(read('release-spec/release-contract.json')).version.semver);
 assert.equal(tauri.version, JSON.parse(read('release-spec/release-contract.json')).version.semver);
 assert.match(read('src-tauri/Cargo.toml'), new RegExp(`^version = "${pkg.version.replaceAll('.', '\\.') }"`, 'm'));
-assert.match(read('BUILD_ID.txt'), /v0\.11\.[0-9]+-r[0-9]+-[a-z0-9-]+/);
+assert.equal(read('BUILD_ID.txt').trim(), JSON.parse(read('release-spec/release-contract.json')).version.buildId);
 assert.match(appSource, /RELEASE_MILESTONE, RELEASE_MILESTONE_NAME/);
 
 assert.match(runtimeSource, /REPORT_SCHEMA_VERSION = 8/);

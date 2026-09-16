@@ -50,24 +50,30 @@ try {
   const stage = spawnSync(process.execPath, ['scripts/release-surface.mjs', '--input', fixture.input, '--out', fixture.output, '--repository', 'example/hgw'], { encoding: 'utf8' });
   assert.equal(stage.status, 0, `${stage.stdout}\n${stage.stderr}`);
   const names = fs.readdirSync(fixture.output).sort();
-  assert.deepEqual(names, [
+  const isPrerelease = contract.version.semver.includes('-');
+  const expectedNames = [
     'RELEASE_SURFACE.json',
     'THIRD_PARTY_NOTICES.txt',
     fixture.installer,
     `${fixture.installer}.sha256`,
     fixture.signature,
-    'latest.json',
     'latest-preview.json',
-  ].sort());
+    ...(isPrerelease ? [] : ['latest.json']),
+  ].sort();
+  assert.deepEqual(names, expectedNames);
   assert.ok(!names.includes('source.zip'));
   assert.ok(!names.includes('test-results.txt'));
 
-  const latest = JSON.parse(read(path.join(fixture.output, 'latest.json')));
   const preview = JSON.parse(read(path.join(fixture.output, 'latest-preview.json')));
-  assert.deepEqual(preview, latest, 'stable release should also advance Preview to the same stable version');
-  assert.equal(latest.version, contract.version.semver);
-  assert.equal(latest.platforms['windows-x86_64'].signature, read(path.join(fixture.output, fixture.signature)).trim());
-  assert.equal(latest.platforms['windows-x86_64'].url, `https://github.com/example/hgw/releases/download/v${contract.version.semver}/${fixture.installer}`);
+  assert.equal(preview.version, contract.version.semver);
+  assert.equal(preview.platforms['windows-x86_64'].signature, read(path.join(fixture.output, fixture.signature)).trim());
+  assert.equal(preview.platforms['windows-x86_64'].url, `https://github.com/example/hgw/releases/download/v${contract.version.semver}/${fixture.installer}`);
+  if (isPrerelease) {
+    assert.ok(!fs.existsSync(path.join(fixture.output, 'latest.json')), 'prerelease must not emit Stable rolling manifest');
+  } else {
+    const latest = JSON.parse(read(path.join(fixture.output, 'latest.json')));
+    assert.deepEqual(preview, latest, 'stable release should also advance Preview to the same stable version');
+  }
 
   const check = spawnSync(process.execPath, ['scripts/release-surface.mjs', '--check', '--out', fixture.output], { encoding: 'utf8' });
   assert.equal(check.status, 0, `${check.stdout}\n${check.stderr}`);
