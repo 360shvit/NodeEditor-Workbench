@@ -17,6 +17,7 @@ for (const token of [
   'npm run test:github-updater-integration',
   'node node_modules/typescript/bin/tsc -p tsconfig.app.json',
   'npm run test:rc-regression-matrix',
+  'node scripts/test-release-integrity-deep-v0.11.34.mjs',
   'npm run audit:unused-carry',
   'cargo test --locked --manifest-path src-tauri/Cargo.toml',
   'audit-third-party-inventory.mjs --output evidence/third-party-inventory.json',
