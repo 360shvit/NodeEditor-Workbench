@@ -1,6 +1,6 @@
 # Release / updater contract
 
-**Applies to:** v0.11.35-r10 GitHub / Updater Integration source line.
+**Applies to:** v0.11.36-rc.1-r1 GitHub / Updater Integration source line.
 
 `release-contract.json` is the canonical authoring source for release identity, update channels and publication policy. `npm run release:sync` synchronizes package/Tauri/Rust/build-helper mirrors and regenerates the shipped `tauri-ui/app.js` deterministically. `npm run release:check` validates the same identity mirrors without mutation and requires byte-for-byte embedded-bundle parity.
 
