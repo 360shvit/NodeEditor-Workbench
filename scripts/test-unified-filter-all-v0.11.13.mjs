@@ -23,7 +23,7 @@ assert.match(cargo, new RegExp(`^version = "${pkg.version.replaceAll('.', '\\.')
 assert.match(app, /RELEASE_MILESTONE, RELEASE_MILESTONE_NAME/);
 assert.match(runtime, /RELEASE_DISPLAY_VERSION/);
 assert.match(runtime, /REPORT_SCHEMA_VERSION = 8/);
-assert.match(buildId, /v0\.11\.[0-9]+-r[0-9]+-[a-z0-9-]+/);
+assert.equal(buildId.trim(), JSON.parse(read('release-spec/release-contract.json')).version.buildId);
 assert.match(pkg.scripts['test:unified-filter-all'], /test-unified-filter-all-v0\.11\.13\.mjs/);
 
 // Additive state only: explicit values remain authoritative when All Values is off.

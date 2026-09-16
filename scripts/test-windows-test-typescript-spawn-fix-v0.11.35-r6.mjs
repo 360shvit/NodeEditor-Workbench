@@ -1,10 +1,11 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import { compareSemver } from './release-version.mjs';
 import path from 'node:path';
 
 const read = (file) => fs.readFileSync(file, 'utf8');
 const contract = JSON.parse(read('release-spec/release-contract.json'));
-assert.ok(Number(contract.version.revision.slice(1)) >= 6, 'current candidate must be r6 or later');
+assert.ok(compareSemver(contract.version.semver, '0.11.35') > 0 || Number(contract.version.revision.slice(1)) >= 6, 'v0.11.35 candidates must be r6 or later; later SemVer releases inherit this fix');
 
 const helper = read('scripts/typescript-cli.mjs');
 assert.match(helper, /require\.resolve\('typescript\/bin\/tsc'\)/, 'shared TypeScript helper must resolve the local package CLI');

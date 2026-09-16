@@ -1,10 +1,11 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import { compareSemver } from './release-version.mjs';
 import { spawnSync } from 'node:child_process';
 
 const read = (file) => fs.readFileSync(file, 'utf8');
 const contract = JSON.parse(read('release-spec/release-contract.json'));
-assert.ok(Number(contract.version.revision.slice(1)) >= 7, 'current candidate must be r7 or later');
+assert.ok(compareSemver(contract.version.semver, '0.11.35') > 0 || Number(contract.version.revision.slice(1)) >= 7, 'v0.11.35 candidates must be r7 or later; later SemVer releases inherit this fix');
 
 const legacy = read('scripts/test-rc-architecture-validation-v0.11.16.mjs');
 assert.doesNotMatch(legacy, /existsSync\('package-lock\.json'\),\s*false/, 'historical test must not require package-lock.json to be absent');

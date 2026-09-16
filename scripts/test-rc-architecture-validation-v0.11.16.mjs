@@ -21,7 +21,7 @@ const releaseContract = JSON.parse(read('release-spec/release-contract.json'));
 assert.equal(pkg.version, releaseContract.version.semver);
 assert.equal(tauri.version, releaseContract.version.semver);
 assert.match(cargo, new RegExp(`^version = "${pkg.version.replaceAll('.', '\\.')}"`, 'm'));
-assert.match(read('BUILD_ID.txt'), /v0\.11\.[0-9]+-r[0-9]+-[a-z0-9-]+/);
+assert.equal(read('BUILD_ID.txt').trim(), JSON.parse(read('release-spec/release-contract.json')).version.buildId);
 assert.match(read('src/App.tsx'), /RELEASE_MILESTONE, RELEASE_MILESTONE_NAME/);
 assert.match(runtime, /RELEASE_DISPLAY_VERSION/);
 assert.match(runtime, /REPORT_SCHEMA_VERSION = 8/);

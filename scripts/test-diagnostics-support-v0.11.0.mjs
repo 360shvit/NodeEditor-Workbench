@@ -15,7 +15,7 @@ const tauriRuntime = read('tauri-ui/tauri-runtime.js');
 assert.equal(pkg.version, JSON.parse(read('release-spec/release-contract.json')).version.semver);
 assert.equal(tauri.version, JSON.parse(read('release-spec/release-contract.json')).version.semver);
 assert.match(read('src-tauri/Cargo.toml'), new RegExp(`^version = "${pkg.version.replaceAll('.', '\\.') }"`, 'm'));
-assert.match(read('BUILD_ID.txt'), /v0\.11\.[0-9]+-r[0-9]+-[a-z0-9-]+/);
+assert.equal(read('BUILD_ID.txt').trim(), JSON.parse(read('release-spec/release-contract.json')).version.buildId);
 
 assert.match(runtime, /const MAX_EVENTS = 500/);
 assert.match(runtime, /DETAILED_LOGGING_KEY/);

@@ -6,7 +6,7 @@ set "TAURI_CLI_VERSION=2.11.0"
 set "KEYDIR=%USERPROFILE%\.tauri"
 set "KEYFILE=%KEYDIR%\hytale-generator-workbench.key"
 
-echo Hytale Generator Workbench v0.11.35-r10 - Updater Signing Key Bootstrap
+echo Hytale Generator Workbench v0.11.36-rc.1-r1 - Updater Signing Key Bootstrap
 echo.
 echo This creates the private updater key OUTSIDE the repository and copies only
 echo the public key into src-tauri\updater.pubkey. Never commit the private key.

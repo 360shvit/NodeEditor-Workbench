@@ -17,7 +17,7 @@ const styles = read('src/styles.css');
 
 assert.equal(pkg.version, JSON.parse(read('release-spec/release-contract.json')).version.semver);
 assert.equal(tauri.version, JSON.parse(read('release-spec/release-contract.json')).version.semver);
-assert.match(read('BUILD_ID.txt'), /v0\.11\.[0-9]+-r[0-9]+-[a-z0-9-]+/);
+assert.equal(read('BUILD_ID.txt').trim(), JSON.parse(read('release-spec/release-contract.json')).version.buildId);
 assert.match(read('src/App.tsx'), /RELEASE_MILESTONE, RELEASE_MILESTONE_NAME/);
 assert.match(read('src/support/runtimeDiagnostics.ts'), /RELEASE_DISPLAY_VERSION/);
 assert.match(read('src/support/runtimeDiagnostics.ts'), /profile: RELEASE_VALIDATION_PROFILE/);

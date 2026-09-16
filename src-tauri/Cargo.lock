@@ -1407,7 +1407,7 @@ dependencies = [
 
 [[package]]
 name = "hytale-generator-workbench"
-version = "0.11.35"
+version = "0.11.36-rc.1"
 dependencies = [
  "notify",
  "serde",

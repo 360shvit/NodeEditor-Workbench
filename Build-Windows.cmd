@@ -2,7 +2,7 @@
 setlocal
 cd /d "%~dp0"
 
-echo Hytale Generator Workbench v0.11.35-r10 - Native Windows Build
+echo Hytale Generator Workbench v0.11.36-rc.1-r1 - Native Windows Build
 if not exist "src-tauri\icons\icon.ico" (
   echo.
   echo Required Windows icon is missing: src-tauri\icons\icon.ico
