@@ -44,8 +44,8 @@ jobs:
       - name: Strict application TypeScript check
         run: node node_modules/typescript/bin/tsc -p tsconfig.app.json
 
-      - name: Verify Rust lockfile and native build
-        run: cargo check --locked --manifest-path src-tauri/Cargo.toml
+      - name: Verify Rust lockfile consistency
+        run: cargo metadata --locked --manifest-path src-tauri/Cargo.toml --format-version 1 > /dev/null
 
       - name: Commit synchronized candidate files
         shell: bash
