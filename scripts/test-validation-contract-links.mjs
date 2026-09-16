@@ -22,17 +22,33 @@ for (const name of fs.readdirSync('.github/workflows').filter((entry) => entry.e
 }
 
 const testFiles = fs.readdirSync('scripts').filter((name) => name.startsWith('test-') && name.endsWith('.mjs'));
-const crossTestReferences = [];
+const activeCrossTestReferences = [];
+
+// Only treat references as dependencies when the test actually consumes or executes the
+// referenced script. Historical cleanup tests intentionally contain names of retired test
+// files in negative existence assertions; those are evidence of removal, not stale links.
+const activeReferencePatterns = [
+  { kind: 'read', pattern: /\bread\(\s*['"]scripts\/(test-[A-Za-z0-9._-]+\.mjs)['"]\s*\)/g },
+  { kind: 'readFileSync', pattern: /\breadFileSync\(\s*['"]scripts\/(test-[A-Za-z0-9._-]+\.mjs)['"]/g },
+  { kind: 'scriptsDir-read', pattern: /\breadFileSync\(\s*path\.join\(\s*scriptsDir\s*,\s*['"](test-[A-Za-z0-9._-]+\.mjs)['"]\s*\)/g },
+  { kind: 'spawn', pattern: /\bspawnSync\(\s*process\.execPath\s*,\s*\[\s*['"]scripts\/(test-[A-Za-z0-9._-]+\.mjs)['"]/g },
+  { kind: 'exec', pattern: /\bexecFileSync\(\s*process\.execPath\s*,\s*\[\s*['"]scripts\/(test-[A-Za-z0-9._-]+\.mjs)['"]/g },
+  { kind: 'gate', pattern: /\b(?:const|let|var)\s+gate\s*=\s*['"]scripts\/(test-[A-Za-z0-9._-]+\.mjs)['"]/g },
+];
+
 for (const name of testFiles) {
   const source = read(path.join('scripts', name));
-  for (const match of source.matchAll(/scripts\/(test-[A-Za-z0-9._-]+\.mjs)/g)) {
-    const target = `scripts/${match[1]}`;
-    if (target === `scripts/${name}`) continue;
-    crossTestReferences.push(`${name} -> ${match[1]}`);
-    if (!exists(target)) missingTargets.push(`test:${name} -> ${target}`);
+  for (const { kind, pattern } of activeReferencePatterns) {
+    pattern.lastIndex = 0;
+    for (const match of source.matchAll(pattern)) {
+      const target = `scripts/${match[1]}`;
+      if (target === `scripts/${name}`) continue;
+      activeCrossTestReferences.push(`${name} -> ${match[1]} (${kind})`);
+      if (!exists(target)) missingTargets.push(`test:${name} -> ${target} (${kind})`);
+    }
   }
 }
-assert.deepEqual(missingTargets, [], `validation contracts reference missing script targets:\n${missingTargets.join('\n')}`);
+assert.deepEqual(missingTargets, [], `validation contracts reference missing active script targets:\n${missingTargets.join('\n')}`);
 
 // The release-integrity split deliberately moved the expensive temp-project mutation
 // contract out of the fast PR suite. Keep historical regression ownership attached to
@@ -63,4 +79,15 @@ for (const name of testFiles) {
 }
 assert.deepEqual(exactVersionCouplings, [], `tests pin the current release to historical exact SemVer literals: ${exactVersionCouplings.join(', ')}`);
 
-console.log(`validation contract link audit: PASS (${testFiles.length} test files; ${crossTestReferences.length} cross-test references checked)`);
+// The matrix bypasses exactly these npm wrappers after producing one shared core build.
+// Fail closed if a wrapper gains extra work later so the optimization cannot silently skip it.
+const directCoreSuites = new Map([
+  ['test:core', 'node scripts/test-core.mjs'],
+  ['test:performance-tracing', 'node scripts/test-performance-tracing-v0.11.1.mjs'],
+  ['test:performance-optimization', 'node scripts/test-performance-optimization-v0.11.5.mjs'],
+]);
+for (const [name, directCommand] of directCoreSuites) {
+  assert.equal(pkg.scripts[name], `npm run typecheck:core && ${directCommand}`, `${name} wrapper changed; update the shared-core matrix contract before bypassing it`);
+}
+
+console.log(`validation contract link audit: PASS (${testFiles.length} test files; ${activeCrossTestReferences.length} active cross-test references checked)`);
