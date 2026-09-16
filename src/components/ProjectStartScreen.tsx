@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { APP_ICON_DATA_URI } from '../appIconData';
 import { desktopRevokeRecentProject, hasDesktopBridge } from '../io/desktopBridge';
 import { openDirectoryWorkspace } from '../io/folderLoader';
 import {
@@ -67,7 +68,7 @@ export function ProjectStartScreen() {
   return (
     <main className="project-start-screen">
       <section className="project-start-hero">
-        <div className="project-start-mark" aria-hidden="true">HGW</div>
+        <div className="project-start-mark" aria-hidden="true"><img src={APP_ICON_DATA_URI} alt="" width={48} height={48} /></div>
         <div>
           <h1>Hytale Generator Workbench</h1>
           <p>Open a Hytale project to inspect, search, refactor, diagnose and visualize generator data.</p>

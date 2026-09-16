@@ -1,6 +1,6 @@
 [package]
 name = "hytale-generator-workbench"
-version = "0.11.36-rc.1"
+version = "0.11.36-rc.2"
 description = "Hytale Generator Workbench desktop host"
 authors = ["Hytale Generator Workbench contributors"]
 license = "MIT"

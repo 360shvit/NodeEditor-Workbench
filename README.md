@@ -1,6 +1,6 @@
 # Hytale Generator Workbench
 
-Current source line: **v0.11.36-rc.1-r1 — Public Repository Clean / GitHub & Updater Integration**.
+Current source line: **v0.11.36-rc.2-r1 — Updater E2E Preview**.
 
 Hytale Generator Workbench is a local-first Windows desktop workbench for Hytale generator JSON projects. The native Rust host owns privileged filesystem and updater operations; the React/Core layer provides Explorer, Inspector, Search, staged ChangeSet review, Layout, Project Graph, WorldGen Performance, diagnostics and project-session UX.
 
