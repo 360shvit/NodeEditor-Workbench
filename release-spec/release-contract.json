@@ -5,12 +5,12 @@
     "identifier": "com.hytalegenerator.workbench"
   },
   "version": {
-    "semver": "0.11.36-rc.2",
+    "semver": "0.11.36-rc.3",
     "revision": "r1",
-    "display": "0.11.36-rc.2-r1",
-    "milestone": "v0.11.36-rc.2",
+    "display": "0.11.36-rc.3-r1",
+    "milestone": "v0.11.36-rc.3",
     "milestoneName": "Updater E2E Preview",
-    "buildId": "v0.11.36-rc.2-r1-updater-e2e-preview"
+    "buildId": "v0.11.36-rc.3-r1-updater-e2e-preview"
   },
   "validation": {
     "profile": "github-updater-deep-clean-v1",
@@ -20,7 +20,7 @@
   "updater": {
     "prepared": true,
     "enabled": true,
-    "integrationMilestone": "v0.11.36-rc.2-r1",
+    "integrationMilestone": "v0.11.36-rc.3-r1",
     "provider": "GitHub Releases",
     "framework": "Tauri v2 updater",
     "defaultChannel": "stable",
@@ -49,7 +49,7 @@
       "installerAssetPattern": "Hytale-Generator-Workbench_{version}_x64-setup.exe",
       "installerSignaturePattern": "Hytale-Generator-Workbench_{version}_x64-setup.exe.sig",
       "sha256Sidecars": true,
-      "publishable": true,
+      "publishable": false,
       "updaterVersionSource": "version.semver",
       "allowSameSemverRepublish": false,
       "revisionPolicy": "Internal rN labels may identify QA artifacts only. Any new public updater release must bump SemVer; publishable releases use r1.",

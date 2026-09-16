@@ -21256,18 +21256,18 @@ define("support/releaseIdentity.generated", ["require", "exports"], function (re
     exports.RELEASE_REVISION_INTERNAL_ONLY = exports.UPDATER_DEFAULT_CHANNEL = exports.UPDATER_VERSION = exports.UPDATER_ENABLED = exports.UPDATER_PREPARED = exports.RELEASE_CANONICAL_RUN_REQUIRED = exports.RELEASE_FEATURE_FREEZE = exports.RELEASE_VALIDATION_PROFILE = exports.RELEASE_BUILD_ID = exports.RELEASE_MILESTONE_NAME = exports.RELEASE_MILESTONE = exports.RELEASE_DISPLAY_VERSION = exports.RELEASE_REVISION = exports.RELEASE_VERSION = void 0;
     // GENERATED from release-spec/release-contract.json by scripts/sync-release-contract.mjs.
     // Do not hand-edit release identity values here.
-    exports.RELEASE_VERSION = '0.11.36-rc.2';
+    exports.RELEASE_VERSION = '0.11.36-rc.3';
     exports.RELEASE_REVISION = 'r1';
-    exports.RELEASE_DISPLAY_VERSION = '0.11.36-rc.2-r1';
-    exports.RELEASE_MILESTONE = 'v0.11.36-rc.2';
+    exports.RELEASE_DISPLAY_VERSION = '0.11.36-rc.3-r1';
+    exports.RELEASE_MILESTONE = 'v0.11.36-rc.3';
     exports.RELEASE_MILESTONE_NAME = 'Updater E2E Preview';
-    exports.RELEASE_BUILD_ID = 'v0.11.36-rc.2-r1-updater-e2e-preview';
+    exports.RELEASE_BUILD_ID = 'v0.11.36-rc.3-r1-updater-e2e-preview';
     exports.RELEASE_VALIDATION_PROFILE = 'github-updater-deep-clean-v1';
     exports.RELEASE_FEATURE_FREEZE = false;
     exports.RELEASE_CANONICAL_RUN_REQUIRED = false;
     exports.UPDATER_PREPARED = true;
     exports.UPDATER_ENABLED = true;
-    exports.UPDATER_VERSION = '0.11.36-rc.2';
+    exports.UPDATER_VERSION = '0.11.36-rc.3';
     exports.UPDATER_DEFAULT_CHANNEL = 'stable';
     exports.RELEASE_REVISION_INTERNAL_ONLY = true;
 });
@@ -25690,18 +25690,18 @@ define("release/releaseIdentity", ["require", "exports"], function (require, exp
     exports.RELEASE_REVISION_INTERNAL_ONLY = exports.UPDATER_DEFAULT_CHANNEL = exports.UPDATER_VERSION = exports.UPDATER_ENABLED = exports.UPDATER_PREPARED = exports.RELEASE_CANONICAL_RUN_REQUIRED = exports.RELEASE_FEATURE_FREEZE = exports.RELEASE_VALIDATION_PROFILE = exports.RELEASE_BUILD_ID = exports.RELEASE_MILESTONE_NAME = exports.RELEASE_MILESTONE = exports.RELEASE_DISPLAY_VERSION = exports.RELEASE_REVISION = exports.RELEASE_VERSION = void 0;
     // GENERATED from release-spec/release-contract.json by scripts/sync-release-contract.mjs.
     // Do not hand-edit release identity values here.
-    exports.RELEASE_VERSION = '0.11.36-rc.2';
+    exports.RELEASE_VERSION = '0.11.36-rc.3';
     exports.RELEASE_REVISION = 'r1';
-    exports.RELEASE_DISPLAY_VERSION = '0.11.36-rc.2-r1';
-    exports.RELEASE_MILESTONE = 'v0.11.36-rc.2';
+    exports.RELEASE_DISPLAY_VERSION = '0.11.36-rc.3-r1';
+    exports.RELEASE_MILESTONE = 'v0.11.36-rc.3';
     exports.RELEASE_MILESTONE_NAME = 'Updater E2E Preview';
-    exports.RELEASE_BUILD_ID = 'v0.11.36-rc.2-r1-updater-e2e-preview';
+    exports.RELEASE_BUILD_ID = 'v0.11.36-rc.3-r1-updater-e2e-preview';
     exports.RELEASE_VALIDATION_PROFILE = 'github-updater-deep-clean-v1';
     exports.RELEASE_FEATURE_FREEZE = false;
     exports.RELEASE_CANONICAL_RUN_REQUIRED = false;
     exports.UPDATER_PREPARED = true;
     exports.UPDATER_ENABLED = true;
-    exports.UPDATER_VERSION = '0.11.36-rc.2';
+    exports.UPDATER_VERSION = '0.11.36-rc.3';
     exports.UPDATER_DEFAULT_CHANNEL = 'stable';
     exports.RELEASE_REVISION_INTERNAL_ONLY = true;
 });
