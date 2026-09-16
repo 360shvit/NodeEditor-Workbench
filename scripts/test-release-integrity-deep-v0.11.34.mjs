@@ -47,6 +47,9 @@ function mutateTempContract(mutator) {
 
 const current = JSON.parse(read('release-spec/release-contract.json'));
 mutateTempContract((value) => {
+  // Internal rN synchronization is intentionally exercised in non-publishable mode.
+  // A real publishable contract must remain r1-only.
+  value.updater.publication.publishable = false;
   value.version.revision = 'r2';
   value.version.display = `${value.version.semver}-r2`;
   value.version.buildId = `v${value.version.semver}-r2-release-integrity-deep`;
