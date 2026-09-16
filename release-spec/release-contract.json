@@ -49,7 +49,7 @@
       "installerAssetPattern": "Hytale-Generator-Workbench_{version}_x64-setup.exe",
       "installerSignaturePattern": "Hytale-Generator-Workbench_{version}_x64-setup.exe.sig",
       "sha256Sidecars": true,
-      "publishable": false,
+      "publishable": true,
       "updaterVersionSource": "version.semver",
       "allowSameSemverRepublish": false,
       "revisionPolicy": "Internal rN labels may identify QA artifacts only. Any new public updater release must bump SemVer; publishable releases use r1.",
