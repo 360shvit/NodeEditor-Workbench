@@ -27,6 +27,12 @@ const directCoreSuites = new Map([
   ['test:performance-tracing', 'scripts/test-performance-tracing-v0.11.1.mjs'],
   ['test:performance-optimization', 'scripts/test-performance-optimization-v0.11.5.mjs'],
 ]);
+for (const [name, script] of directCoreSuites) {
+  const expected = `npm run typecheck:core && node ${script}`;
+  if (pkg.scripts[name] !== expected) {
+    throw new Error(`${name} changed from the optimized matrix contract. Expected: ${expected}; actual: ${pkg.scripts[name] ?? '<missing>'}`);
+  }
+}
 const coreBuildStarted = performance.now();
 const coreBuild = spawnTypeScript(['-p', 'tsconfig.core.json', '--pretty', 'false'], { stdio: 'inherit' });
 if (coreBuild.error) throw coreBuild.error;
