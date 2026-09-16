@@ -28,6 +28,8 @@ jobs:
         run: node scripts/fix-prerelease-regression-tests-temp.mjs
       - name: Verify release contract
         run: npm run release:check
+      - name: Generate Windows runtime third-party notices
+        run: node scripts/generate-third-party-notices.mjs --target x86_64-pc-windows-msvc --output THIRD_PARTY_NOTICES.txt
       - name: Run regression matrix
         run: npm run test:rc-regression-matrix
       - name: Verify unused carry
