@@ -1,0 +1,62 @@
+name: Temporary Release Candidate Sync
+
+on:
+  push:
+    branches:
+      - prepare-updater-e2e-0.11.36-rc.1
+
+permissions:
+  contents: write
+
+jobs:
+  sync:
+    runs-on: windows-2025
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - uses: dtolnay/rust-toolchain@d1031067263f94b142dd6c0ce24c5eb9d02d52a0
+        with:
+          toolchain: 1.98.1
+      - name: Install JavaScript dependencies
+        run: npm ci --ignore-scripts
+      - name: Synchronize release identity and embedded bundle
+        run: npm run release:sync
+      - name: Synchronize package lock root metadata
+        run: npm install --package-lock-only --ignore-scripts
+      - name: Synchronize Cargo lock root metadata
+        shell: pwsh
+        run: cargo metadata --manifest-path src-tauri/Cargo.toml --format-version 1 | Out-Null
+      - name: Update public release documentation labels
+        shell: pwsh
+        run: |
+          foreach ($path in @('README.md', 'release-spec/README.md')) {
+            $text = Get-Content $path -Raw
+            $text = $text.Replace('v0.11.35-r10', 'v0.11.36-rc.1-r1').Replace('0.11.35-r10', '0.11.36-rc.1-r1')
+            [IO.File]::WriteAllText((Resolve-Path $path), $text, [Text.UTF8Encoding]::new($false))
+          }
+      - name: Verify synchronized release contract
+        run: npm run release:check
+      - name: Verify diff whitespace
+        shell: pwsh
+        run: |
+          git diff --check
+          if ($LASTEXITCODE -ne 0) { throw 'git diff --check failed.' }
+      - name: Commit synchronized candidate files
+        shell: pwsh
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git diff --cached --quiet
+          if ($LASTEXITCODE -eq 0) {
+            Write-Host 'Release candidate tree is already synchronized.'
+            exit 0
+          }
+          git commit -m 'Synchronize 0.11.36-rc.1 release candidate'
+          git push origin HEAD:$env:GITHUB_REF_NAME
