@@ -60,6 +60,9 @@ jobs:
       - name: Run all registered self-contained regression suites
         run: npm run test:rc-regression-matrix
 
+      - name: Run deep release-integrity mutation validation
+        run: node scripts/test-release-integrity-deep-v0.11.34.mjs
+
       - name: Require zero unused source carry
         run: npm run audit:unused-carry
 
