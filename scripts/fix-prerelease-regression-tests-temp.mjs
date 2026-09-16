@@ -24,17 +24,26 @@ function ensureCompareImport(file) {
   return true;
 }
 
-const buildIdBefore = "assert.match(read('BUILD_ID.txt'), /v0\\.11\\.[0-9]+-r[0-9]+-[a-z0-9-]+/);";
-const buildIdAfter = "assert.equal(read('BUILD_ID.txt').trim(), JSON.parse(read('release-spec/release-contract.json')).version.buildId);";
-let buildIdUpdates = 0;
+const directBuildIdBefore = "assert.match(read('BUILD_ID.txt'), /v0\\.11\\.[0-9]+-r[0-9]+-[a-z0-9-]+/);";
+const directBuildIdAfter = "assert.equal(read('BUILD_ID.txt').trim(), JSON.parse(read('release-spec/release-contract.json')).version.buildId);";
+const variableBuildIdBefore = "assert.match(buildId, /v0\\.11\\.[0-9]+-r[0-9]+-[a-z0-9-]+/);";
+const variableBuildIdAfter = "assert.equal(buildId.trim(), JSON.parse(read('release-spec/release-contract.json')).version.buildId);";
+let directBuildIdUpdates = 0;
+let variableBuildIdUpdates = 0;
 for (const name of fs.readdirSync('scripts').filter((name) => name.endsWith('.mjs'))) {
   const file = path.join('scripts', name);
-  const source = read(file);
-  if (!source.includes(buildIdBefore)) continue;
-  write(file, source.replaceAll(buildIdBefore, buildIdAfter));
-  buildIdUpdates += 1;
+  let source = read(file);
+  if (source.includes(directBuildIdBefore)) {
+    source = source.replaceAll(directBuildIdBefore, directBuildIdAfter);
+    directBuildIdUpdates += 1;
+  }
+  if (source.includes(variableBuildIdBefore)) {
+    source = source.replaceAll(variableBuildIdBefore, variableBuildIdAfter);
+    variableBuildIdUpdates += 1;
+  }
+  write(file, source);
 }
-console.log(`Canonical BUILD_ID assertions updated in ${buildIdUpdates} test files.`);
+console.log(`Canonical BUILD_ID assertions updated: direct=${directBuildIdUpdates}, variable=${variableBuildIdUpdates}.`);
 
 const historicalFiles = [
   'scripts/test-deep-clean-v0.11.35-r3.mjs',
