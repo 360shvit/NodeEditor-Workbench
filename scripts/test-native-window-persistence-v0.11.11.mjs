@@ -68,7 +68,7 @@ assert.doesNotMatch(runtime, /windowX|windowY|windowWidth|windowHeight/);
 
 // v0.11.11 must not mutate project/sidebar/session ownership while introducing desktop window persistence.
 assert.equal(hashFile('src/components/WorkbenchSidebar.tsx'), '60f03ce06748098e26dd1b8d7613c74221b0a9cb66200fdf31479285d1158a4b');
-assert.equal(hashFile('src/components/WorkbenchRail.tsx'), 'fea61885921c15509b2dc2ee023a1e6b6476c5863496413c27972b6910c390cb');
+assert.equal(hashFile('src/components/WorkbenchRail.tsx'), 'fae19cf5925657639ba85a53fbcc50f5a2590a9a8480b81834e65355be0146db');
 assert.equal(hashFile('src/components/ProjectExplorer.tsx'), '8900fab72a28023c4e3b133b772f7b88fd3f1e32b2f6740ae8fead456c22d7fd');
 assert.equal(hashFile('src/components/ExplorerSelectionDialog.tsx'), 'ebc00dcb3091986d4d66a286ea2673ddc4a66272d77c56ad0a2c5330e0c87366');
 assert.equal(hashFile('src/features/visual/VisualLayoutSidebar.tsx'), 'ae0e96d5ccae7fb44bc279fc105369ee33def01f1b9801c1da26fb2fdb8ce44c');

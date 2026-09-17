@@ -2588,3 +2588,48 @@ body { min-width: 0; }
 .updater-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
 .updater-actions .primary { min-height: 34px; }
 .updater-release-notes { display: block; max-width: 680px; white-space: pre-wrap; margin-top: 7px; }
+
+/* Pre-1.0 Audit 03 — Windows high-contrast / forced-colors safety */
+@media (forced-colors: active) {
+  button,
+  input,
+  select,
+  textarea,
+  summary {
+    forced-color-adjust: auto;
+  }
+
+  button:focus-visible,
+  input:focus-visible,
+  select:focus-visible,
+  textarea:focus-visible,
+  summary:focus-visible,
+  .workbench-splitter:focus-visible {
+    outline: 2px solid Highlight;
+    outline-offset: 2px;
+  }
+
+  [aria-current="page"],
+  [aria-pressed="true"],
+  [role="tab"][aria-selected="true"],
+  [role="option"][aria-selected="true"] {
+    outline: 2px solid Highlight;
+    outline-offset: -2px;
+  }
+
+  .workbench-splitter > span,
+  .rail-separator,
+  .tab-context-separator {
+    background: CanvasText;
+  }
+
+  .workbench-splitter:hover > span,
+  .workbench-splitter:focus-visible > span,
+  .workbench-splitter[data-dragging='true'] > span {
+    background: Highlight;
+  }
+
+  .rail-badge {
+    border: 1px solid ButtonText;
+  }
+}

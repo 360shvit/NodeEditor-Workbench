@@ -18,7 +18,7 @@
 |---|---|---|---|---|
 | 01 | UI, CSS & Workbench layout integrity | Global CSS, source/embedded parity, responsive behavior, DPI/UI Scale, pane container queries, sidebar/split layout, dialogs/overlays, focus visibility, reduced motion | Source audit + regression contract + review of existing layout/UX/accessibility tests; no unresolved clipping, overflow, focus or source/package divergence blocker | **PASS** |
 | 02 | Generator layout engine & geometry correctness | `src/core/layout`, geometry resolver, normalization, author grid, edge corridors, tolerances, golden baselines | Self-contained representative fixtures, deterministic/golden comparison, mutation/edge cases, large graph cases, blocked-reason correctness | **PASS** |
-| 03 | Accessibility & keyboard interaction | Tabs, menus, comboboxes, dialogs, focus trap/restore, splitter, labels, semantic roles, keyboard-only flows, contrast/high-contrast behavior | Automated semantic contracts plus manual keyboard/high-contrast smoke matrix | TODO |
+| 03 | Accessibility & keyboard interaction | Tabs, menus, comboboxes, dialogs, focus trap/restore, splitter, labels, semantic roles, keyboard-only flows, contrast/high-contrast behavior | Automated semantic contracts plus manual keyboard/high-contrast smoke matrix | **PASS** |
 | 04 | Frontend architecture & component boundaries | React component ownership, store coupling, render boundaries, command registry, feature/module boundaries, error boundaries | Dependency/coupling review, oversized-module risks, circular/hidden ownership checks, documented decisions | TODO |
 | 05 | Application state, persistence & lifecycle | Zustand state, ProjectSession, recent projects, pane state, close/reopen/reset, stale/corrupt persistence | State ownership map, reset/close matrix, corrupt-state tests, no staged-edit resurrection or cross-project leakage | TODO |
 | 06 | Core model, parsing, references & refactors | Parser, JSON path identity, project model, search/indexes, semantic refs, patcher, validation, rename/refactor | Representative correctness fixtures, adversarial JSON/path cases, roundtrip/refactor invariants | TODO |
@@ -51,4 +51,6 @@ Track 01 is completed in `docs/audits/PRE_1_0_01_UI_CSS_LAYOUT.md` and is backed
 
 Track 02 is completed in `docs/audits/PRE_1_0_02_LAYOUT_GEOMETRY.md` and is backed by `test:pre1-layout-geometry`. The audit retained the external v0.7.2 Atlantis golden as manual evidence, added self-contained deterministic/safety coverage, and remediated two numeric trust-boundary findings: unbounded engine settings and unsafe editor-coordinate values/output patches.
 
-Track 03 is next: **Accessibility & keyboard interaction**, including keyboard-only workbench flows and Windows high-contrast/forced-colors behavior in addition to the existing semantic source contracts.
+Track 03 is completed in `docs/audits/PRE_1_0_03_ACCESSIBILITY_KEYBOARD.md` and is backed by `test:pre1-accessibility-keyboard`. The audit remediated missing Windows forced-colors coverage and separated Workbench rail navigation semantics from true toggle-button semantics.
+
+Track 04 is next: **Frontend architecture & component boundaries**.
