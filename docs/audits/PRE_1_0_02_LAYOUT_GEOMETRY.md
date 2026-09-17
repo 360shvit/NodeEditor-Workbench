@@ -74,6 +74,8 @@ Remediation:
 - preservation of the two-fixture/eight-case historical v0.7.2 golden manifest and its explicitly external runner contract;
 - UI numeric controls remaining tied to the core setting ceiling.
 
+The deterministic committed desktop bundle was regenerated from the audited TypeScript/TSX source after the remediation. The synchronization run also executed this Track-02 gate, strict application TypeScript, and `release:check` successfully before committing `tauri-ui/app.js`.
+
 ## Remaining limits / follow-up
 
 The real Atlantis golden and `test-real-layout.mjs` still require an external HytaleGenerator fixture root. They should remain manual/RC evidence unless redistributable sanitized fixtures are deliberately created; this audit does not copy third-party/private project data into the public repository.
