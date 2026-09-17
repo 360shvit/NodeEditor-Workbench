@@ -4,8 +4,18 @@ import type { InspectorFilters, ProjectGraphViewSettings, SidebarView, VisualLay
 const RECENT_PROJECTS_KEY = 'hytale-workbench.projects.v1';
 const SESSION_PREFIX = 'hytale-workbench.project-session.v1:';
 const MAX_RECENT_PROJECTS = 20;
+const MAX_RECENT_PROJECT_SCAN = 200;
+const MAX_OPEN_FILE_PATHS = 500;
+const MAX_OPEN_SOURCE_PATHS = 50;
+const MAX_VISUAL_SELECTED_PATHS = 500;
 const MAX_NAVIGATION_ENTRIES = 100;
 const MAX_RECENTLY_CLOSED = 20;
+const MAX_RECENT_SEARCHES = 12;
+const MAX_PATH_LENGTH = 4096;
+const MAX_LABEL_LENGTH = 512;
+const MAX_NODE_ID_LENGTH = 2048;
+const MAX_QUERY_LENGTH = 4096;
+const MAX_WORKSPACE_ID_LENGTH = 512;
 
 const PERSISTENCE_DEFAULT_FILTERS: InspectorFilters = {
   imports: true,
@@ -44,12 +54,33 @@ function finiteNonNegative(value: unknown, fallback: number, max = 100_000): num
   return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? Math.min(max, value) : fallback;
 }
 
+function boundedString(value: unknown, maxLength: number): string | undefined {
+  if (typeof value !== 'string' || !value.trim() || value.length > maxLength) return undefined;
+  return value;
+}
+
+function cleanStringList(value: unknown, limit: number, maxLength: number): string[] {
+  if (!Array.isArray(value)) return [];
+  const result: string[] = [];
+  const seen = new Set<string>();
+  for (const item of value) {
+    const cleaned = boundedString(item, maxLength);
+    if (!cleaned || seen.has(cleaned)) continue;
+    seen.add(cleaned);
+    result.push(cleaned);
+    if (result.length >= limit) break;
+  }
+  return result;
+}
+
 function cleanNavigationLocation(value: unknown): PersistedNavigationLocation | undefined {
-  if (!isRecord(value) || typeof value.filePath !== 'string' || !value.filePath.trim()) return undefined;
+  if (!isRecord(value)) return undefined;
+  const filePath = boundedString(value.filePath, MAX_PATH_LENGTH);
+  if (!filePath) return undefined;
   const location = value.location === 'live' || value.location === 'floating' ? value.location : undefined;
   return {
-    filePath: value.filePath,
-    nodeId: typeof value.nodeId === 'string' ? value.nodeId : undefined,
+    filePath,
+    nodeId: boundedString(value.nodeId, MAX_NODE_ID_LENGTH),
     location,
   };
 }
@@ -68,7 +99,7 @@ function cleanInspectorFilters(value: unknown): InspectorFilters {
     live: boolOr(value.live, PERSISTENCE_DEFAULT_FILTERS.live),
     floating: boolOr(value.floating, PERSISTENCE_DEFAULT_FILTERS.floating),
     hideEmpty: boolOr(value.hideEmpty, PERSISTENCE_DEFAULT_FILTERS.hideEmpty),
-    workspace: typeof value.workspace === 'string' && value.workspace.length <= 512 ? value.workspace : 'all',
+    workspace: boundedString(value.workspace, MAX_WORKSPACE_ID_LENGTH) ?? 'all',
   };
 }
 
@@ -105,6 +136,22 @@ function cleanFolderState(value: unknown): Record<string, boolean> {
   return Object.fromEntries(Object.entries(value)
     .filter(([key, expanded]) => key.length <= 2048 && typeof expanded === 'boolean')
     .slice(0, 5000)) as Record<string, boolean>;
+}
+
+function cleanProjectGraphSettings(value: unknown): ProjectGraphViewSettings | undefined {
+  if (!isRecord(value)) return undefined;
+  const rawViewport = isRecord(value.viewport) ? value.viewport : undefined;
+  const panX = rawViewport ? Number(rawViewport.panX) : Number.NaN;
+  const panY = rawViewport ? Number(rawViewport.panY) : Number.NaN;
+  const zoom = rawViewport ? Number(rawViewport.zoom) : Number.NaN;
+  return {
+    selectedRootPath: boundedString(value.selectedRootPath, MAX_PATH_LENGTH)?.replace(/\\/g, '/'),
+    densityDepth: [4, 6, 8, 12].includes(Number(value.densityDepth)) ? Number(value.densityDepth) : 8,
+    includeResources: value.includeResources === true,
+    viewport: Number.isFinite(panX) && Number.isFinite(panY) && Number.isFinite(zoom)
+      ? { panX, panY, zoom: Math.min(2.5, Math.max(0.15, zoom)) }
+      : undefined,
+  };
 }
 
 export interface RecentProjectEntry {
@@ -179,23 +226,24 @@ function writeJson(key: string, value: unknown): void {
   }
 }
 
-function cleanRecentEntry(value: RecentProjectEntry): RecentProjectEntry | undefined {
-  const rootPath = normalizeRootPath(value?.rootPath ?? '');
-  const label = String(value?.label ?? '').trim();
+function cleanRecentEntry(value: unknown): RecentProjectEntry | undefined {
+  if (!isRecord(value)) return undefined;
+  const rootPath = boundedString(normalizeRootPath(typeof value.rootPath === 'string' ? value.rootPath : ''), MAX_PATH_LENGTH);
+  const label = boundedString(typeof value.label === 'string' ? value.label.trim() : '', MAX_LABEL_LENGTH);
   if (!rootPath || !label) return undefined;
   return {
     rootPath,
     label,
     pinned: value.pinned === true,
-    lastOpenedAt: Number.isFinite(value.lastOpenedAt) ? value.lastOpenedAt : 0,
+    lastOpenedAt: typeof value.lastOpenedAt === 'number' && Number.isFinite(value.lastOpenedAt) ? value.lastOpenedAt : 0,
   };
 }
 
 export function readRecentProjects(): RecentProjectEntry[] {
-  const raw = readJson<RecentProjectEntry[]>(RECENT_PROJECTS_KEY);
+  const raw = readJson<unknown>(RECENT_PROJECTS_KEY);
   if (!Array.isArray(raw)) return [];
   const deduped = new Map<string, RecentProjectEntry>();
-  for (const item of raw) {
+  for (const item of raw.slice(0, MAX_RECENT_PROJECT_SCAN)) {
     const entry = cleanRecentEntry(item);
     if (!entry) continue;
     const key = entry.rootPath.toLocaleLowerCase();
@@ -208,18 +256,20 @@ export function readRecentProjects(): RecentProjectEntry[] {
 }
 
 function writeRecentProjects(entries: RecentProjectEntry[]): void {
-  writeJson(RECENT_PROJECTS_KEY, entries.slice(0, MAX_RECENT_PROJECTS));
+  const cleaned = entries.map(cleanRecentEntry).filter((entry): entry is RecentProjectEntry => !!entry).slice(0, MAX_RECENT_PROJECTS);
+  writeJson(RECENT_PROJECTS_KEY, cleaned);
 }
 
 export function rememberRecentProject(rootPath: string, label: string): void {
-  const normalized = normalizeRootPath(rootPath);
-  if (!normalized || !label.trim()) return;
+  const normalized = boundedString(normalizeRootPath(rootPath), MAX_PATH_LENGTH);
+  const cleanedLabel = boundedString(label.trim(), MAX_LABEL_LENGTH);
+  if (!normalized || !cleanedLabel) return;
   const entries = readRecentProjects();
   const key = normalized.toLocaleLowerCase();
   const previous = entries.find((item) => item.rootPath.toLocaleLowerCase() === key);
   const next: RecentProjectEntry = {
     rootPath: normalized,
-    label: label.trim(),
+    label: cleanedLabel,
     pinned: previous?.pinned ?? false,
     lastOpenedAt: Date.now(),
   };
@@ -228,7 +278,9 @@ export function rememberRecentProject(rootPath: string, label: string): void {
 }
 
 export function toggleRecentProjectPinned(rootPath: string): void {
-  const normalized = normalizeRootPath(rootPath).toLocaleLowerCase();
+  const normalizedRoot = boundedString(normalizeRootPath(rootPath), MAX_PATH_LENGTH);
+  if (!normalizedRoot) return;
+  const normalized = normalizedRoot.toLocaleLowerCase();
   const entries = readRecentProjects().map((item) => item.rootPath.toLocaleLowerCase() === normalized
     ? { ...item, pinned: !item.pinned }
     : item);
@@ -236,55 +288,37 @@ export function toggleRecentProjectPinned(rootPath: string): void {
 }
 
 export function forgetRecentProject(rootPath: string): void {
-  const normalized = normalizeRootPath(rootPath).toLocaleLowerCase();
+  const normalizedRoot = boundedString(normalizeRootPath(rootPath), MAX_PATH_LENGTH);
+  if (!normalizedRoot) return;
+  const normalized = normalizedRoot.toLocaleLowerCase();
   writeRecentProjects(readRecentProjects().filter((item) => item.rootPath.toLocaleLowerCase() !== normalized));
 }
 
 export function readProjectSession(rootPath: string): ProjectSessionSnapshot | undefined {
-  const value = readJson<ProjectSessionSnapshot>(sessionKey(rootPath));
-  if (!value || value.version !== 1 || !Array.isArray(value.openFilePaths)) return undefined;
+  const value = readJson<unknown>(sessionKey(rootPath));
+  if (!isRecord(value) || value.version !== 1 || !Array.isArray(value.openFilePaths)) return undefined;
   return {
     version: 1,
-    openFilePaths: value.openFilePaths.filter((path): path is string => typeof path === 'string'),
-    activeFilePath: typeof value.activeFilePath === 'string' ? value.activeFilePath : undefined,
-    openSourcePaths: Array.isArray(value.openSourcePaths) ? value.openSourcePaths.filter((path): path is string => typeof path === 'string') : [],
-    activeSourcePath: typeof value.activeSourcePath === 'string' ? value.activeSourcePath : undefined,
+    openFilePaths: cleanStringList(value.openFilePaths, MAX_OPEN_FILE_PATHS, MAX_PATH_LENGTH),
+    activeFilePath: boundedString(value.activeFilePath, MAX_PATH_LENGTH),
+    openSourcePaths: cleanStringList(value.openSourcePaths, MAX_OPEN_SOURCE_PATHS, MAX_PATH_LENGTH),
+    activeSourcePath: boundedString(value.activeSourcePath, MAX_PATH_LENGTH),
     focusedNode: cleanNavigationLocation(value.focusedNode),
-    explorerWorkspace: typeof value.explorerWorkspace === 'string' ? value.explorerWorkspace : 'all',
+    explorerWorkspace: boundedString(value.explorerWorkspace, MAX_WORKSPACE_ID_LENGTH) ?? 'all',
     explorerFolderState: cleanFolderState(value.explorerFolderState),
     // Tool-specific sidebars are intentionally transient across restarts. Explorer/Search restore normally.
     sidebarView: value.sidebarView === 'search' ? 'search' : 'explorer',
     sidebarVisible: value.sidebarVisible !== false,
-    searchSidebarQuery: typeof value.searchSidebarQuery === 'string' ? value.searchSidebarQuery : '',
-    recentSearches: Array.isArray(value.recentSearches) ? value.recentSearches.filter((item): item is string => typeof item === 'string').slice(0, 12) : [],
+    searchSidebarQuery: typeof value.searchSidebarQuery === 'string' && value.searchSidebarQuery.length <= MAX_QUERY_LENGTH ? value.searchSidebarQuery : '',
+    recentSearches: cleanStringList(value.recentSearches, MAX_RECENT_SEARCHES, MAX_QUERY_LENGTH),
     filters: cleanInspectorFilters(value.filters),
-    recentlyClosedFilePaths: Array.isArray(value.recentlyClosedFilePaths)
-      ? value.recentlyClosedFilePaths.filter((path): path is string => typeof path === 'string').slice(-MAX_RECENTLY_CLOSED)
-      : [],
+    recentlyClosedFilePaths: cleanStringList(value.recentlyClosedFilePaths, MAX_RECENTLY_CLOSED, MAX_PATH_LENGTH),
     navigationCurrent: cleanNavigationLocation(value.navigationCurrent),
     navigationPast: Array.isArray(value.navigationPast) ? value.navigationPast.map(cleanNavigationLocation).filter((item): item is PersistedNavigationLocation => !!item).slice(-MAX_NAVIGATION_ENTRIES) : [],
     navigationFuture: Array.isArray(value.navigationFuture) ? value.navigationFuture.map(cleanNavigationLocation).filter((item): item is PersistedNavigationLocation => !!item).slice(0, MAX_NAVIGATION_ENTRIES) : [],
-    visualSelectedFilePaths: Array.isArray(value.visualSelectedFilePaths)
-      ? value.visualSelectedFilePaths.filter((path): path is string => typeof path === 'string')
-      : [],
+    visualSelectedFilePaths: cleanStringList(value.visualSelectedFilePaths, MAX_VISUAL_SELECTED_PATHS, MAX_PATH_LENGTH),
     visualSettings: cleanVisualLayoutSettings(value.visualSettings),
-    projectGraphSettings: value.projectGraphSettings && typeof value.projectGraphSettings === 'object'
-      ? {
-          selectedRootPath: typeof value.projectGraphSettings.selectedRootPath === 'string' ? value.projectGraphSettings.selectedRootPath.replace(/\\/g, '/') : undefined,
-          densityDepth: [4, 6, 8, 12].includes(Number(value.projectGraphSettings.densityDepth)) ? Number(value.projectGraphSettings.densityDepth) : 8,
-          includeResources: value.projectGraphSettings.includeResources === true,
-          viewport: value.projectGraphSettings.viewport && typeof value.projectGraphSettings.viewport === 'object'
-            && Number.isFinite(Number(value.projectGraphSettings.viewport.panX))
-            && Number.isFinite(Number(value.projectGraphSettings.viewport.panY))
-            && Number.isFinite(Number(value.projectGraphSettings.viewport.zoom))
-            ? {
-                panX: Number(value.projectGraphSettings.viewport.panX),
-                panY: Number(value.projectGraphSettings.viewport.panY),
-                zoom: Math.min(2.5, Math.max(0.15, Number(value.projectGraphSettings.viewport.zoom))),
-              }
-            : undefined,
-        }
-      : undefined,
+    projectGraphSettings: cleanProjectGraphSettings(value.projectGraphSettings),
   };
 }
 
@@ -296,24 +330,24 @@ export function readProjectSession(rootPath: string): ProjectSessionSnapshot | u
 export function writeProjectSession(rootPath: string, session: ProjectSessionSnapshot): void {
   writeJson(sessionKey(rootPath), {
     version: 1,
-    openFilePaths: session.openFilePaths,
-    activeFilePath: session.activeFilePath,
-    openSourcePaths: (session.openSourcePaths ?? []).slice(0, 50),
-    activeSourcePath: session.activeSourcePath,
-    focusedNode: session.focusedNode,
-    explorerWorkspace: session.explorerWorkspace,
-    explorerFolderState: session.explorerFolderState,
-    sidebarView: session.sidebarView,
+    openFilePaths: cleanStringList(session.openFilePaths, MAX_OPEN_FILE_PATHS, MAX_PATH_LENGTH),
+    activeFilePath: boundedString(session.activeFilePath, MAX_PATH_LENGTH),
+    openSourcePaths: cleanStringList(session.openSourcePaths, MAX_OPEN_SOURCE_PATHS, MAX_PATH_LENGTH),
+    activeSourcePath: boundedString(session.activeSourcePath, MAX_PATH_LENGTH),
+    focusedNode: cleanNavigationLocation(session.focusedNode),
+    explorerWorkspace: boundedString(session.explorerWorkspace, MAX_WORKSPACE_ID_LENGTH) ?? 'all',
+    explorerFolderState: cleanFolderState(session.explorerFolderState),
+    sidebarView: session.sidebarView === 'search' ? 'search' : 'explorer',
     sidebarVisible: session.sidebarVisible,
-    searchSidebarQuery: session.searchSidebarQuery ?? '',
-    recentSearches: (session.recentSearches ?? []).slice(0, 12),
-    filters: session.filters,
-    recentlyClosedFilePaths: session.recentlyClosedFilePaths.slice(-MAX_RECENTLY_CLOSED),
-    navigationCurrent: session.navigationCurrent,
-    navigationPast: session.navigationPast.slice(-MAX_NAVIGATION_ENTRIES),
-    navigationFuture: session.navigationFuture.slice(0, MAX_NAVIGATION_ENTRIES),
-    visualSelectedFilePaths: session.visualSelectedFilePaths,
-    visualSettings: session.visualSettings,
-    projectGraphSettings: session.projectGraphSettings,
+    searchSidebarQuery: typeof session.searchSidebarQuery === 'string' && session.searchSidebarQuery.length <= MAX_QUERY_LENGTH ? session.searchSidebarQuery : '',
+    recentSearches: cleanStringList(session.recentSearches, MAX_RECENT_SEARCHES, MAX_QUERY_LENGTH),
+    filters: cleanInspectorFilters(session.filters),
+    recentlyClosedFilePaths: cleanStringList(session.recentlyClosedFilePaths, MAX_RECENTLY_CLOSED, MAX_PATH_LENGTH),
+    navigationCurrent: cleanNavigationLocation(session.navigationCurrent),
+    navigationPast: session.navigationPast.map(cleanNavigationLocation).filter((item): item is PersistedNavigationLocation => !!item).slice(-MAX_NAVIGATION_ENTRIES),
+    navigationFuture: session.navigationFuture.map(cleanNavigationLocation).filter((item): item is PersistedNavigationLocation => !!item).slice(0, MAX_NAVIGATION_ENTRIES),
+    visualSelectedFilePaths: cleanStringList(session.visualSelectedFilePaths, MAX_VISUAL_SELECTED_PATHS, MAX_PATH_LENGTH),
+    visualSettings: cleanVisualLayoutSettings(session.visualSettings),
+    projectGraphSettings: cleanProjectGraphSettings(session.projectGraphSettings),
   });
 }
