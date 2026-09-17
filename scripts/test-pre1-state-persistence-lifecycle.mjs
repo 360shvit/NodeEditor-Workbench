@@ -208,7 +208,7 @@ assert.equal(recent.filter((entry) => entry.rootPath.toLocaleLowerCase() === 'c:
 assert.equal(recent.some((entry) => entry.rootPath.length > 4096 || entry.label.length > 512), false);
 
 assert.match(roadmap, /\| 05 \| Application state, persistence & lifecycle[\s\S]*?\| \*\*PASS\*\* \|/);
-assert.match(roadmap, /Track 06 is next/);
+assert.match(roadmap, /Track 05 is completed/);
 assert.match(audit, /\*\*Status:\*\* PASS/);
 assert.match(audit, /Finding 05-A/);
 assert.match(audit, /Finding 05-B/);
