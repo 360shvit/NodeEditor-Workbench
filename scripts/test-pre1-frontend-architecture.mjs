@@ -141,7 +141,7 @@ assert.ok(appSize < 32_000, `src/App.tsx exceeded the temporary anti-growth ceil
 const roadmap = fs.readFileSync(path.join(root, 'docs/PRE_1_0_AUDIT_ROADMAP.md'), 'utf8');
 const audit = fs.readFileSync(path.join(root, 'docs/audits/PRE_1_0_04_FRONTEND_ARCHITECTURE.md'), 'utf8');
 assert.match(roadmap, /\| 04 \| Frontend architecture & component boundaries[\s\S]*?\| \*\*PASS\*\* \|/);
-assert.match(roadmap, /Track 05 is next/);
+assert.match(roadmap, /\| 05 \| Application state, persistence & lifecycle[\s\S]*?\| \*\*PASS\*\* \|/);
 assert.match(audit, /\*\*Status:\*\* PASS/);
 assert.match(audit, /Finding 04-A/);
 assert.match(audit, /Finding 04-B/);

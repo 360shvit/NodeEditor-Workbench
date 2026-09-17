@@ -73,7 +73,7 @@ assert.equal(hashFile('src/components/ProjectExplorer.tsx'), '8900fab72a28023c4e
 assert.equal(hashFile('src/components/ExplorerSelectionDialog.tsx'), 'ebc00dcb3091986d4d66a286ea2673ddc4a66272d77c56ad0a2c5330e0c87366');
 assert.equal(hashFile('src/features/visual/VisualLayoutSidebar.tsx'), 'ae0e96d5ccae7fb44bc279fc105369ee33def01f1b9801c1da26fb2fdb8ce44c');
 assert.match(read('src/features/project-graph/ProjectGraphSidebar.tsx'), /Open as new graph/);
-assert.equal(hashFile('src/projects/projectPersistence.ts'), '497c6791bfc3eadc6b664db607f6664235aecf8b25bf5b4985063c46f1b2ed0b');
+assert.equal(hashFile('src/projects/projectPersistence.ts'), '7e6df70a194355682a7eab6bea8c1a9f05a38d3c2119bf6fc32fe17476ecb31f');
 const tauriRuntime = read('tauri-ui/tauri-runtime.js');
 assert.match(tauriRuntime, /app-close-requested/);
 assert.match(tauriRuntime, /project-files-changed/);

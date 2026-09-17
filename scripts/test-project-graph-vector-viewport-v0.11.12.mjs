@@ -69,7 +69,7 @@ assert.doesNotMatch(graphView, /recordPerformanceDuration\('graph\.camera\.pan',
 
 // Semantic graph, project state, sidebar and native security/window-state boundaries remain the proven v0.11.11 versions.
 assert.equal(hashFile('src/core/projectGraph.ts'), '002bf3e91f9b1ada8db13ee9a8ec84152bcde42c0f9a59e6b6506a245eed1997');
-assert.equal(hashFile('src/projects/projectPersistence.ts'), '497c6791bfc3eadc6b664db607f6664235aecf8b25bf5b4985063c46f1b2ed0b');
+assert.equal(hashFile('src/projects/projectPersistence.ts'), '7e6df70a194355682a7eab6bea8c1a9f05a38d3c2119bf6fc32fe17476ecb31f');
 assert.match(graphSidebar, /Open as new graph/);
 assert.match(graphSidebar, /openProjectGraphAsNew/);
 const nativeMain = read('src-tauri/src/main.rs');

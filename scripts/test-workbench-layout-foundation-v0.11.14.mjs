@@ -39,7 +39,7 @@ assert.match(prefs, /clampWorkbenchSidebarWidth/);
 assert.match(prefs, /localStorage\.setItem/);
 assert.match(prefs, /localStorage\.removeItem/);
 assert.doesNotMatch(persistence, /sidebarWidth|workbench\.layout/);
-assert.equal(hashFile('src/projects/projectPersistence.ts'), '497c6791bfc3eadc6b664db607f6664235aecf8b25bf5b4985063c46f1b2ed0b');
+assert.equal(hashFile('src/projects/projectPersistence.ts'), '7e6df70a194355682a7eab6bea8c1a9f05a38d3c2119bf6fc32fe17476ecb31f');
 
 // Reusable accessible splitter with pointer capture and keyboard support.
 assert.match(splitter, /role="separator"/);
