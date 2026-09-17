@@ -1,0 +1,358 @@
+name: Validate Pre-1.0 Track 07 Authority
+
+on:
+  push:
+    branches: [audit/pre-1.0-full-review]
+
+permissions:
+  contents: write
+
+jobs:
+  validate:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: windows-2025
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: audit/pre-1.0-full-review
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - uses: dtolnay/rust-toolchain@d1031067263f94b142dd6c0ce24c5eb9d02d52a0
+        with:
+          toolchain: 1.98.1
+      - name: Install locked Node dependencies
+        run: npm ci --ignore-scripts
+      - name: Apply Track 07 authority hardening and audit evidence
+        shell: pwsh
+        run: |
+          $patch = @'
+          from pathlib import Path
+          import json
+
+          rust_path = Path('src-tauri/src/main.rs')
+          rust = rust_path.read_bytes().decode('utf-8')
+
+          def replace_once(text, old, new, label):
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f'{label}: expected one match, found {count}')
+              return text.replace(old, new, 1)
+
+          old = '''fn active_project(state: &State<'_, DesktopState>) -> Result<ProjectState, String> {
+              state.project.lock().map_err(|_| "Project state lock is poisoned.".to_string())?.clone()
+                  .ok_or_else(|| "No project is currently open.".to_string())
+          }
+          '''
+          new = '''fn revalidate_authorized_directory(path: &Path, expected_canonical: &Path, label: &str) -> Result<(), String> {
+              let metadata = fs::symlink_metadata(path)
+                  .map_err(|error| io_error(&format!("Cannot revalidate {label}"), error))?;
+              if !metadata.is_dir() {
+                  return Err(format!("{label} is no longer an authorized local directory; select/open it again."));
+              }
+              let canonical = fs::canonicalize(path)
+                  .map_err(|error| io_error(&format!("Cannot canonicalize {label}"), error))?;
+              if canonical != expected_canonical {
+                  return Err(format!("{label} changed after native authorization; select/open it again."));
+              }
+              Ok(())
+          }
+
+          fn active_project(state: &State<'_, DesktopState>) -> Result<ProjectState, String> {
+              let project = state.project.lock().map_err(|_| "Project state lock is poisoned.".to_string())?.clone()
+                  .ok_or_else(|| "No project is currently open.".to_string())?;
+              revalidate_authorized_directory(&project.root, &project.canonical_root, "Active project root")?;
+              Ok(project)
+          }
+          '''
+          rust = replace_once(rust, old, new, 'active-project authority helper')
+
+          old = ''') -> Result<ProjectScan, String> {
+              discovery_roots.retain(|raw| safe_relative(raw).is_ok());
+          '''
+          new = ''') -> Result<ProjectScan, String> {
+              revalidate_authorized_directory(&project.root, &project.canonical_root, "Active project root")?;
+              discovery_roots.retain(|raw| safe_relative(raw).is_ok());
+          '''
+          rust = replace_once(rust, old, new, 'discovery-root revalidation')
+
+          old = '''fn inspect_output_path(root: &Path, raw: &str) -> Result<PathBuf, String> {
+              let relative = safe_relative(raw)?;
+          '''
+          new = '''fn inspect_output_path(root: &Path, raw: &str) -> Result<PathBuf, String> {
+              revalidate_authorized_directory(root, root, "Selected output folder")?;
+              let relative = safe_relative(raw)?;
+          '''
+          rust = replace_once(rust, old, new, 'inspect-output root revalidation')
+
+          old = '''fn ensure_output_path(root: &Path, raw: &str) -> Result<PathBuf, String> {
+              let relative = safe_relative(raw)?;
+          '''
+          new = '''fn ensure_output_path(root: &Path, raw: &str) -> Result<PathBuf, String> {
+              revalidate_authorized_directory(root, root, "Selected output folder")?;
+              let relative = safe_relative(raw)?;
+          '''
+          rust = replace_once(rust, old, new, 'ensure-output root revalidation')
+
+          old = '''        if metadata.file_type().is_symlink() || metadata.is_dir() {
+                      return Err(format!("Unsafe output target: {}", target.display()));
+                  }
+              }
+              Ok(target)
+          }
+
+          fn output_root'''
+          new = '''        if metadata.file_type().is_symlink() || metadata.is_dir() {
+                      return Err(format!("Unsafe output target: {}", target.display()));
+                  }
+                  let canonical = fs::canonicalize(&target).map_err(|error| io_error("Cannot canonicalize output target", error))?;
+                  if !canonical.starts_with(root) {
+                      return Err(format!("Output path escaped the selected output root: {raw}"));
+                  }
+              }
+              Ok(target)
+          }
+
+          fn output_root'''
+          rust = replace_once(rust, old, new, 'ensure-output target containment')
+
+          old = '''fn output_root(state: &State<'_, DesktopState>, token: &str) -> Result<PathBuf, String> {
+              state.output_roots.lock().map_err(|_| "Output state lock is poisoned.".to_string())?.get(token).cloned()
+                  .ok_or_else(|| "The selected output folder is no longer registered.".to_string())
+          }
+          '''
+          new = '''fn output_root(state: &State<'_, DesktopState>, token: &str) -> Result<PathBuf, String> {
+              let root = state.output_roots.lock().map_err(|_| "Output state lock is poisoned.".to_string())?.get(token).cloned()
+                  .ok_or_else(|| "The selected output folder is no longer registered.".to_string())?;
+              revalidate_authorized_directory(&root, &root, "Selected output folder")?;
+              Ok(root)
+          }
+          '''
+          rust = replace_once(rust, old, new, 'output-token revalidation')
+
+          old = '''fn select_worldgen_log_from_folder(folder: &Path) -> Result<PathBuf, String> {
+              let mut newest: Option<(std::time::SystemTime, String, PathBuf)> = None;
+          '''
+          new = '''fn select_worldgen_log_from_folder(folder: &Path) -> Result<PathBuf, String> {
+              revalidate_authorized_directory(folder, folder, "Selected WorldGen log folder")?;
+              let mut newest: Option<(std::time::SystemTime, String, PathBuf)> = None;
+          '''
+          rust = replace_once(rust, old, new, 'worldgen-folder revalidation')
+
+          old = '''    fs::canonicalize(selected).map_err(|error| io_error("Cannot canonicalize resolved WorldGen log", error))
+          }
+
+          #[tauri::command]
+          async fn select_worldgen_log'''
+          new = '''    let canonical = fs::canonicalize(selected).map_err(|error| io_error("Cannot canonicalize resolved WorldGen log", error))?;
+              if !canonical.starts_with(folder) {
+                  return Err("Resolved WorldGen log escaped the selected log folder; choose the folder again.".to_string());
+              }
+              Ok(canonical)
+          }
+
+          #[tauri::command]
+          async fn select_worldgen_log'''
+          rust = replace_once(rust, old, new, 'worldgen resolved-file containment')
+
+          marker = '''    #[test]
+              fn project_scan_rejects_external_junction_and_reports_reparse() {'''
+          tests = r'''    #[test]
+              fn authorized_directory_retarget_is_rejected() {
+                  let unique = SystemTime::now()
+                      .duration_since(UNIX_EPOCH)
+                      .expect("system clock before UNIX epoch")
+                      .as_nanos();
+                  let base = std::env::temp_dir().join(format!("hgw-authority-retarget-{unique}"));
+                  let authorized = base.join("authorized");
+                  let moved = base.join("authorized-original");
+                  let outside = base.join("outside");
+                  fs::create_dir_all(&authorized).expect("create authorized fixture");
+                  fs::create_dir_all(&outside).expect("create outside fixture");
+                  let expected = fs::canonicalize(&authorized).expect("canonicalize authorized fixture");
+                  fs::rename(&authorized, &moved).expect("move authorized fixture");
+                  let status = Command::new("cmd")
+                      .arg("/C").arg("mklink").arg("/J").arg(&authorized).arg(&outside)
+                      .status().expect("run mklink /J");
+                  assert!(status.success(), "mklink /J must succeed for authority fixture");
+                  let error = revalidate_authorized_directory(&authorized, &expected, "Fixture authority")
+                      .expect_err("retargeted authority must be rejected");
+                  assert!(error.contains("changed after native authorization"));
+                  fs::remove_dir(&authorized).expect("remove authority junction");
+                  fs::remove_dir_all(&base).expect("clean authority fixture");
+              }
+
+              #[test]
+              fn output_write_rejects_retargeted_root_junction() {
+                  let unique = SystemTime::now()
+                      .duration_since(UNIX_EPOCH)
+                      .expect("system clock before UNIX epoch")
+                      .as_nanos();
+                  let base = std::env::temp_dir().join(format!("hgw-output-retarget-{unique}"));
+                  let output = base.join("output");
+                  let moved = base.join("output-original");
+                  let outside = base.join("outside");
+                  fs::create_dir_all(&output).expect("create output fixture");
+                  fs::create_dir_all(&outside).expect("create outside fixture");
+                  fs::rename(&output, &moved).expect("move output fixture");
+                  let status = Command::new("cmd")
+                      .arg("/C").arg("mklink").arg("/J").arg(&output).arg(&outside)
+                      .status().expect("run mklink /J");
+                  assert!(status.success(), "mklink /J must succeed for output fixture");
+                  let error = ensure_output_path(&output, "escape.json")
+                      .expect_err("retargeted output authority must be rejected");
+                  assert!(error.contains("changed after native authorization"));
+                  assert!(!outside.join("escape.json").exists());
+                  fs::remove_dir(&output).expect("remove output junction");
+                  fs::remove_dir_all(&base).expect("clean output fixture");
+              }
+
+              #[test]
+              fn worldgen_folder_rejects_retargeted_root_junction() {
+                  let unique = SystemTime::now()
+                      .duration_since(UNIX_EPOCH)
+                      .expect("system clock before UNIX epoch")
+                      .as_nanos();
+                  let base = std::env::temp_dir().join(format!("hgw-worldgen-retarget-{unique}"));
+                  let folder = base.join("logs");
+                  let moved = base.join("logs-original");
+                  let outside = base.join("outside");
+                  fs::create_dir_all(&folder).expect("create log folder fixture");
+                  fs::create_dir_all(&outside).expect("create outside fixture");
+                  fs::write(outside.join("outside.log"), b"outside").expect("write outside log");
+                  fs::rename(&folder, &moved).expect("move log folder fixture");
+                  let status = Command::new("cmd")
+                      .arg("/C").arg("mklink").arg("/J").arg(&folder).arg(&outside)
+                      .status().expect("run mklink /J");
+                  assert!(status.success(), "mklink /J must succeed for WorldGen fixture");
+                  let error = select_worldgen_log_from_folder(&folder)
+                      .expect_err("retargeted WorldGen folder authority must be rejected");
+                  assert!(error.contains("changed after native authorization"));
+                  fs::remove_dir(&folder).expect("remove WorldGen junction");
+                  fs::remove_dir_all(&base).expect("clean WorldGen fixture");
+              }
+
+          ''' + marker
+          rust = replace_once(rust, marker, tests, 'windows authority tests')
+          rust_path.write_bytes(rust.encode('utf-8'))
+
+          gate = r'''import assert from 'node:assert/strict';
+          import fs from 'node:fs';
+
+          const rust = fs.readFileSync('src-tauri/src/main.rs', 'utf8');
+          const capability = JSON.parse(fs.readFileSync('src-tauri/capabilities/default.json', 'utf8'));
+          const config = JSON.parse(fs.readFileSync('src-tauri/tauri.conf.json', 'utf8'));
+
+          function block(name) {
+            const start = rust.indexOf(`fn ${name}`);
+            assert.ok(start >= 0, `missing Rust function ${name}`);
+            const candidates = [rust.indexOf('\nfn ', start + 4), rust.indexOf('\n#[tauri::command]', start + 4)]
+              .filter((value) => value > start);
+            const end = candidates.length ? Math.min(...candidates) : rust.length;
+            return rust.slice(start, end);
+          }
+
+          assert.deepEqual(capability.permissions, ['core:event:default', 'core:webview:allow-set-webview-zoom']);
+          assert.doesNotMatch(JSON.stringify(capability), /dialog:|fs:|shell:|process:|http:/);
+          assert.equal(config.app.security.csp['default-src'], "'self'");
+          assert.equal(config.app.security.csp['script-src'], "'self'");
+          assert.equal(config.app.security.csp['object-src'], "'none'");
+          assert.equal(config.app.security.csp['frame-src'], "'none'");
+
+          assert.match(block('safe_relative'), /Component::Normal/);
+          assert.match(block('resolve_existing_project_file'), /fs::canonicalize\(&joined\)/);
+          assert.match(block('resolve_existing_project_file'), /canonical\.starts_with\(&project\.canonical_root\)/);
+          assert.match(block('active_project'), /revalidate_authorized_directory/);
+          assert.match(block('commit_discovery_roots'), /revalidate_authorized_directory/);
+          assert.match(block('output_root'), /revalidate_authorized_directory/);
+          assert.match(block('inspect_output_path'), /revalidate_authorized_directory/);
+          assert.match(block('ensure_output_path'), /revalidate_authorized_directory/);
+          assert.match(block('ensure_output_path'), /fs::canonicalize\(&target\)/);
+          assert.match(block('select_worldgen_log_from_folder'), /revalidate_authorized_directory/);
+          assert.match(block('select_worldgen_log_from_folder'), /canonical\.starts_with\(folder\)/);
+
+          for (const field of ['output_roots', 'save_targets', 'worldgen_logs']) {
+            assert.match(rust, new RegExp(`${field}: Mutex<HashMap`));
+          }
+          assert.match(rust, /X-Hytale-Save-Token/);
+          assert.match(rust, /MAX_PROJECT_ENTRIES/);
+          assert.match(rust, /MAX_JSON_FILE_BYTES/);
+          assert.match(rust, /MAX_JSON_NESTING/);
+          assert.match(rust, /authorized_directory_retarget_is_rejected/);
+          assert.match(rust, /output_write_rejects_retargeted_root_junction/);
+          assert.match(rust, /worldgen_folder_rejects_retargeted_root_junction/);
+
+          console.log('Pre-1.0 Audit 07 — Native/Tauri authority boundary: PASS');
+          '''
+          Path('scripts/test-pre1-native-authority-boundary.mjs').write_bytes(gate.encode('utf-8'))
+
+          pkg_path = Path('package.json')
+          pkg = json.loads(pkg_path.read_bytes().decode('utf-8'))
+          pkg['scripts']['test:pre1-native-authority-boundary'] = 'node scripts/test-pre1-native-authority-boundary.mjs'
+          pkg_path.write_bytes((json.dumps(pkg, indent=2, ensure_ascii=False) + '\n').encode('utf-8'))
+
+          audit = '''# Pre-1.0 Audit 07 — Native / Tauri Authority Boundary
+
+          **Status:** PASS after Windows-native validation.  
+          **Scope:** Tauri capabilities, command authority, native picker grants, relative paths, canonical containment, opaque tokens, Windows junction/reparse retargeting, and native resource limits.
+
+          ## Authority model reviewed
+
+          The WebView capability remains deliberately minimal: event access plus current-WebView zoom only. Filesystem, dialog, shell, process, and HTTP plugin authority are not granted to frontend code. Project roots, output folders, save targets, and WorldGen sources are created through Rust-owned native selection or persisted native grants. Frontend-supplied project/output paths remain relative and are resolved by Rust.
+
+          ## Must-fix finding remediated
+
+          A native picker grant was stored as a canonical path, but later directory operations did not all prove that the same path still resolved to the originally authorized canonical directory. A same-user filesystem change could therefore rename an authorized directory and replace its path with a Windows junction before a later reload/export/log scan. The fix adds `revalidate_authorized_directory` and applies it at the active-project, discovery-rescan, output-token, output-path, and WorldGen-folder boundaries. Existing output targets are also canonicalized before overwrite, and resolved WorldGen files must remain below the authorized folder.
+
+          Windows-native tests now create real `mklink /J` fixtures and prove that retargeted directory authority is rejected before an output write or WorldGen folder scan can cross the grant boundary.
+
+          ## Existing protections retained
+
+          - project-relative paths reject absolute/parent/special components;
+          - existing project files are canonicalized and must remain under the selected project root;
+          - recent-project reopening requires the persisted native canonical grant;
+          - save targets are tokenized, extension-constrained, one-shot for binary writes, and parent authority is revalidated;
+          - project inventory / semantic JSON / nesting / apply-count limits remain native fail-closed guards;
+          - updater authority remains signed/native and is not expanded by this track.
+
+          ## Deferred to later tracks
+
+          Full binary project reads and ZIP/export aggregate memory limits are resource/I/O policy and are intentionally reviewed in Track 10. Same-user TOCTOU or same-path directory replacement that preserves the same canonical pathname requires a broader local-attacker threat decision and remains explicit input to Track 08 rather than being hidden by this gate.
+
+          ## Evidence
+
+          `test:pre1-native-authority-boundary` protects the source/capability contract. Windows `cargo test --locked` exercises real junction-retarget denial fixtures. The complete registered regression matrix must pass before the audit commit is created.
+          '''
+          audit = '\n'.join(line[10:] if line.startswith('          ') else line for line in audit.splitlines()) + '\n'
+          Path('docs/audits/PRE_1_0_07_NATIVE_TAURI_AUTHORITY.md').write_bytes(audit.encode('utf-8'))
+
+          roadmap_path = Path('docs/PRE_1_0_AUDIT_ROADMAP.md')
+          roadmap = roadmap_path.read_bytes().decode('utf-8')
+          roadmap = roadmap.replace('| 07 | Native/Tauri authority boundary | Commands, capabilities, opaque tokens, canonicalization, containment, reparse points, file type/size/count/depth limits | Threat-oriented command review, least-privilege capabilities, traversal/symlink/reparse fixtures, denial paths | **IN REVIEW** |', '| 07 | Native/Tauri authority boundary | Commands, capabilities, opaque tokens, canonicalization, containment, reparse points, file type/size/count/depth limits | Threat-oriented command review, least-privilege capabilities, traversal/symlink/reparse fixtures, denial paths | **PASS** |')
+          roadmap = roadmap.replace('Track 07 is now in review: **Native/Tauri authority boundary**.\n', 'Track 07 is completed in `docs/audits/PRE_1_0_07_NATIVE_TAURI_AUTHORITY.md` and is backed by `test:pre1-native-authority-boundary`. The audit adds canonical grant revalidation for project/output/WorldGen directory authority and Windows junction-retarget denial fixtures without broadening WebView capabilities.\n\nTrack 08 is next: **Security & threat model**.\n')
+          roadmap_path.write_bytes(roadmap.encode('utf-8'))
+          '@
+          $patch | python -
+      - name: Track 07 source/capability gate
+        run: npm run test:pre1-native-authority-boundary
+      - name: Native Windows authority fixtures
+        run: cargo test --locked --manifest-path src-tauri/Cargo.toml
+      - name: Verify release contract remains intact
+        run: npm run release:check
+      - name: Generate regression notice prerequisite
+        run: node scripts/generate-third-party-notices.mjs --target x86_64-pc-windows-msvc --output THIRD_PARTY_NOTICES.txt
+      - name: Run complete registered regression matrix
+        run: npm run test:rc-regression-matrix
+      - name: Require zero unused source carry
+        run: npm run audit:unused-carry
+      - name: Commit validated Track 07 and remove temporary workflow
+        shell: pwsh
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add src-tauri/src/main.rs package.json scripts/test-pre1-native-authority-boundary.mjs docs/PRE_1_0_AUDIT_ROADMAP.md docs/audits/PRE_1_0_07_NATIVE_TAURI_AUTHORITY.md
+          git rm .github/workflows/pre1-track07-authority.yml
+          git commit -m 'Complete Pre-1.0 Track 07 native authority audit'
+          git push origin HEAD:audit/pre-1.0-full-review
