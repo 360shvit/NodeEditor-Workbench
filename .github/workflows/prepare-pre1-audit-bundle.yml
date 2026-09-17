@@ -1,0 +1,46 @@
+name: Prepare Pre-1.0 Audit Bundle
+
+on:
+  push:
+    branches:
+      - audit/pre-1.0-full-review
+    paths:
+      - 'src/**'
+      - 'package.json'
+      - '.github/workflows/prepare-pre1-audit-bundle.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  sync:
+    runs-on: windows-2025
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: audit/pre-1.0-full-review
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - name: Install locked Node dependencies
+        run: npm ci --ignore-scripts
+      - name: Build deterministic embedded frontend
+        run: npm run bundle:embedded
+      - name: Verify Track 02 self-contained gate
+        run: npm run test:pre1-layout-geometry
+      - name: Verify strict application TypeScript
+        run: node node_modules/typescript/bin/tsc -p tsconfig.app.json
+      - name: Verify release contract and embedded parity
+        run: npm run release:check
+      - name: Commit synchronized bundle and remove temporary workflow
+        shell: pwsh
+        run: |
+          Remove-Item '.github/workflows/prepare-pre1-audit-bundle.yml'
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add tauri-ui/app.js .github/workflows/prepare-pre1-audit-bundle.yml
+          if (-not (git diff --cached --quiet)) {
+            git commit -m 'Sync embedded pre-1.0 audit bundle'
+            git push origin HEAD:audit/pre-1.0-full-review
+          }
