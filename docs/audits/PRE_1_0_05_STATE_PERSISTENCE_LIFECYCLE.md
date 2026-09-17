@@ -110,6 +110,8 @@ Track 05 adds the missing corruption/bounds and cross-project watcher-boundary e
 
 Because Track 05 changes application runtime source, the committed desktop frontend was regenerated with the repository's deterministic `npm run bundle:embedded` command after the source changes. Final Windows validation therefore checks both the reviewed TypeScript and byte-identical `tauri-ui/app.js` package parity on the same audit head.
 
+Historical version-pinned persistence regression guards were realigned after the intentional bounded-persistence change. A self-removing Windows alignment job generated the normal release-surface prerequisites and ran the complete registered regression matrix successfully before committing those snapshot/semantic expectation updates.
+
 ## Conclusion
 
 No unresolved Track-05 state, persistence or lifecycle blocker remains. Staged edit authority is session-only and fail-safe across destructive transitions, stale runtime ids are remapped/dropped by path, corrupt persistence is bounded and normalized, and desktop watcher runtime state is now explicitly scoped to the active project root.
