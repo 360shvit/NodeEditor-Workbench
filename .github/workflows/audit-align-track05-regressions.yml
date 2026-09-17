@@ -1,0 +1,68 @@
+name: Align Track 05 Legacy Regression Guards
+
+on:
+  push:
+    branches:
+      - audit/pre-1.0-full-review
+
+permissions:
+  contents: write
+
+jobs:
+  align:
+    runs-on: windows-2025
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: audit/pre-1.0-full-review
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - run: npm ci --ignore-scripts
+      - name: Align intentional persistence hardening guards
+        shell: pwsh
+        run: |
+          $oldHash = '497c6791bfc3eadc6b664db607f6664235aecf8b25bf5b4985063c46f1b2ed0b'
+          $newHash = '7e6df5193d25c0e955ef56c30aef2a301592706a54c6b66094ab2f1d310734ba'
+          $hashFiles = @(
+            'scripts/test-unified-filter-all-v0.11.13.mjs',
+            'scripts/test-native-window-persistence-v0.11.11.mjs',
+            'scripts/test-project-graph-vector-viewport-v0.11.12.mjs',
+            'scripts/test-workbench-layout-foundation-v0.11.14.mjs',
+            'scripts/test-split-workview-v0.11.15.mjs',
+            'scripts/test-rc-architecture-validation-v0.11.16.mjs',
+            'scripts/test-rc-hardening-v0.11.19.mjs'
+          )
+          foreach ($file in $hashFiles) {
+            $text = [IO.File]::ReadAllText($file)
+            if (-not $text.Contains($oldHash)) { throw "Expected legacy persistence hash not found in $file" }
+            [IO.File]::WriteAllText($file, $text.Replace($oldHash, $newHash), [Text.UTF8Encoding]::new($false))
+          }
+
+          $filterFile = 'scripts/test-unified-filter-all-v0.11.13.mjs'
+          $filter = [IO.File]::ReadAllText($filterFile)
+          $oldFilter = 'assert.match(persistence, /filters: session\.filters/);'
+          $newFilter = 'assert.match(persistence, /filters: cleanInspectorFilters\(session\.filters\)/);'
+          if (-not $filter.Contains($oldFilter)) { throw 'Expected legacy filter persistence assertion not found' }
+          [IO.File]::WriteAllText($filterFile, $filter.Replace($oldFilter, $newFilter), [Text.UTF8Encoding]::new($false))
+
+          $architectureFile = 'scripts/test-pre1-frontend-architecture.mjs'
+          $architecture = [IO.File]::ReadAllText($architectureFile)
+          $oldRoadmap = 'assert.match(roadmap, /Track 05 is next/);'
+          $newRoadmap = 'assert.match(roadmap, /\| 05 \| Application state, persistence & lifecycle[\s\S]*?\| \*\*PASS\*\* \|/);'
+          if (-not $architecture.Contains($oldRoadmap)) { throw 'Expected Track 04 roadmap-next assertion not found' }
+          [IO.File]::WriteAllText($architectureFile, $architecture.Replace($oldRoadmap, $newRoadmap), [Text.UTF8Encoding]::new($false))
+      - name: Run complete registered regression matrix
+        run: npm run test:rc-regression-matrix
+      - name: Commit aligned guards and remove temporary workflow
+        shell: pwsh
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git rm .github/workflows/audit-align-track05-regressions.yml
+          git add scripts/test-unified-filter-all-v0.11.13.mjs scripts/test-native-window-persistence-v0.11.11.mjs scripts/test-project-graph-vector-viewport-v0.11.12.mjs scripts/test-workbench-layout-foundation-v0.11.14.mjs scripts/test-split-workview-v0.11.15.mjs scripts/test-rc-architecture-validation-v0.11.16.mjs scripts/test-rc-hardening-v0.11.19.mjs scripts/test-pre1-frontend-architecture.mjs
+          git diff --cached --quiet
+          if ($LASTEXITCODE -eq 0) { throw 'Expected aligned regression changes were not staged.' }
+          git commit -m "Align legacy regression guards with Track 05 hardening"
+          git push origin HEAD:audit/pre-1.0-full-review
