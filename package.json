@@ -95,7 +95,8 @@
     "test:pre1-accessibility-keyboard": "node scripts/test-pre1-accessibility-keyboard.mjs",
     "test:pre1-frontend-architecture": "node scripts/test-pre1-frontend-architecture.mjs",
     "test:pre1-state-persistence-lifecycle": "node scripts/test-pre1-state-persistence-lifecycle.mjs",
-    "test:pre1-core-model-refactor": "npm run typecheck:core && node scripts/test-pre1-core-model-refactor.mjs"
+    "test:pre1-core-model-refactor": "npm run typecheck:core && node scripts/test-pre1-core-model-refactor.mjs",
+    "test:pre1-native-authority-boundary": "node scripts/test-pre1-native-authority-boundary.mjs"
   },
   "dependencies": {
     "react": "18.3.1",
