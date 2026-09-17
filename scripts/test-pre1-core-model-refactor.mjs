@@ -135,6 +135,32 @@ assert.ok(mixedProject.symbolIndex.get(symbolKey('Density', 'Good')));
 assert.ok(mixedProject.files.find((file) => file.path.endsWith('Bad.json'))?.parseError);
 assert.ok(mixedProject.diagnostics.some((item) => item.code === 'parse-error' && item.severity === 'error'));
 
+// Duplicate node identity within one location is ambiguous for indexes/refactors and must fail closed.
+const duplicateNodeProject = buildProject([{
+  path: 'Server/HytaleGenerator/Density/DuplicateNode.json',
+  text: JSON.stringify({
+    first: { $NodeId: 'Repeated.Density', Type: 'Exported', ExportAs: 'One' },
+    second: { $NodeId: 'Repeated.Density', Type: 'Exported', ExportAs: 'Two' },
+  }),
+}]);
+const duplicateNodeFile = duplicateNodeProject.files[0];
+assert.equal(duplicateNodeFile.nodes.length, 0);
+assert.match(duplicateNodeFile.parseError ?? '', /Duplicate node identity/);
+assert.ok(duplicateNodeProject.diagnostics.some((item) => item.code === 'parse-error' && item.severity === 'error'));
+assert.equal(duplicateNodeProject.symbolIndex.size, 0, 'ambiguous duplicate-node files must not contribute refactor symbols');
+
+// The same raw id in separate live/floating locations remains a valid distinct identity.
+const crossLocationProject = buildProject([{
+  path: 'Server/HytaleGenerator/Density/CrossLocation.json',
+  text: JSON.stringify({
+    $NodeId: 'Shared.Density', Type: 'Exported', ExportAs: 'Live',
+    $NodeEditorMetadata: { $FloatingNodes: [{ $NodeId: 'Shared.Density', Type: 'Exported', ExportAs: 'Floating' }] },
+  }),
+}]);
+assert.equal(crossLocationProject.files[0].parseError, undefined);
+assert.equal(crossLocationProject.files[0].nodes.length, 2);
+assert.deepEqual(new Set(crossLocationProject.files[0].nodes.map((node) => node.location)), new Set(['live', 'floating']));
+
 console.log(JSON.stringify({
   jsonPathAdversarialCases: pathCases.length,
   patchRoundtrip: true,
@@ -144,4 +170,6 @@ console.log(JSON.stringify({
   fieldMatchIdentityCollisionSafe: true,
   diagnosticSeverityEscalationSafe: true,
   malformedFileIsolation: true,
+  duplicateNodeIdentityFailsClosed: true,
+  liveFloatingIdentityRemainsDistinct: true,
 }, null, 2));
