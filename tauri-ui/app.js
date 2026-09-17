@@ -1071,6 +1071,9 @@ define("core/parser", ["require", "exports", "core/schemaRegistry", "core/textPa
                     fields,
                 });
             }
+            else {
+                throw new Error(`Duplicate node identity "${rawId}" in ${location} nodes.`);
+            }
         }
         for (const [key, child] of Object.entries(value)) {
             if (key === '$NodeEditorMetadata')
