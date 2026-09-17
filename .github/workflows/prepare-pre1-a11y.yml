@@ -1,0 +1,129 @@
+name: Prepare Pre-1.0 Accessibility Audit
+
+on:
+  push:
+    branches:
+      - audit/pre-1.0-full-review
+    paths:
+      - .github/workflows/prepare-pre1-a11y.yml
+
+permissions:
+  contents: write
+
+jobs:
+  prepare:
+    runs-on: windows-2025
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: audit/pre-1.0-full-review
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - name: Install locked Node dependencies
+        run: npm ci --ignore-scripts
+      - name: Apply Track 03 audit remediation and evidence
+        shell: bash
+        run: |
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          import crypto from 'node:crypto';
+
+          const read = (p) => fs.readFileSync(p, 'utf8');
+          const write = (p, value) => fs.writeFileSync(p, value, 'utf8');
+          const replaceOnce = (text, from, to, label) => {
+            if (!text.includes(from)) throw new Error(`missing expected ${label}`);
+            return text.replace(from, to);
+          };
+
+          // 03-B: visual active state is not automatically a toggle state.
+          let rail = read('src/components/WorkbenchRail.tsx');
+          rail = replaceOnce(rail,
+            "  pressed,\n}: {\n",
+            "  pressed,\n  current,\n}: {\n",
+            'RailButton current prop destructure');
+          rail = replaceOnce(rail,
+            "  pressed?: boolean;\n}) {",
+            "  pressed?: boolean;\n  current?: boolean;\n}) {",
+            'RailButton current prop type');
+          rail = replaceOnce(rail,
+            "      aria-pressed={pressed ?? active ?? false}\n",
+            "      aria-pressed={pressed}\n      aria-current={current ? 'page' : undefined}\n",
+            'rail aria semantics');
+          rail = replaceOnce(rail,
+            "      active={sidebarVisible && globalSidebarActive && effectiveGlobalSidebarView === view}\n      onClick={() => activateSidebar(view)}\n",
+            "      active={sidebarVisible && globalSidebarActive && effectiveGlobalSidebarView === view}\n      pressed={sidebarVisible && globalSidebarActive && effectiveGlobalSidebarView === view}\n      onClick={() => activateSidebar(view)}\n",
+            'sidebar toggle semantics');
+
+          const toolCurrentReplacements = [
+            ["          active={!!activeTabId?.startsWith('tab:diagnostics:')}\n          onClick={() => openDiagnosticsTab()}\n", "          active={!!activeTabId?.startsWith('tab:diagnostics:')}\n          current={!!activeTabId?.startsWith('tab:diagnostics:')}\n          onClick={() => openDiagnosticsTab()}\n"],
+            ["          active={activeTabId === 'tab:changes:pending'}\n          onClick={openChangesTab}\n", "          active={activeTabId === 'tab:changes:pending'}\n          current={activeTabId === 'tab:changes:pending'}\n          onClick={openChangesTab}\n"],
+            ["          active={activeTabId === 'tab:visual'}\n          onClick={openVisualTab}\n", "          active={activeTabId === 'tab:visual'}\n          current={activeTabId === 'tab:visual'}\n          onClick={openVisualTab}\n"],
+            ["          active={activeTab?.kind === 'worldgen-performance'}\n          onClick={openWorldgenPerformanceTab}\n", "          active={activeTab?.kind === 'worldgen-performance'}\n          current={activeTab?.kind === 'worldgen-performance'}\n          onClick={openWorldgenPerformanceTab}\n"],
+            ["          active={activeTab?.kind === 'project-graph'}\n          onClick={openProjectGraphTab}\n", "          active={activeTab?.kind === 'project-graph'}\n          current={activeTab?.kind === 'project-graph'}\n          onClick={openProjectGraphTab}\n"],
+          ];
+          for (const [from, to] of toolCurrentReplacements) rail = replaceOnce(rail, from, to, 'tool navigation current semantics');
+          write('src/components/WorkbenchRail.tsx', rail);
+
+          // 03-A: ensure important focus/selection state survives Windows forced colors.
+          const highContrastBlock = `\n\n/* Pre-1.0 Audit 03 — Windows high-contrast / forced-colors safety */\n@media (forced-colors: active) {\n  button,\n  input,\n  select,\n  textarea,\n  summary {\n    forced-color-adjust: auto;\n  }\n\n  button:focus-visible,\n  input:focus-visible,\n  select:focus-visible,\n  textarea:focus-visible,\n  summary:focus-visible,\n  .workbench-splitter:focus-visible {\n    outline: 2px solid Highlight;\n    outline-offset: 2px;\n  }\n\n  [aria-current=\"page\"],\n  [aria-pressed=\"true\"],\n  [role=\"tab\"][aria-selected=\"true\"],\n  [role=\"option\"][aria-selected=\"true\"] {\n    outline: 2px solid Highlight;\n    outline-offset: -2px;\n  }\n\n  .workbench-splitter > span,\n  .rail-separator,\n  .tab-context-separator {\n    background: CanvasText;\n  }\n\n  .workbench-splitter:hover > span,\n  .workbench-splitter:focus-visible > span,\n  .workbench-splitter[data-dragging='true'] > span {\n    background: Highlight;\n  }\n\n  .rail-badge {\n    border: 1px solid ButtonText;\n  }\n}\n`;
+          let styles = read('src/styles.css');
+          if (!styles.includes('Pre-1.0 Audit 03 — Windows high-contrast / forced-colors safety')) styles = styles.trimEnd() + highContrastBlock;
+          write('src/styles.css', styles);
+
+          // Stable old-track invariant: future roadmap progress must not break Track 01.
+          let track01 = read('scripts/test-pre1-ui-css-layout.mjs');
+          track01 = replaceOnce(track01, "assert.match(roadmap, /Track 03 is next/);", "assert.match(roadmap, /Track 01 is completed/);", 'Track 01 roadmap assertion');
+          write('scripts/test-pre1-ui-css-layout.mjs', track01);
+
+          const auditDoc = `# Pre-1.0 Audit 03 — Accessibility & Keyboard Interaction\n\n**Status:** PASS  \n**Baseline:** audit branch derived from \`v0.11.36-rc.3\`  \n**Gate:** \`npm run test:pre1-accessibility-keyboard\`\n\n## Scope\n\nThis track reviews keyboard-only and assistive-technology semantics across the Workbench: tabs and tab panels, tab context menus, the Workbench rail, Quick Open combobox/listbox behavior, modal focus trapping and restoration, splitters, icon-only controls, visible focus, reduced motion, and Windows High Contrast / forced-colors behavior.\n\n## Existing evidence\n\nThe existing \`test:accessibility-interaction\` contract already protects roving tab focus, tab/menu roles, context-menu keyboard navigation, modal focus traps, Escape handling, focus restoration, labelled dialogs, Quick Open combobox/listbox/option semantics, and packaged embedded equivalents. Track 01 additionally protects global focus-visible and reduced-motion CSS, while the shared WorkbenchSplitter exposes separator value semantics and Arrow/Home/End keyboard control.\n\n## Finding 03-A — no Windows forced-colors contract\n\n**Classification:** must-fix before 1.0 — remediated.\n\nThe application had explicit author colors and focus styling but no \`@media (forced-colors: active)\` adaptation. In Windows High Contrast mode, active/selected states that relied on backgrounds or box shadows could therefore lose a reliable visual distinction.\n\nRemediation adds a focused forced-colors layer that keeps browser/system color adaptation enabled, renders focus and selected/current/toggle states with the system \`Highlight\` color, preserves splitter affordance with system colors, and keeps badges visibly bounded. Source and packaged CSS remain byte-identical.\n\n## Finding 03-B — Workbench rail exposed navigation as toggle buttons\n\n**Classification:** must-fix before 1.0 — remediated.\n\n\`RailButton\` previously derived \`aria-pressed\` from the generic visual \`active\` state. That caused non-toggle actions and navigation targets such as Diagnostics, Changes, Layout, Project Graph and Settings to be exposed with toggle-button semantics.\n\nRemediation separates visual state from accessibility state: actual toggles (sidebar visibility and Editing) explicitly use \`aria-pressed\`; active tool destinations use \`aria-current=\"page\"\`; ordinary actions such as Settings expose neither toggle nor current-page semantics.\n\n## Self-contained Pre-1.0 gate\n\n\`test:pre1-accessibility-keyboard\` protects:\n\n- source/package CSS parity and the forced-colors safety block;\n- correct rail toggle versus navigation semantics;\n- tablist/tab/tabpanel relationships and roving Arrow/Home/End navigation;\n- keyboard-operable tab menus with Escape focus restoration;\n- modal Tab trapping, Escape handling and previous-focus restoration;\n- Quick Open combobox/listbox/option relationships and keyboard selection;\n- splitter separator value semantics plus Arrow/Home/End operation;\n- global focus-visible and reduced-motion coverage;\n- roadmap/audit status for this track.\n\n## Remaining manual acceptance\n\nStatic/source contracts cannot prove the exact narration produced by Windows Narrator or the final appearance of every WebView control under every user High Contrast palette. Track 18 must therefore include a short installed-build keyboard-only smoke plus Windows Narrator and High Contrast verification. This is manual acceptance evidence, not an unresolved source blocker.\n\n## Conclusion\n\nNo unresolved Track-03 accessibility or keyboard blocker remains after the forced-colors and Workbench-rail semantic remediations.\n`;
+          fs.mkdirSync('docs/audits', { recursive: true });
+          write('docs/audits/PRE_1_0_03_ACCESSIBILITY_KEYBOARD.md', auditDoc);
+
+          const gate = `import assert from 'node:assert/strict';\nimport fs from 'node:fs';\n\nconst read = (file) => fs.readFileSync(file, 'utf8');\nconst styles = read('src/styles.css');\nconst embeddedStyles = read('tauri-ui/styles.css');\nconst rail = read('src/components/WorkbenchRail.tsx');\nconst tabs = read('src/components/FileTabs.tsx');\nconst inspector = read('src/features/inspector/InspectorPane.tsx');\nconst modalFocus = read('src/workbench/modalFocus.ts');\nconst quick = read('src/components/QuickOpen.tsx');\nconst splitter = read('src/components/WorkbenchSplitter.tsx');\nconst roadmap = read('docs/PRE_1_0_AUDIT_ROADMAP.md');\nconst audit = read('docs/audits/PRE_1_0_03_ACCESSIBILITY_KEYBOARD.md');\n\nassert.equal(styles, embeddedStyles, 'packaged CSS must match reviewed source CSS');\nassert.match(styles, /@media \\(forced-colors: active\\)/);\nassert.match(styles, /outline: 2px solid Highlight/);\nassert.match(styles, /\\[aria-current=\\"page\\"\\]/);\nassert.match(styles, /\\[aria-pressed=\\"true\\"\\]/);\nassert.match(styles, /\\[role=\\"tab\\"\\]\\[aria-selected=\\"true\\"\\]/);\nassert.match(styles, /\\[role=\\"option\\"\\]\\[aria-selected=\\"true\\"\\]/);\nassert.match(styles, /background: CanvasText/);\nassert.match(styles, /@media \\(prefers-reduced-motion: reduce\\)/);\nassert.match(styles, /button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible, summary:focus-visible/);\n\nassert.doesNotMatch(rail, /pressed \\?\\? active/);\nassert.match(rail, /aria-pressed=\\{pressed\\}/);\nassert.match(rail, /aria-current=\\{current \\? 'page' : undefined\\}/);\nassert.match(rail, /pressed=\\{sidebarVisible && globalSidebarActive && effectiveGlobalSidebarView === view\\}/);\nassert.match(rail, /pressed=\\{editing\\}/);\nassert.match(rail, /current=\\{!!activeTabId\\?\\.startsWith\\('tab:diagnostics:'\\)\\}/);\nassert.match(rail, /label=\\"Settings\\" icon=\\"settings\\" onClick=\\{onOpenSettings\\}/);\n\nassert.match(tabs, /role=\\"tablist\\"/);\nassert.match(tabs, /role=\\"tab\\"/);\nassert.match(tabs, /aria-selected=\\{activeTabId === tab\\.id\\}/);\nassert.match(tabs, /tabIndex=\\{activeTabId === tab\\.id \\? 0 : -1\\}/);\nassert.match(tabs, /\\['ArrowLeft', 'ArrowRight', 'Home', 'End'\\]/);\nassert.match(tabs, /role=\\"menu\\"/);\nassert.match(tabs, /role=\\"menuitem\\"/);\nassert.match(tabs, /\\['ArrowDown', 'ArrowUp', 'Home', 'End'\\]/);\nassert.match(tabs, /event\\.key === 'Escape'/);\nassert.match(tabs, /returnFocusId/);\nassert.match(inspector, /role=\\{activeTab \\? 'tabpanel' : undefined\\}/);\nassert.match(inspector, /aria-labelledby=\\{activeTab \\? workbenchTabDomId/);\n\nassert.match(modalFocus, /event\\.key !== 'Tab'/);\nassert.match(modalFocus, /event\\.key === 'Escape'/);\nassert.match(modalFocus, /previousFocus\\?\\.isConnected/);\nassert.match(quick, /role=\\"combobox\\"/);\nassert.match(quick, /aria-activedescendant/);\nassert.match(quick, /role=\\"listbox\\"/);\nassert.match(quick, /role=\\"option\\"/);\nassert.match(quick, /event\\.key === 'ArrowDown'/);\nassert.match(quick, /event\\.key === 'ArrowUp'/);\nassert.match(quick, /event\\.key === 'Enter'/);\n\nfor (const marker of [/role=\\"separator\\"/, /aria-orientation=\\{orientation\\}/, /aria-valuemin=\\{min\\}/, /aria-valuemax=\\{max\\}/, /aria-valuenow=\\{value\\}/, /tabIndex=\\{0\\}/, /ArrowLeft/, /ArrowRight/, /ArrowUp/, /ArrowDown/, /Home/, /End/]) assert.match(splitter, marker);\n\nassert.match(roadmap, /\\| 03 \\| Accessibility & keyboard interaction[\\s\\S]*?\\| \\*\\*PASS\\*\\* \\|/);\nassert.match(roadmap, /Track 04 is next/);\nassert.match(audit, /\\*\\*Status:\\*\\* PASS/);\nassert.match(audit, /Finding 03-A/);\nassert.match(audit, /Finding 03-B/);\n\nconsole.log('Pre-1.0 Audit 03 — Accessibility/Keyboard: PASS');\n`;
+          write('scripts/test-pre1-accessibility-keyboard.mjs', gate);
+
+          // Register the gate for automatic regression-matrix discovery.
+          const packagePath = 'package.json';
+          const pkg = JSON.parse(read(packagePath));
+          pkg.scripts['test:pre1-accessibility-keyboard'] = 'node scripts/test-pre1-accessibility-keyboard.mjs';
+          write(packagePath, JSON.stringify(pkg, null, 2) + '\n');
+
+          // Mark Track 03 complete and move the durable roadmap cursor to Track 04.
+          let roadmap = read('docs/PRE_1_0_AUDIT_ROADMAP.md');
+          roadmap = replaceOnce(roadmap,
+            '| 03 | Accessibility & keyboard interaction | Tabs, menus, comboboxes, dialogs, focus trap/restore, splitter, labels, semantic roles, keyboard-only flows, contrast/high-contrast behavior | Automated semantic contracts plus manual keyboard/high-contrast smoke matrix | TODO |',
+            '| 03 | Accessibility & keyboard interaction | Tabs, menus, comboboxes, dialogs, focus trap/restore, splitter, labels, semantic roles, keyboard-only flows, contrast/high-contrast behavior | Automated semantic contracts plus manual keyboard/high-contrast smoke matrix | **PASS** |',
+            'Track 03 roadmap status');
+          roadmap = replaceOnce(roadmap,
+            'Track 03 is next: **Accessibility & keyboard interaction**, including keyboard-only workbench flows and Windows high-contrast/forced-colors behavior in addition to the existing semantic source contracts.',
+            'Track 03 is completed in `docs/audits/PRE_1_0_03_ACCESSIBILITY_KEYBOARD.md` and is backed by `test:pre1-accessibility-keyboard`. The audit remediated missing Windows forced-colors coverage and separated Workbench rail navigation semantics from true toggle-button semantics.\n\nTrack 04 is next: **Frontend architecture & component boundaries**.',
+            'roadmap current progress');
+          write('docs/PRE_1_0_AUDIT_ROADMAP.md', roadmap);
+
+          // Keep the old window-state regression's deliberate rail hash pin current.
+          const railHash = crypto.createHash('sha256').update(fs.readFileSync('src/components/WorkbenchRail.tsx')).digest('hex');
+          let windowState = read('scripts/test-native-window-persistence-v0.11.11.mjs');
+          windowState = windowState.replace(/assert\.equal\(hashFile\('src\/components\/WorkbenchRail\.tsx'\), '[0-9a-f]{64}'\);/, `assert.equal(hashFile('src/components/WorkbenchRail.tsx'), '${railHash}');`);
+          write('scripts/test-native-window-persistence-v0.11.11.mjs', windowState);
+          NODE
+      - name: Synchronize embedded desktop bundle
+        run: npm run bundle:embedded
+      - name: Verify Track 03 gate
+        run: npm run test:pre1-accessibility-keyboard
+      - name: Verify strict TypeScript
+        run: node node_modules/typescript/bin/tsc -p tsconfig.app.json
+      - name: Verify release contract and embedded parity
+        run: npm run release:check
+      - name: Verify complete regression matrix
+        run: npm run test:rc-regression-matrix
+      - name: Commit Track 03 and remove temporary workflow
+        shell: pwsh
+        run: |
+          Remove-Item '.github/workflows/prepare-pre1-a11y.yml'
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add src/components/WorkbenchRail.tsx src/styles.css tauri-ui/app.js tauri-ui/styles.css scripts/test-pre1-ui-css-layout.mjs scripts/test-pre1-accessibility-keyboard.mjs scripts/test-native-window-persistence-v0.11.11.mjs package.json docs/PRE_1_0_AUDIT_ROADMAP.md docs/audits/PRE_1_0_03_ACCESSIBILITY_KEYBOARD.md .github/workflows/prepare-pre1-a11y.yml
+          git commit -m 'Complete Pre-1.0 accessibility and keyboard audit'
+          git push origin HEAD:audit/pre-1.0-full-review
