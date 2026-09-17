@@ -12,5 +12,6 @@ export * from './authorGrid.js';
 export * from './strategy.js';
 export * from './safety.js';
 export * from './tolerances.js';
+export * from './limits.js';
 export * from './reasons.js';
 export * from './metrics.js';

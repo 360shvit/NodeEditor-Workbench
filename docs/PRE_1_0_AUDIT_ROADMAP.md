@@ -17,7 +17,7 @@
 | # | Track | Scope | Required evidence / exit condition | Status |
 |---|---|---|---|---|
 | 01 | UI, CSS & Workbench layout integrity | Global CSS, source/embedded parity, responsive behavior, DPI/UI Scale, pane container queries, sidebar/split layout, dialogs/overlays, focus visibility, reduced motion | Source audit + regression contract + review of existing layout/UX/accessibility tests; no unresolved clipping, overflow, focus or source/package divergence blocker | **PASS** |
-| 02 | Generator layout engine & geometry correctness | `src/core/layout`, geometry resolver, normalization, author grid, edge corridors, tolerances, golden baselines | Self-contained representative fixtures, deterministic/golden comparison, mutation/edge cases, large graph cases, blocked-reason correctness | TODO |
+| 02 | Generator layout engine & geometry correctness | `src/core/layout`, geometry resolver, normalization, author grid, edge corridors, tolerances, golden baselines | Self-contained representative fixtures, deterministic/golden comparison, mutation/edge cases, large graph cases, blocked-reason correctness | **PASS** |
 | 03 | Accessibility & keyboard interaction | Tabs, menus, comboboxes, dialogs, focus trap/restore, splitter, labels, semantic roles, keyboard-only flows, contrast/high-contrast behavior | Automated semantic contracts plus manual keyboard/high-contrast smoke matrix | TODO |
 | 04 | Frontend architecture & component boundaries | React component ownership, store coupling, render boundaries, command registry, feature/module boundaries, error boundaries | Dependency/coupling review, oversized-module risks, circular/hidden ownership checks, documented decisions | TODO |
 | 05 | Application state, persistence & lifecycle | Zustand state, ProjectSession, recent projects, pane state, close/reopen/reset, stale/corrupt persistence | State ownership map, reset/close matrix, corrupt-state tests, no staged-edit resurrection or cross-project leakage | TODO |
@@ -47,6 +47,8 @@
 
 ## Current progress
 
-Track 01 is completed in `docs/audits/PRE_1_0_01_UI_CSS_LAYOUT.md` and is backed by `test:pre1-ui-css-layout`. The audit found no current 1.0 blocker in the CSS/Workbench layout layer. It does record two follow-ups: computed/visual browser coverage is weaker than source-contract coverage, and the large append-oriented stylesheet should not be structurally refactored without a stronger visual regression harness.
+Track 01 is completed in `docs/audits/PRE_1_0_01_UI_CSS_LAYOUT.md` and is backed by `test:pre1-ui-css-layout`.
 
-Track 02 is next: the **generator layout engine/geometry** audit, including the existing external `v0.7.2` golden baseline and whether it can be made self-contained for normal validation.
+Track 02 is completed in `docs/audits/PRE_1_0_02_LAYOUT_GEOMETRY.md` and is backed by `test:pre1-layout-geometry`. The audit retained the external v0.7.2 Atlantis golden as manual evidence, added self-contained deterministic/safety coverage, and remediated two numeric trust-boundary findings: unbounded engine settings and unsafe editor-coordinate values/output patches.
+
+Track 03 is next: **Accessibility & keyboard interaction**, including keyboard-only workbench flows and Windows high-contrast/forced-colors behavior in addition to the existing semantic source contracts.
