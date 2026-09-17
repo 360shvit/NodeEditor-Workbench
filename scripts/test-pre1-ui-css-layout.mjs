@@ -84,7 +84,7 @@ for (const source of [settings, changes, rename, selection, lifecycle, quickOpen
 // The roadmap and audit result are themselves part of the durable pre-1.0 gate.
 assert.match(roadmap, /\| 01 \| UI, CSS & Workbench layout integrity/);
 assert.match(roadmap, /\*\*PASS\*\*/);
-assert.match(roadmap, /Track 02 is next/);
+assert.match(roadmap, /Track 03 is next/);
 assert.match(audit, /Result:\*\* \*\*PASS/);
 assert.match(audit, /computed\/visual/);
 assert.match(audit, /Generator layout algorithm is intentionally out of this track/);
