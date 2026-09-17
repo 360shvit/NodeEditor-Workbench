@@ -59,7 +59,7 @@ assert.match(quick, /event\.key === 'Enter'/);
 for (const marker of [/role=\"separator\"/, /aria-orientation=\{orientation\}/, /aria-valuemin=\{min\}/, /aria-valuemax=\{max\}/, /aria-valuenow=\{value\}/, /tabIndex=\{0\}/, /ArrowLeft/, /ArrowRight/, /ArrowUp/, /ArrowDown/, /Home/, /End/]) assert.match(splitter, marker);
 
 assert.match(roadmap, /\| 03 \| Accessibility & keyboard interaction[\s\S]*?\| \*\*PASS\*\* \|/);
-assert.match(roadmap, /Track 04 is next/);
+assert.match(roadmap, /Track 03 is completed/);
 assert.match(audit, /\*\*Status:\*\* PASS/);
 assert.match(audit, /Finding 03-A/);
 assert.match(audit, /Finding 03-B/);
