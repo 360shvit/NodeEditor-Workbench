@@ -71,7 +71,7 @@ assert.equal(hashFile('src/components/WorkbenchSidebar.tsx'), '60f03ce06748098e2
 assert.equal(hashFile('src/components/WorkbenchRail.tsx'), 'fea61885921c15509b2dc2ee023a1e6b6476c5863496413c27972b6910c390cb');
 assert.equal(hashFile('src/components/ProjectExplorer.tsx'), '8900fab72a28023c4e3b133b772f7b88fd3f1e32b2f6740ae8fead456c22d7fd');
 assert.equal(hashFile('src/components/ExplorerSelectionDialog.tsx'), 'ebc00dcb3091986d4d66a286ea2673ddc4a66272d77c56ad0a2c5330e0c87366');
-assert.equal(hashFile('src/features/visual/VisualLayoutSidebar.tsx'), 'b0c1e6ea9dbfb8025d8ec82eb27a60b565a83f70de5b56e6f953675185e38705');
+assert.equal(hashFile('src/features/visual/VisualLayoutSidebar.tsx'), 'ae0e96d5ccae7fb44bc279fc105369ee33def01f1b9801c1da26fb2fdb8ce44c');
 assert.match(read('src/features/project-graph/ProjectGraphSidebar.tsx'), /Open as new graph/);
 assert.equal(hashFile('src/projects/projectPersistence.ts'), '497c6791bfc3eadc6b664db607f6664235aecf8b25bf5b4985063c46f1b2ed0b');
 const tauriRuntime = read('tauri-ui/tauri-runtime.js');
