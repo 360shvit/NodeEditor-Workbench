@@ -42,6 +42,10 @@ Remediation separates visual state from accessibility state: actual toggles (sid
 - global focus-visible and reduced-motion coverage;
 - roadmap/audit status for this track.
 
+## CI evidence
+
+The final preparation run `35224012465` passed the Track-03 gate, strict application TypeScript, release-contract/embedded parity, generated Windows runtime notices, and the complete registered regression matrix before committing the audited source/bundle state. A normal PR validation run is still required on the resulting final branch head and is the final exit proof for this track.
+
 ## Remaining manual acceptance
 
 Static/source contracts cannot prove the exact narration produced by Windows Narrator or the final appearance of every WebView control under every user High Contrast palette. Track 18 must therefore include a short installed-build keyboard-only smoke plus Windows Narrator and High Contrast verification. This is manual acceptance evidence, not an unresolved source blocker.
