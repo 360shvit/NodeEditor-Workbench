@@ -59,12 +59,12 @@ const identityProject = buildProject([{
   text: JSON.stringify({
     defOne: { $NodeId: 'Export.A::B', Type: 'Exported', ExportAs: 'C' },
     refOne: { $NodeId: 'Import.A::B', Type: 'Imported', Name: 'C' },
-    defTwo: { $NodeId: 'Export.A', Type: 'Exported', ExportAs: 'B::C' },
-    refTwo: { $NodeId: 'Import.A', Type: 'Imported', Name: 'B::C' },
+    defTwo: { $NodeId: 'Export.A-00000000-0000-0000-0000-000000000001', Type: 'Exported', ExportAs: 'B::C' },
+    refTwo: { $NodeId: 'Import.A-00000000-0000-0000-0000-000000000002', Type: 'Imported', Name: 'B::C' },
     ruleDefOne: { $NodeId: 'Export.A:B', Type: 'Exported', ExportAs: 'C' },
     ruleRefOne: { $NodeId: 'Import.A:B', Type: 'Imported', Name: 'C' },
-    ruleDefTwo: { $NodeId: 'Export.A', Type: 'Exported', ExportAs: 'B:C' },
-    ruleRefTwo: { $NodeId: 'Import.A', Type: 'Imported', Name: 'B:C' },
+    ruleDefTwo: { $NodeId: 'Export.A-00000000-0000-0000-0000-000000000003', Type: 'Exported', ExportAs: 'B:C' },
+    ruleRefTwo: { $NodeId: 'Import.A-00000000-0000-0000-0000-000000000004', Type: 'Imported', Name: 'B:C' },
   }),
 }]);
 assert.notEqual(symbolKey('A::B', 'C'), symbolKey('A', 'B::C'));
