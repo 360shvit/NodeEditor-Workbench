@@ -19,12 +19,16 @@ jobs:
         with:
           node-version-file: .nvmrc
           cache: npm
+      - uses: dtolnay/rust-toolchain@d1031067263f94b142dd6c0ce24c5eb9d02d52a0
+        with:
+          toolchain: 1.98.1
       - run: npm ci --ignore-scripts
       - name: Align intentional persistence hardening guards
         shell: pwsh
         run: |
           $oldHash = '497c6791bfc3eadc6b664db607f6664235aecf8b25bf5b4985063c46f1b2ed0b'
-          $newHash = '7e6df5193d25c0e955ef56c30aef2a301592706a54c6b66094ab2f1d310734ba'
+          # Historical snapshot checks execute on the Windows validation runner, whose checkout uses CRLF.
+          $newHash = '7e6df70a194355682a7eab6bea8c1a9f05a38d3c2119bf6fc32fe17476ecb31f'
           $hashFiles = @(
             'scripts/test-unified-filter-all-v0.11.13.mjs',
             'scripts/test-native-window-persistence-v0.11.11.mjs',
@@ -53,6 +57,11 @@ jobs:
           $newRoadmap = 'assert.match(roadmap, /\| 05 \| Application state, persistence & lifecycle[\s\S]*?\| \*\*PASS\*\* \|/);'
           if (-not $architecture.Contains($oldRoadmap)) { throw 'Expected Track 04 roadmap-next assertion not found' }
           [IO.File]::WriteAllText($architectureFile, $architecture.Replace($oldRoadmap, $newRoadmap), [Text.UTF8Encoding]::new($false))
+      - name: Generate release-surface notice prerequisite
+        run: |
+          npm run audit:third-party
+          node scripts/audit-third-party-distribution.mjs --target x86_64-pc-windows-msvc
+          node scripts/generate-third-party-notices.mjs --target x86_64-pc-windows-msvc --output THIRD_PARTY_NOTICES.txt
       - name: Run complete registered regression matrix
         run: npm run test:rc-regression-matrix
       - name: Commit aligned guards and remove temporary workflow
