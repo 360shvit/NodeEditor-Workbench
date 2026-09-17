@@ -93,7 +93,8 @@
     "test:public-repo-clean": "node scripts/test-public-source-tree.mjs",
     "audit:third-party": "node scripts/audit-third-party-inventory.mjs",
     "test:pre1-accessibility-keyboard": "node scripts/test-pre1-accessibility-keyboard.mjs",
-    "test:pre1-frontend-architecture": "node scripts/test-pre1-frontend-architecture.mjs"
+    "test:pre1-frontend-architecture": "node scripts/test-pre1-frontend-architecture.mjs",
+    "test:pre1-state-persistence-lifecycle": "node scripts/test-pre1-state-persistence-lifecycle.mjs"
   },
   "dependencies": {
     "react": "18.3.1",
