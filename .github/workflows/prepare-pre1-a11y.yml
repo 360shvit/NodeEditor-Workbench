@@ -21,6 +21,9 @@ jobs:
         with:
           node-version-file: .nvmrc
           cache: npm
+      - uses: dtolnay/rust-toolchain@d1031067263f94b142dd6c0ce24c5eb9d02d52a0
+        with:
+          toolchain: 1.98.1
       - name: Install locked Node dependencies
         run: npm ci --ignore-scripts
       - name: Apply Track 03 audit remediation and evidence
@@ -102,11 +105,18 @@ jobs:
             'roadmap current progress');
           write('docs/PRE_1_0_AUDIT_ROADMAP.md', roadmap);
 
-          // Keep the old window-state regression's deliberate rail hash pin current.
+          // Keep historical deliberate rail hash pins current after the reviewed semantic change.
           const railHash = crypto.createHash('sha256').update(fs.readFileSync('src/components/WorkbenchRail.tsx')).digest('hex');
-          let windowState = read('scripts/test-native-window-persistence-v0.11.11.mjs');
-          windowState = windowState.replace(/assert\.equal\(hashFile\('src\/components\/WorkbenchRail\.tsx'\), '[0-9a-f]{64}'\);/, `assert.equal(hashFile('src/components/WorkbenchRail.tsx'), '${railHash}');`);
-          write('scripts/test-native-window-persistence-v0.11.11.mjs', windowState);
+          for (const testPath of [
+            'scripts/test-native-window-persistence-v0.11.11.mjs',
+            'scripts/test-workbench-layout-foundation-v0.11.14.mjs',
+          ]) {
+            let source = read(testPath);
+            const before = source;
+            source = source.replace(/assert\.equal\(hashFile\('src\/components\/WorkbenchRail\.tsx'\), '[0-9a-f]{64}'\);/, `assert.equal(hashFile('src/components/WorkbenchRail.tsx'), '${railHash}');`);
+            if (source === before) throw new Error(`missing expected WorkbenchRail hash pin in ${testPath}`);
+            write(testPath, source);
+          }
           NODE
       - name: Synchronize embedded desktop bundle
         run: npm run bundle:embedded
@@ -116,6 +126,8 @@ jobs:
         run: node node_modules/typescript/bin/tsc -p tsconfig.app.json
       - name: Verify release contract and embedded parity
         run: npm run release:check
+      - name: Generate Windows runtime third-party notices
+        run: node scripts/generate-third-party-notices.mjs --target x86_64-pc-windows-msvc --output THIRD_PARTY_NOTICES.txt
       - name: Verify complete regression matrix
         run: npm run test:rc-regression-matrix
       - name: Commit Track 03 and remove temporary workflow
@@ -124,6 +136,6 @@ jobs:
           Remove-Item '.github/workflows/prepare-pre1-a11y.yml'
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add src/components/WorkbenchRail.tsx src/styles.css tauri-ui/app.js tauri-ui/styles.css scripts/test-pre1-ui-css-layout.mjs scripts/test-pre1-accessibility-keyboard.mjs scripts/test-native-window-persistence-v0.11.11.mjs package.json docs/PRE_1_0_AUDIT_ROADMAP.md docs/audits/PRE_1_0_03_ACCESSIBILITY_KEYBOARD.md .github/workflows/prepare-pre1-a11y.yml
+          git add src/components/WorkbenchRail.tsx src/styles.css tauri-ui/app.js tauri-ui/styles.css scripts/test-pre1-ui-css-layout.mjs scripts/test-pre1-accessibility-keyboard.mjs scripts/test-native-window-persistence-v0.11.11.mjs scripts/test-workbench-layout-foundation-v0.11.14.mjs package.json docs/PRE_1_0_AUDIT_ROADMAP.md docs/audits/PRE_1_0_03_ACCESSIBILITY_KEYBOARD.md .github/workflows/prepare-pre1-a11y.yml
           git commit -m 'Complete Pre-1.0 accessibility and keyboard audit'
           git push origin HEAD:audit/pre-1.0-full-review
