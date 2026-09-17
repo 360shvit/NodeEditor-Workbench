@@ -45,6 +45,7 @@ export function renameSymbol(
   newName: string,
   options: RenameSymbolOptions = {},
 ): ChangeSet {
+  if (!newName.trim()) throw new Error('Symbol rename target must be non-empty.');
   const record = project.symbolIndex.get(symbolKey(symbolType, oldName));
   if (!record) return changeSet;
 
@@ -67,7 +68,7 @@ export function renameSymbol(
   }
 
   next = addRule(next, {
-    id: `symbol:${symbolType}:${oldName}`,
+    id: JSON.stringify(['symbol', symbolType, oldName]),
     kind: 'symbolRename',
     symbolType,
     oldValue: oldName,

@@ -1,7 +1,7 @@
 import type { ProjectFile, SymbolOccurrence, SymbolRecord } from './types.js';
 
 export function symbolKey(symbolType: string, name: string): string {
-  return `${symbolType}::${name}`;
+  return JSON.stringify([symbolType, name]);
 }
 
 export function buildSymbolIndex(files: ProjectFile[]): Map<string, SymbolRecord> {

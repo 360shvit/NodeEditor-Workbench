@@ -389,7 +389,7 @@ define("core/symbolIndex", ["require", "exports"], function (require, exports) {
     exports.buildSymbolIndex = buildSymbolIndex;
     exports.findNameCollisions = findNameCollisions;
     function symbolKey(symbolType, name) {
-        return `${symbolType}::${name}`;
+        return JSON.stringify([symbolType, name]);
     }
     function buildSymbolIndex(files) {
         const index = new Map();
@@ -787,9 +787,9 @@ define("core/matches", ["require", "exports", "core/jsonPath"], function (requir
     }
     function fieldMatchKey(nodeKind, field) {
         if (field.refactorBehavior === 'literal')
-            return `literal|${field.key}|${valueKey(field.value)}`;
+            return JSON.stringify(['literal', field.key, valueKey(field.value)]);
         if (field.refactorBehavior === 'field')
-            return `field|${nodeKind}|${field.key}|${valueKey(field.value)}`;
+            return JSON.stringify(['field', nodeKind, field.key, valueKey(field.value)]);
         return undefined;
     }
     function buildFieldMatchIndex(files) {
@@ -1950,6 +1950,8 @@ define("core/refactor", ["require", "exports", "core/changeSet", "core/project",
         };
     }
     function renameSymbol(project, changeSet, symbolType, oldName, newName, options = {}) {
+        if (!newName.trim())
+            throw new Error('Symbol rename target must be non-empty.');
         const record = project.symbolIndex.get((0, symbolIndex_js_3.symbolKey)(symbolType, oldName));
         if (!record)
             return changeSet;
@@ -1970,7 +1972,7 @@ define("core/refactor", ["require", "exports", "core/changeSet", "core/project",
             }
         }
         next = (0, changeSet_js_1.addRule)(next, {
-            id: `symbol:${symbolType}:${oldName}`,
+            id: JSON.stringify(['symbol', symbolType, oldName]),
             kind: 'symbolRename',
             symbolType,
             oldValue: oldName,
@@ -2380,8 +2382,14 @@ define("core/validation", ["require", "exports"], function (require, exports) {
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.compareDiagnostics = compareDiagnostics;
     function diagnosticKey(item) {
-        const symbol = item.symbol ? `${item.symbol.symbolType}:${item.symbol.name}` : '';
-        return `${item.code}|${item.fileId ?? ''}|${item.nodeId ?? ''}|${symbol}|${item.message}`;
+        return JSON.stringify([
+            item.code,
+            item.severity,
+            item.fileId ?? null,
+            item.nodeId ?? null,
+            item.symbol ? [item.symbol.symbolType, item.symbol.name] : null,
+            item.message,
+        ]);
     }
     function compareDiagnostics(before, after) {
         const beforeMap = new Map(before.diagnostics.map((item) => [diagnosticKey(item), item]));
