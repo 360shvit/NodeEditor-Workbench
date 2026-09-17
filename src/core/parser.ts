@@ -48,6 +48,8 @@ function collectNodes(
         jsonPath: path,
         fields,
       });
+    } else {
+      throw new Error(`Duplicate node identity "${rawId}" in ${location} nodes.`);
     }
   }
 
