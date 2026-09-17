@@ -44,7 +44,7 @@ Remediation separates visual state from accessibility state: actual toggles (sid
 
 ## CI evidence
 
-The final preparation run `35224012465` passed the Track-03 gate, strict application TypeScript, release-contract/embedded parity, generated Windows runtime notices, and the complete registered regression matrix before committing the audited source/bundle state. A normal PR validation run is still required on the resulting final branch head and is the final exit proof for this track.
+The final preparation run `35224012465` passed the Track-03 gate, strict application TypeScript, release-contract/embedded parity, generated Windows runtime notices, and the complete registered regression matrix before committing the audited source/bundle state. The follow-up normal PR validation run `35224402028` (Validate Tauri Windows #117) then passed on commit `5b6e7225c16795d2de2a077666d1d65d6f03e6a2`, including the complete regression matrix, zero-unused-source gate, and locked native tests.
 
 ## Remaining manual acceptance
 
