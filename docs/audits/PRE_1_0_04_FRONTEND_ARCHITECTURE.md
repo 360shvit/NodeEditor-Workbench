@@ -16,7 +16,9 @@ The command registry remains metadata/shortcut focused and does not own Zustand 
 
 ## Dependency/cycle review
 
-The Track-04 gate walks all committed TypeScript/TSX sources under `src`, resolves relative imports, builds an import graph, and fails on cycles. It also enforces the following directionality invariants:
+The Track-04 gate walks all committed TypeScript/TSX sources under `src`, resolves relative imports, and builds both an executable/runtime import graph and a full graph that also includes type-only imports. Runtime cycles fail unconditionally. The one existing type-only ownership cycle is separately explicit and allowlisted so additional type cycles cannot silently accumulate.
+
+The gate also enforces the following directionality invariants:
 
 - `src/core/**` may not depend on application/UI source outside `src/core`;
 - `src/commands/**` may not acquire store or UI ownership;
@@ -24,7 +26,7 @@ The Track-04 gate walks all committed TypeScript/TSX sources under `src`, resolv
 - `src/App.tsx` remains a composition root and may only be imported by `src/main.tsx`;
 - the root bootstrap must retain the global `AppErrorBoundary` around the project lifecycle provider and app.
 
-No unresolved cycle or layer-direction blocker was found on the audited source line.
+No unresolved runtime cycle or layer-direction blocker was found on the audited source line.
 
 ## Finding 04-A — Store is an oversized shared coordination module
 
@@ -42,6 +44,14 @@ A forced store split during a release-readiness audit would create a large behav
 
 Track 04 keeps `App` as the explicit composition root instead of extracting behavior purely to satisfy a size metric. The gate prevents other modules from importing `App` and applies a temporary 32 KB anti-growth ceiling. Future growth should move desktop watcher coordination or shell-preference controllers into dedicated hooks/services while keeping dependency injection at the root.
 
+## Finding 04-C — Persistence types are owned by the root store
+
+**Classification:** hardening / type-ownership debt — accepted for the 1.0 line with an explicit cycle allowlist.
+
+`src/store.ts` imports the persistence service at runtime, while `src/projects/projectPersistence.ts` imports `InspectorFilters`, `ProjectGraphViewSettings`, `SidebarView`, and `VisualLayoutSettings` back from the store using `import type`. Because TypeScript erases those imports, this is not an executable module cycle and cannot cause runtime partial-initialization behavior. It does, however, reveal that persistence-facing data contracts currently live in the root store rather than in a neutral shared contract module.
+
+The gate now distinguishes runtime edges from type-only edges: runtime cycles remain forbidden, the existing store/persistence type-only cycle is explicitly recognized, and any additional full-graph cycle fails. A future maintainability refactor should move these shared persisted-state contracts into a neutral workbench/state-types module and remove the allowlist. Doing that now would touch a broad public type surface without fixing a runtime defect, so it is not required for 1.0.
+
 ## Error-boundary ownership
 
 `src/main.tsx` wraps the lifecycle provider and `App` in `AppErrorBoundary`. The boundary records the React component stack into runtime diagnostics and offers reload plus a diagnostic-report action. That process-level placement is appropriate for the fatal boundary; feature-specific recoverable error UX is reviewed separately under Track 13.
@@ -54,7 +64,8 @@ Track 04 keeps `App` as the explicit composition root instead of extracting beha
 
 `test:pre1-frontend-architecture` protects:
 
-- the relative TypeScript/TSX import graph against cycles;
+- the executable relative TypeScript/TSX import graph against cycles;
+- the known store/persistence type-only cycle against silent expansion and rejects any additional full-graph cycle;
 - core isolation from application/UI layers;
 - command-registry independence from store/components/features;
 - presentation independence of the root Zustand store;
@@ -65,4 +76,4 @@ Track 04 keeps `App` as the explicit composition root instead of extracting beha
 
 ## Conclusion
 
-No unresolved Track-04 frontend-architecture blocker remains. The two largest coupling hotspots are explicitly documented as hardening debt and now have durable anti-regression boundaries, without introducing a risky behavior-preserving refactor solely for pre-1.0 cosmetics.
+No unresolved Track-04 frontend-architecture blocker remains. The major coupling hotspots and the one type-only ownership cycle are explicitly documented as hardening debt and now have durable anti-regression boundaries, without introducing a risky behavior-preserving refactor solely for pre-1.0 cosmetics.
