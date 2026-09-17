@@ -23,59 +23,6 @@ jobs:
         with:
           toolchain: 1.98.1
       - run: npm ci --ignore-scripts
-      - name: Apply duplicate-node fail-closed hardening and regression
-        shell: pwsh
-        run: |
-          @'
-          import fs from 'node:fs';
-          const read = (file) => fs.readFileSync(file, 'utf8');
-          const write = (file, text) => fs.writeFileSync(file, text, 'utf8');
-          function replaceExact(file, before, after) {
-            const source = read(file);
-            const count = source.split(before).length - 1;
-            if (count !== 1) throw new Error(file + ': expected one replacement target, found ' + count);
-            write(file, source.replace(before, after));
-          }
-
-          replaceExact(
-            'src/core/parser.ts',
-            "      });\n    }\n  }\n\n  for (const [key, child] of Object.entries(value)) {",
-            "      });\n    } else {\n      throw new Error(`Duplicate node identity \\\"${rawId}\\\" in ${location} nodes.`);\n    }\n  }\n\n  for (const [key, child] of Object.entries(value)) {",
-          );
-
-          const insertion = String.raw`
-// Duplicate node identity within one location is ambiguous for indexes/refactors and must fail closed.
-const duplicateNodeProject = buildProject([{
-  path: 'Server/HytaleGenerator/Density/DuplicateNode.json',
-  text: JSON.stringify({
-    first: { $NodeId: 'Repeated.Density', Type: 'Exported', ExportAs: 'One' },
-    second: { $NodeId: 'Repeated.Density', Type: 'Exported', ExportAs: 'Two' },
-  }),
-}]);
-const duplicateNodeFile = duplicateNodeProject.files[0];
-assert.equal(duplicateNodeFile.nodes.length, 0);
-assert.match(duplicateNodeFile.parseError ?? '', /Duplicate node identity/);
-assert.ok(duplicateNodeProject.diagnostics.some((item) => item.code === 'parse-error' && item.severity === 'error'));
-assert.equal(duplicateNodeProject.symbolIndex.size, 0, 'ambiguous duplicate-node files must not contribute refactor symbols');
-
-// The same raw id in separate live/floating locations remains a valid distinct identity.
-const crossLocationProject = buildProject([{
-  path: 'Server/HytaleGenerator/Density/CrossLocation.json',
-  text: JSON.stringify({
-    $NodeId: 'Shared.Density', Type: 'Exported', ExportAs: 'Live',
-    $NodeEditorMetadata: { $FloatingNodes: [{ $NodeId: 'Shared.Density', Type: 'Exported', ExportAs: 'Floating' }] },
-  }),
-}]);
-assert.equal(crossLocationProject.files[0].parseError, undefined);
-assert.equal(crossLocationProject.files[0].nodes.length, 2);
-assert.deepEqual(new Set(crossLocationProject.files[0].nodes.map((node) => node.location)), new Set(['live', 'floating']));
-
-`;
-          replaceExact('scripts/test-pre1-core-model-refactor.mjs', 'console.log(JSON.stringify({', insertion + 'console.log(JSON.stringify({');
-          replaceExact('scripts/test-pre1-core-model-refactor.mjs', '  malformedFileIsolation: true,', '  malformedFileIsolation: true,\n  duplicateNodeIdentityFailsClosed: true,\n  liveFloatingIdentityRemainsDistinct: true,');
-          '@ | Set-Content -Path .track06-duplicate-rewrite.mjs -Encoding utf8
-          node .track06-duplicate-rewrite.mjs
-          Remove-Item .track06-duplicate-rewrite.mjs -Force
       - name: Run Track 06 core gate
         run: npm run test:pre1-core-model-refactor
       - name: Synchronize committed embedded frontend
@@ -86,14 +33,14 @@ assert.deepEqual(new Set(crossLocationProject.files[0].nodes.map((node) => node.
         run: node scripts/generate-third-party-notices.mjs --target x86_64-pc-windows-msvc --output THIRD_PARTY_NOTICES.txt
       - name: Run complete registered regression matrix
         run: npm run test:rc-regression-matrix
-      - name: Commit validated duplicate-node hardening and remove temporary workflow
+      - name: Commit embedded sync and remove temporary workflow
         shell: pwsh
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git rm .github/workflows/audit-track06-duplicate-node.yml
-          git add src/core/parser.ts scripts/test-pre1-core-model-refactor.mjs tauri-ui/app.js
+          git add tauri-ui/app.js
           git diff --cached --quiet
-          if ($LASTEXITCODE -eq 0) { throw 'Expected Track 06 duplicate-node changes were not staged.' }
-          git commit -m "Fail closed on duplicate core node identities"
+          if ($LASTEXITCODE -eq 0) { throw 'Expected workflow removal or embedded synchronization was not staged.' }
+          git commit -m "Finalize duplicate core node identity hardening"
           git push origin HEAD:audit/pre-1.0-full-review
