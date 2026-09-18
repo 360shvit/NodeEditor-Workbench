@@ -45,7 +45,8 @@ assert.doesNotMatch(rust, /StateFlags::DECORATIONS/);
 assert.match(rust, /WindowEvent::CloseRequested/);
 assert.match(rust, /api\.prevent_close\(\)/);
 assert.match(rust, /app-close-requested/);
-assert.match(rust, /fn exit_application\(app: AppHandle\)/);
+assert.match(rust, /fn exit_application\(app: AppHandle, state: State<'_, DesktopState>\)/);
+assert.match(rust, /state\.apply_transaction_lock\.lock\(\)/);
 assert.match(rust, /app\.exit\(0\)/);
 
 // Existing defaults remain the cold-start/fallback geometry.
