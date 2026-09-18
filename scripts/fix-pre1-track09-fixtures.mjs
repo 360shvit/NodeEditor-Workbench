@@ -27,9 +27,21 @@ source = source
   .split('br#r#"{"value":3}"##').join('br#"{"value":3}"#')
   .split('br#r#"{"value":4}"##').join('br#"{"value":4}"#');
 
+// Track 09 hardens rollback so an unsafe/non-file target is rejected during
+// preflight instead of first failing when remove_file is attempted. Keep the old
+// regression fixture, but assert the stronger fail-closed diagnostic.
+const oldRollbackAssertion = 'assert!(error.contains("Cannot remove partially committed Apply target"));';
+const hardenedRollbackAssertion = 'assert!(error.contains("Refusing to overwrite unsafe or newer Apply target"));';
+if (source.includes(oldRollbackAssertion)) {
+  source = source.replace(oldRollbackAssertion, hardenedRollbackAssertion);
+}
+if (!source.includes(hardenedRollbackAssertion)) {
+  throw new Error('Track 09 rollback fixture does not assert the hardened fail-closed diagnostic.');
+}
+
 for (const invalid of ['br#r#"', 'b"{"value":', '"{"value":1}".to_string()', '"{"value":3}".to_string()']) {
   if (source.includes(invalid)) throw new Error(`Track 09 fixture normalization left invalid literal: ${invalid}`);
 }
 
 fs.writeFileSync(path, source);
-console.log('Normalized Track 09 Rust JSON fixture literals.');
+console.log('Normalized Track 09 Rust fixtures and rollback expectation.');
