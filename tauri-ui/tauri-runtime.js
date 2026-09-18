@@ -150,7 +150,9 @@
     void (async () => {
       try {
         const isDiagnosticReport = suggestedName.toLowerCase().endsWith('.json');
-        const target = await invoke(isDiagnosticReport ? 'select_support_report_target' : 'select_save_target', { payload: { suggestedName } });
+        const target = isDiagnosticReport
+          ? await invoke('select_support_report_target', { payload: { suggestedName } })
+          : await invoke('select_save_target', { payload: { suggestedName } });
         if (!target?.token) return;
         const bytes = new Uint8Array(await blob.arrayBuffer());
         await invoke('write_registered_binary', bytes, {

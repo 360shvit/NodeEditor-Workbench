@@ -62,13 +62,13 @@ assert.doesNotMatch(filterBar, /second filter|queryFilters|searchFilters/i);
 assert.match(store, /restoredFilters = session\?\.filters[\s\S]*?\{ \.\.\.defaultFilters, \.\.\.session\.filters/);
 assert.match(persistence, /version: 1/);
 assert.match(persistence, /filters: InspectorFilters/);
-assert.match(persistence, /filters: session\.filters/);
+assert.match(persistence, /filters: cleanInspectorFilters\(session\.filters\)/);
 
 // v0.11.14 must not disturb graph/native/security/write authority while changing filters.
 assert.match(read('src/features/project-graph/ProjectGraphView.tsx'), /project-graph-camera/);
 assert.match(read('src/features/project-graph/ProjectGraphSidebar.tsx'), /Open as new graph/);
 assert.equal(hashFile('src/core/projectGraph.ts'), '002bf3e91f9b1ada8db13ee9a8ec84152bcde42c0f9a59e6b6506a245eed1997');
-assert.equal(hashFile('src/projects/projectPersistence.ts'), '497c6791bfc3eadc6b664db607f6664235aecf8b25bf5b4985063c46f1b2ed0b');
+assert.equal(hashFile('src/projects/projectPersistence.ts'), '7e6df70a194355682a7eab6bea8c1a9f05a38d3c2119bf6fc32fe17476ecb31f');
 const nativeMain = read('src-tauri/src/main.rs');
 assert.match(nativeMain, /metadata_is_reparse_point/);
 assert.match(nativeMain, /pending_change_count/);

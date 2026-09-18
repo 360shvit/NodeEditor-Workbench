@@ -72,6 +72,7 @@ export default function App() {
   const [uiScale, setUiScale] = useState<WorkbenchUiScale>(() => readWorkbenchAppearancePreferences().uiScale);
   const worldgenToken = useWorkbenchStore((state) => state.tabs.find((tab) => tab.kind === 'worldgen-performance')?.selection?.token);
   const desktop = hasDesktopBridge();
+  const projectRoot = workspace?.projectRoot;
 
   const publishWorkbenchLayoutSupport = useCallback((persisted: boolean, nextSidebarWidth = sidebarWidth, nextSplitRatio = splitRatio, splitEnabled = splitViewEnabled) => {
     setWorkbenchLayoutSupportSnapshot({
@@ -238,6 +239,17 @@ export default function App() {
       recordRuntimeError('worldgen.log.revoke-failed', error);
     });
   }, [desktop, worldgenToken]);
+
+  useEffect(() => {
+    if (watcherTimer.current) {
+      window.clearTimeout(watcherTimer.current);
+      watcherTimer.current = undefined;
+    }
+    watcherPaths.current.clear();
+    watcherReloadGeneration.current += 1;
+    clearExternalChangeNotice();
+    setWatcherError(undefined);
+  }, [clearExternalChangeNotice, projectRoot]);
 
   useEffect(() => {
     if (!desktop) return;

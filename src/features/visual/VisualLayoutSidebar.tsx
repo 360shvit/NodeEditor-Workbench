@@ -1,4 +1,5 @@
 import { useMemo } from 'react';
+import { MAX_LAYOUT_SETTING } from '../../core';
 import { ToolSidebar } from '../../components/ToolSidebar';
 import { useWorkbenchStore, type VisualLayoutSettings } from '../../store';
 import { graphFileInfo, presetLabel, spacingDefaults, strategyDescription } from './visualLayoutUi';
@@ -30,7 +31,7 @@ export function VisualLayoutSidebar() {
 
   const setSpacingPreset = (preset: 'compact' | 'normal' | 'spacious') => setSettings({ spacingPreset: preset, ...spacingDefaults[preset] });
   const setGap = (key: 'horizontalGap' | 'verticalGap' | 'alignmentTolerance', value: number) => {
-    const next = Math.max(0, Math.round(Number.isFinite(value) ? value : 0));
+    const next = Math.min(MAX_LAYOUT_SETTING, Math.max(0, Math.round(Number.isFinite(value) ? value : 0)));
     setSettings({ [key]: next, spacingPreset: 'custom' } as Partial<VisualLayoutSettings>);
   };
 
@@ -74,11 +75,11 @@ export function VisualLayoutSidebar() {
               {(['compact', 'normal', 'spacious'] as const).map((preset) => <button key={preset} className={settings.spacingPreset === preset ? 'active' : ''} onClick={() => setSpacingPreset(preset)}>{presetLabel(preset)}</button>)}
             </div>
             <div className="visual-layout-sidebar-number-grid">
-              <label><span>Horizontal</span><input type="number" min="0" value={settings.horizontalGap} onChange={(event) => setGap('horizontalGap', Number(event.target.value))} /></label>
-              <label><span>Vertical</span><input type="number" min="0" value={settings.verticalGap} onChange={(event) => setGap('verticalGap', Number(event.target.value))} /></label>
+              <label><span>Horizontal</span><input type="number" min="0" max={MAX_LAYOUT_SETTING} value={settings.horizontalGap} onChange={(event) => setGap('horizontalGap', Number(event.target.value))} /></label>
+              <label><span>Vertical</span><input type="number" min="0" max={MAX_LAYOUT_SETTING} value={settings.verticalGap} onChange={(event) => setGap('verticalGap', Number(event.target.value))} /></label>
             </div>
             {settings.strategy === 'author-normalize' && (
-              <label className="visual-layout-sidebar-field"><span>Connection plane tolerance</span><input type="number" min="0" value={settings.alignmentTolerance} onChange={(event) => setGap('alignmentTolerance', Number(event.target.value))} /></label>
+              <label className="visual-layout-sidebar-field"><span>Connection plane tolerance</span><input type="number" min="0" max={MAX_LAYOUT_SETTING} value={settings.alignmentTolerance} onChange={(event) => setGap('alignmentTolerance', Number(event.target.value))} /></label>
             )}
             {settings.strategy === 'dag-rebuild' && (
               <>

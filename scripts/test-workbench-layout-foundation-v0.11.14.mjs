@@ -39,7 +39,7 @@ assert.match(prefs, /clampWorkbenchSidebarWidth/);
 assert.match(prefs, /localStorage\.setItem/);
 assert.match(prefs, /localStorage\.removeItem/);
 assert.doesNotMatch(persistence, /sidebarWidth|workbench\.layout/);
-assert.equal(hashFile('src/projects/projectPersistence.ts'), '497c6791bfc3eadc6b664db607f6664235aecf8b25bf5b4985063c46f1b2ed0b');
+assert.equal(hashFile('src/projects/projectPersistence.ts'), '7e6df70a194355682a7eab6bea8c1a9f05a38d3c2119bf6fc32fe17476ecb31f');
 
 // Reusable accessible splitter with pointer capture and keyboard support.
 assert.match(splitter, /role="separator"/);
@@ -87,7 +87,7 @@ assert.doesNotMatch(runtime, /projectContentsIncluded: true/);
 
 // Preserve previously frozen feature/security boundaries.
 assert.equal(hashFile('src/components/WorkbenchSidebar.tsx'), '60f03ce06748098e26dd1b8d7613c74221b0a9cb66200fdf31479285d1158a4b');
-assert.equal(hashFile('src/components/WorkbenchRail.tsx'), 'fea61885921c15509b2dc2ee023a1e6b6476c5863496413c27972b6910c390cb');
+assert.equal(hashFile('src/components/WorkbenchRail.tsx'), 'fae19cf5925657639ba85a53fbcc50f5a2590a9a8480b81834e65355be0146db');
 assert.match(read('src/features/project-graph/ProjectGraphView.tsx'), /project-graph-camera/);
 const nativeMain = read('src-tauri/src/main.rs');
 assert.match(nativeMain, /metadata_is_reparse_point/);

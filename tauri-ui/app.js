@@ -389,7 +389,7 @@ define("core/symbolIndex", ["require", "exports"], function (require, exports) {
     exports.buildSymbolIndex = buildSymbolIndex;
     exports.findNameCollisions = findNameCollisions;
     function symbolKey(symbolType, name) {
-        return `${symbolType}::${name}`;
+        return JSON.stringify([symbolType, name]);
     }
     function buildSymbolIndex(files) {
         const index = new Map();
@@ -787,9 +787,9 @@ define("core/matches", ["require", "exports", "core/jsonPath"], function (requir
     }
     function fieldMatchKey(nodeKind, field) {
         if (field.refactorBehavior === 'literal')
-            return `literal|${field.key}|${valueKey(field.value)}`;
+            return JSON.stringify(['literal', field.key, valueKey(field.value)]);
         if (field.refactorBehavior === 'field')
-            return `field|${nodeKind}|${field.key}|${valueKey(field.value)}`;
+            return JSON.stringify(['field', nodeKind, field.key, valueKey(field.value)]);
         return undefined;
     }
     function buildFieldMatchIndex(files) {
@@ -1070,6 +1070,9 @@ define("core/parser", ["require", "exports", "core/schemaRegistry", "core/textPa
                     jsonPath: path,
                     fields,
                 });
+            }
+            else {
+                throw new Error(`Duplicate node identity "${rawId}" in ${location} nodes.`);
             }
         }
         for (const [key, child] of Object.entries(value)) {
@@ -1950,6 +1953,8 @@ define("core/refactor", ["require", "exports", "core/changeSet", "core/project",
         };
     }
     function renameSymbol(project, changeSet, symbolType, oldName, newName, options = {}) {
+        if (!newName.trim())
+            throw new Error('Symbol rename target must be non-empty.');
         const record = project.symbolIndex.get((0, symbolIndex_js_3.symbolKey)(symbolType, oldName));
         if (!record)
             return changeSet;
@@ -1970,7 +1975,7 @@ define("core/refactor", ["require", "exports", "core/changeSet", "core/project",
             }
         }
         next = (0, changeSet_js_1.addRule)(next, {
-            id: `symbol:${symbolType}:${oldName}`,
+            id: JSON.stringify(['symbol', symbolType, oldName]),
             kind: 'symbolRename',
             symbolType,
             oldValue: oldName,
@@ -2380,8 +2385,14 @@ define("core/validation", ["require", "exports"], function (require, exports) {
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.compareDiagnostics = compareDiagnostics;
     function diagnosticKey(item) {
-        const symbol = item.symbol ? `${item.symbol.symbolType}:${item.symbol.name}` : '';
-        return `${item.code}|${item.fileId ?? ''}|${item.nodeId ?? ''}|${symbol}|${item.message}`;
+        return JSON.stringify([
+            item.code,
+            item.severity,
+            item.fileId ?? null,
+            item.nodeId ?? null,
+            item.symbol ? [item.symbol.symbolType, item.symbol.name] : null,
+            item.message,
+        ]);
     }
     function compareDiagnostics(before, after) {
         const beforeMap = new Map(before.diagnostics.map((item) => [diagnosticKey(item), item]));
@@ -2391,6 +2402,28 @@ define("core/validation", ["require", "exports"], function (require, exports) {
         const addedErrors = added.filter((item) => item.severity === 'error');
         const addedWarnings = added.filter((item) => item.severity === 'warning');
         return { added, removed, addedErrors, addedWarnings, safe: addedErrors.length === 0 };
+    }
+});
+define("core/numericLimits", ["require", "exports"], function (require, exports) {
+    "use strict";
+    Object.defineProperty(exports, "__esModule", { value: true });
+    exports.MAX_EDITOR_LAYOUT_SCALAR = void 0;
+    exports.editorLayoutNumber = editorLayoutNumber;
+    exports.isSafeEditorLayoutNumber = isSafeEditorLayoutNumber;
+    exports.MAX_EDITOR_LAYOUT_SCALAR = 1_000_000_000;
+    /**
+     * Editor/layout metadata is pixel-space data. Keep it finite and far below
+     * JavaScript's arithmetic overflow range before geometry code can consume it.
+     */
+    function editorLayoutNumber(value) {
+        return typeof value === 'number'
+            && Number.isFinite(value)
+            && Math.abs(value) <= exports.MAX_EDITOR_LAYOUT_SCALAR
+            ? value
+            : undefined;
+    }
+    function isSafeEditorLayoutNumber(value) {
+        return editorLayoutNumber(value) !== undefined;
     }
 });
 define("core/output", ["require", "exports"], function (require, exports) {
@@ -2423,7 +2456,7 @@ define("core/output", ["require", "exports"], function (require, exports) {
         return target !== 'original';
     }
 });
-define("core/graph/editorMetadata", ["require", "exports"], function (require, exports) {
+define("core/graph/editorMetadata", ["require", "exports", "core/numericLimits"], function (require, exports, numericLimits_js_1) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.buildEditorMetadataForFile = buildEditorMetadataForFile;
@@ -2447,10 +2480,10 @@ define("core/graph/editorMetadata", ["require", "exports"], function (require, e
             return undefined;
         const jsonPath = ['$NodeEditorMetadata', kind === 'group' ? '$Groups' : '$Comments', index];
         const positionValue = isObject(value.$Position) ? value.$Position : undefined;
-        const x = numberValue(positionValue?.$x);
-        const y = numberValue(positionValue?.$y);
-        const width = numberValue(value.$width);
-        const height = numberValue(value.$height);
+        const x = (0, numericLimits_js_1.editorLayoutNumber)(positionValue?.$x);
+        const y = (0, numericLimits_js_1.editorLayoutNumber)(positionValue?.$y);
+        const width = (0, numericLimits_js_1.editorLayoutNumber)(value.$width);
+        const height = (0, numericLimits_js_1.editorLayoutNumber)(value.$height);
         const common = {
             fileId: file.id,
             id: `${file.id}:${kind}:${index}`,
@@ -2487,13 +2520,13 @@ define("core/graph/editorMetadata", ["require", "exports"], function (require, e
                 if (!isObject(entry))
                     continue;
                 const position = isObject(entry.$Position) ? entry.$Position : undefined;
-                const x = position?.$x;
-                const y = position?.$y;
+                const x = (0, numericLimits_js_1.editorLayoutNumber)(position?.$x);
+                const y = (0, numericLimits_js_1.editorLayoutNumber)(position?.$y);
                 nodes.set(nodeId, {
                     fileId: file.id,
                     nodeId,
                     title: typeof entry.$Title === 'string' ? entry.$Title : undefined,
-                    position: typeof x === 'number' && typeof y === 'number' ? {
+                    position: x !== undefined && y !== undefined ? {
                         x,
                         y,
                         xPath: ['$NodeEditorMetadata', '$Nodes', nodeId, '$Position', '$x'],
@@ -19700,20 +19733,68 @@ define("core/layout/safety", ["require", "exports", "core/layout/geometry", "cor
         return layoutBlockReasons(state).length > 0;
     }
 });
-define("core/layout/strategy", ["require", "exports"], function (require, exports) {
+define("core/layout/limits", ["require", "exports"], function (require, exports) {
+    "use strict";
+    Object.defineProperty(exports, "__esModule", { value: true });
+    exports.MAX_LAYOUT_SETTING = void 0;
+    exports.validateLayoutEngineSettings = validateLayoutEngineSettings;
+    /**
+     * Deliberately generous UI/core ceiling. Real presets are <= 100 px; this
+     * ceiling exists to make arithmetic and generated JSON fail closed on corrupt
+     * persisted state or adversarial callers without constraining normal layouts.
+     */
+    exports.MAX_LAYOUT_SETTING = 1_000_000;
+    const STRATEGIES = new Set(['normalize', 'author-normalize', 'dag-rebuild']);
+    const FLOATER_MODES = new Set(['ignore', 'pack', 'quarantine']);
+    const DAG_DIRECTIONS = new Set(['auto', 'up', 'down', 'type']);
+    function requireBoundedSetting(name, value) {
+        if (!Number.isFinite(value) || value < 0 || value > exports.MAX_LAYOUT_SETTING) {
+            throw new RangeError(`Layout ${name} must be a finite number between 0 and ${exports.MAX_LAYOUT_SETTING}.`);
+        }
+    }
+    function validateLayoutEngineSettings(settings) {
+        if (!STRATEGIES.has(settings.strategy))
+            throw new RangeError(`Unknown layout strategy: ${String(settings.strategy)}`);
+        requireBoundedSetting('horizontalGap', settings.horizontalGap);
+        requireBoundedSetting('verticalGap', settings.verticalGap);
+        requireBoundedSetting('alignmentTolerance', settings.alignmentTolerance);
+        if (typeof settings.includeLive !== 'boolean')
+            throw new TypeError('Layout includeLive must be boolean.');
+        if (!FLOATER_MODES.has(settings.floaterMode))
+            throw new RangeError(`Unknown floater mode: ${String(settings.floaterMode)}`);
+        if (settings.dagBranchDirection !== undefined && !DAG_DIRECTIONS.has(settings.dagBranchDirection)) {
+            throw new RangeError(`Unknown DAG branch direction: ${String(settings.dagBranchDirection)}`);
+        }
+    }
+});
+define("core/layout/strategy", ["require", "exports", "core/numericLimits", "core/layout/limits"], function (require, exports, numericLimits_js_2, limits_js_1) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.buildStrategyProposal = buildStrategyProposal;
     exports.strategyRegistry = strategyRegistry;
+    function assertPatchScalarSafe(patch, side) {
+        const value = patch[side];
+        if (typeof value !== 'number')
+            return;
+        if (!(0, numericLimits_js_2.isSafeEditorLayoutNumber)(value)) {
+            throw new RangeError(`${patch.filePath}: layout ${side} for ${patch.entityKind} ${patch.entityId} ${patch.field} is outside the safe editor range.`);
+        }
+    }
     /** Shared proposal envelope so strategy code only owns per-file placement. */
     function buildStrategyProposal(files, settings, definition) {
+        (0, limits_js_1.validateLayoutEngineSettings)(settings);
         const proposals = files.map((file) => definition.buildFileProposal(file, settings));
+        const patches = proposals.flatMap((file) => file.patches);
+        for (const patch of patches) {
+            assertPatchScalarSafe(patch, 'oldValue');
+            assertPatchScalarSafe(patch, 'newValue');
+        }
         const warnings = proposals.flatMap((file) => file.metrics.warnings.map((warning) => `${file.filePath}: ${warning}`));
         return {
             strategy: definition.id,
             createdAt: Date.now(),
             files: proposals,
-            patches: proposals.flatMap((file) => file.patches),
+            patches,
             blocked: proposals.some((file) => file.metrics.blocked),
             warnings,
         };
@@ -20939,7 +21020,7 @@ define("core/layout/stage", ["require", "exports", "core/refactor"], function (r
         return next;
     }
 });
-define("core/layout/index", ["require", "exports", "core/layout/types", "core/layout/geometry", "core/layout/snapshot", "core/layout/normalize", "core/layout/treeNormalize", "core/layout/stage", "core/layout/readerV2", "core/layout/edgeCorridor", "core/layout/authorGrid", "core/layout/strategy", "core/layout/safety", "core/layout/tolerances", "core/layout/reasons", "core/layout/metrics"], function (require, exports, types_js_2, geometry_js_7, snapshot_js_2, normalize_js_1, treeNormalize_js_2, stage_js_1, readerV2_js_2, edgeCorridor_js_5, authorGrid_js_2, strategy_js_2, safety_js_2, tolerances_js_4, reasons_js_2, metrics_js_2) {
+define("core/layout/index", ["require", "exports", "core/layout/types", "core/layout/geometry", "core/layout/snapshot", "core/layout/normalize", "core/layout/treeNormalize", "core/layout/stage", "core/layout/readerV2", "core/layout/edgeCorridor", "core/layout/authorGrid", "core/layout/strategy", "core/layout/safety", "core/layout/tolerances", "core/layout/limits", "core/layout/reasons", "core/layout/metrics"], function (require, exports, types_js_2, geometry_js_7, snapshot_js_2, normalize_js_1, treeNormalize_js_2, stage_js_1, readerV2_js_2, edgeCorridor_js_5, authorGrid_js_2, strategy_js_2, safety_js_2, tolerances_js_4, limits_js_2, reasons_js_2, metrics_js_2) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     __exportStar(types_js_2, exports);
@@ -20954,6 +21035,7 @@ define("core/layout/index", ["require", "exports", "core/layout/types", "core/la
     __exportStar(strategy_js_2, exports);
     __exportStar(safety_js_2, exports);
     __exportStar(tolerances_js_4, exports);
+    __exportStar(limits_js_2, exports);
     __exportStar(reasons_js_2, exports);
     __exportStar(metrics_js_2, exports);
 });
@@ -21224,7 +21306,7 @@ define("core/projectGraph", ["require", "exports", "core/semanticReferences", "c
         };
     }
 });
-define("core/index", ["require", "exports", "core/types", "core/jsonPath", "core/workspace", "core/search", "core/fieldIndex", "core/projectTree", "core/schemaRegistry", "core/parser", "core/textPatcher", "core/symbolIndex", "core/semanticReferences", "core/diagnostics", "core/project", "core/changeSet", "core/refactor", "core/matches", "core/validation", "core/output", "core/graph/index", "core/geometry/index", "core/layout/index", "core/projectGraph"], function (require, exports, types_js_3, jsonPath_js_9, workspace_js_2, search_js_1, fieldIndex_js_2, projectTree_js_1, schemaRegistry_js_2, parser_js_2, textPatcher_js_3, symbolIndex_js_4, semanticReferences_js_5, diagnostics_js_2, project_js_2, changeSet_js_2, refactor_js_3, matches_js_2, validation_js_1, output_js_1, index_js_1, index_js_2, index_js_3, projectGraph_js_1) {
+define("core/index", ["require", "exports", "core/types", "core/jsonPath", "core/workspace", "core/search", "core/fieldIndex", "core/projectTree", "core/schemaRegistry", "core/parser", "core/textPatcher", "core/symbolIndex", "core/semanticReferences", "core/diagnostics", "core/project", "core/changeSet", "core/refactor", "core/matches", "core/validation", "core/numericLimits", "core/output", "core/graph/index", "core/geometry/index", "core/layout/index", "core/projectGraph"], function (require, exports, types_js_3, jsonPath_js_9, workspace_js_2, search_js_1, fieldIndex_js_2, projectTree_js_1, schemaRegistry_js_2, parser_js_2, textPatcher_js_3, symbolIndex_js_4, semanticReferences_js_5, diagnostics_js_2, project_js_2, changeSet_js_2, refactor_js_3, matches_js_2, validation_js_1, numericLimits_js_3, output_js_1, index_js_1, index_js_2, index_js_3, projectGraph_js_1) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     __exportStar(types_js_3, exports);
@@ -21244,6 +21326,7 @@ define("core/index", ["require", "exports", "core/types", "core/jsonPath", "core
     __exportStar(refactor_js_3, exports);
     __exportStar(matches_js_2, exports);
     __exportStar(validation_js_1, exports);
+    __exportStar(numericLimits_js_3, exports);
     __exportStar(output_js_1, exports);
     __exportStar(index_js_1, exports);
     __exportStar(index_js_2, exports);
@@ -22957,8 +23040,18 @@ define("projects/projectPersistence", ["require", "exports"], function (require,
     const RECENT_PROJECTS_KEY = 'hytale-workbench.projects.v1';
     const SESSION_PREFIX = 'hytale-workbench.project-session.v1:';
     const MAX_RECENT_PROJECTS = 20;
+    const MAX_RECENT_PROJECT_SCAN = 200;
+    const MAX_OPEN_FILE_PATHS = 500;
+    const MAX_OPEN_SOURCE_PATHS = 50;
+    const MAX_VISUAL_SELECTED_PATHS = 500;
     const MAX_NAVIGATION_ENTRIES = 100;
     const MAX_RECENTLY_CLOSED = 20;
+    const MAX_RECENT_SEARCHES = 12;
+    const MAX_PATH_LENGTH = 4096;
+    const MAX_LABEL_LENGTH = 512;
+    const MAX_NODE_ID_LENGTH = 2048;
+    const MAX_QUERY_LENGTH = 4096;
+    const MAX_WORKSPACE_ID_LENGTH = 512;
     const PERSISTENCE_DEFAULT_FILTERS = {
         imports: true,
         exports: true,
@@ -22991,13 +23084,37 @@ define("projects/projectPersistence", ["require", "exports"], function (require,
     function finiteNonNegative(value, fallback, max = 100_000) {
         return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? Math.min(max, value) : fallback;
     }
+    function boundedString(value, maxLength) {
+        if (typeof value !== 'string' || !value.trim() || value.length > maxLength)
+            return undefined;
+        return value;
+    }
+    function cleanStringList(value, limit, maxLength) {
+        if (!Array.isArray(value))
+            return [];
+        const result = [];
+        const seen = new Set();
+        for (const item of value) {
+            const cleaned = boundedString(item, maxLength);
+            if (!cleaned || seen.has(cleaned))
+                continue;
+            seen.add(cleaned);
+            result.push(cleaned);
+            if (result.length >= limit)
+                break;
+        }
+        return result;
+    }
     function cleanNavigationLocation(value) {
-        if (!isRecord(value) || typeof value.filePath !== 'string' || !value.filePath.trim())
+        if (!isRecord(value))
+            return undefined;
+        const filePath = boundedString(value.filePath, MAX_PATH_LENGTH);
+        if (!filePath)
             return undefined;
         const location = value.location === 'live' || value.location === 'floating' ? value.location : undefined;
         return {
-            filePath: value.filePath,
-            nodeId: typeof value.nodeId === 'string' ? value.nodeId : undefined,
+            filePath,
+            nodeId: boundedString(value.nodeId, MAX_NODE_ID_LENGTH),
             location,
         };
     }
@@ -23016,7 +23133,7 @@ define("projects/projectPersistence", ["require", "exports"], function (require,
             live: boolOr(value.live, PERSISTENCE_DEFAULT_FILTERS.live),
             floating: boolOr(value.floating, PERSISTENCE_DEFAULT_FILTERS.floating),
             hideEmpty: boolOr(value.hideEmpty, PERSISTENCE_DEFAULT_FILTERS.hideEmpty),
-            workspace: typeof value.workspace === 'string' && value.workspace.length <= 512 ? value.workspace : 'all',
+            workspace: boundedString(value.workspace, MAX_WORKSPACE_ID_LENGTH) ?? 'all',
         };
     }
     function cleanVisualLayoutSettings(value) {
@@ -23053,6 +23170,22 @@ define("projects/projectPersistence", ["require", "exports"], function (require,
         return Object.fromEntries(Object.entries(value)
             .filter(([key, expanded]) => key.length <= 2048 && typeof expanded === 'boolean')
             .slice(0, 5000));
+    }
+    function cleanProjectGraphSettings(value) {
+        if (!isRecord(value))
+            return undefined;
+        const rawViewport = isRecord(value.viewport) ? value.viewport : undefined;
+        const panX = rawViewport ? Number(rawViewport.panX) : Number.NaN;
+        const panY = rawViewport ? Number(rawViewport.panY) : Number.NaN;
+        const zoom = rawViewport ? Number(rawViewport.zoom) : Number.NaN;
+        return {
+            selectedRootPath: boundedString(value.selectedRootPath, MAX_PATH_LENGTH)?.replace(/\\/g, '/'),
+            densityDepth: [4, 6, 8, 12].includes(Number(value.densityDepth)) ? Number(value.densityDepth) : 8,
+            includeResources: value.includeResources === true,
+            viewport: Number.isFinite(panX) && Number.isFinite(panY) && Number.isFinite(zoom)
+                ? { panX, panY, zoom: Math.min(2.5, Math.max(0.15, zoom)) }
+                : undefined,
+        };
     }
     function storageAvailable() {
         if (typeof window === 'undefined')
@@ -23092,15 +23225,17 @@ define("projects/projectPersistence", ["require", "exports"], function (require,
         }
     }
     function cleanRecentEntry(value) {
-        const rootPath = normalizeRootPath(value?.rootPath ?? '');
-        const label = String(value?.label ?? '').trim();
+        if (!isRecord(value))
+            return undefined;
+        const rootPath = boundedString(normalizeRootPath(typeof value.rootPath === 'string' ? value.rootPath : ''), MAX_PATH_LENGTH);
+        const label = boundedString(typeof value.label === 'string' ? value.label.trim() : '', MAX_LABEL_LENGTH);
         if (!rootPath || !label)
             return undefined;
         return {
             rootPath,
             label,
             pinned: value.pinned === true,
-            lastOpenedAt: Number.isFinite(value.lastOpenedAt) ? value.lastOpenedAt : 0,
+            lastOpenedAt: typeof value.lastOpenedAt === 'number' && Number.isFinite(value.lastOpenedAt) ? value.lastOpenedAt : 0,
         };
     }
     function readRecentProjects() {
@@ -23108,7 +23243,7 @@ define("projects/projectPersistence", ["require", "exports"], function (require,
         if (!Array.isArray(raw))
             return [];
         const deduped = new Map();
-        for (const item of raw) {
+        for (const item of raw.slice(0, MAX_RECENT_PROJECT_SCAN)) {
             const entry = cleanRecentEntry(item);
             if (!entry)
                 continue;
@@ -23122,18 +23257,20 @@ define("projects/projectPersistence", ["require", "exports"], function (require,
             .slice(0, MAX_RECENT_PROJECTS);
     }
     function writeRecentProjects(entries) {
-        writeJson(RECENT_PROJECTS_KEY, entries.slice(0, MAX_RECENT_PROJECTS));
+        const cleaned = entries.map(cleanRecentEntry).filter((entry) => !!entry).slice(0, MAX_RECENT_PROJECTS);
+        writeJson(RECENT_PROJECTS_KEY, cleaned);
     }
     function rememberRecentProject(rootPath, label) {
-        const normalized = normalizeRootPath(rootPath);
-        if (!normalized || !label.trim())
+        const normalized = boundedString(normalizeRootPath(rootPath), MAX_PATH_LENGTH);
+        const cleanedLabel = boundedString(label.trim(), MAX_LABEL_LENGTH);
+        if (!normalized || !cleanedLabel)
             return;
         const entries = readRecentProjects();
         const key = normalized.toLocaleLowerCase();
         const previous = entries.find((item) => item.rootPath.toLocaleLowerCase() === key);
         const next = {
             rootPath: normalized,
-            label: label.trim(),
+            label: cleanedLabel,
             pinned: previous?.pinned ?? false,
             lastOpenedAt: Date.now(),
         };
@@ -23141,62 +23278,48 @@ define("projects/projectPersistence", ["require", "exports"], function (require,
             .sort((left, right) => Number(right.pinned) - Number(left.pinned) || right.lastOpenedAt - left.lastOpenedAt));
     }
     function toggleRecentProjectPinned(rootPath) {
-        const normalized = normalizeRootPath(rootPath).toLocaleLowerCase();
+        const normalizedRoot = boundedString(normalizeRootPath(rootPath), MAX_PATH_LENGTH);
+        if (!normalizedRoot)
+            return;
+        const normalized = normalizedRoot.toLocaleLowerCase();
         const entries = readRecentProjects().map((item) => item.rootPath.toLocaleLowerCase() === normalized
             ? { ...item, pinned: !item.pinned }
             : item);
         writeRecentProjects(entries.sort((left, right) => Number(right.pinned) - Number(left.pinned) || right.lastOpenedAt - left.lastOpenedAt));
     }
     function forgetRecentProject(rootPath) {
-        const normalized = normalizeRootPath(rootPath).toLocaleLowerCase();
+        const normalizedRoot = boundedString(normalizeRootPath(rootPath), MAX_PATH_LENGTH);
+        if (!normalizedRoot)
+            return;
+        const normalized = normalizedRoot.toLocaleLowerCase();
         writeRecentProjects(readRecentProjects().filter((item) => item.rootPath.toLocaleLowerCase() !== normalized));
     }
     function readProjectSession(rootPath) {
         const value = readJson(sessionKey(rootPath));
-        if (!value || value.version !== 1 || !Array.isArray(value.openFilePaths))
+        if (!isRecord(value) || value.version !== 1 || !Array.isArray(value.openFilePaths))
             return undefined;
         return {
             version: 1,
-            openFilePaths: value.openFilePaths.filter((path) => typeof path === 'string'),
-            activeFilePath: typeof value.activeFilePath === 'string' ? value.activeFilePath : undefined,
-            openSourcePaths: Array.isArray(value.openSourcePaths) ? value.openSourcePaths.filter((path) => typeof path === 'string') : [],
-            activeSourcePath: typeof value.activeSourcePath === 'string' ? value.activeSourcePath : undefined,
+            openFilePaths: cleanStringList(value.openFilePaths, MAX_OPEN_FILE_PATHS, MAX_PATH_LENGTH),
+            activeFilePath: boundedString(value.activeFilePath, MAX_PATH_LENGTH),
+            openSourcePaths: cleanStringList(value.openSourcePaths, MAX_OPEN_SOURCE_PATHS, MAX_PATH_LENGTH),
+            activeSourcePath: boundedString(value.activeSourcePath, MAX_PATH_LENGTH),
             focusedNode: cleanNavigationLocation(value.focusedNode),
-            explorerWorkspace: typeof value.explorerWorkspace === 'string' ? value.explorerWorkspace : 'all',
+            explorerWorkspace: boundedString(value.explorerWorkspace, MAX_WORKSPACE_ID_LENGTH) ?? 'all',
             explorerFolderState: cleanFolderState(value.explorerFolderState),
             // Tool-specific sidebars are intentionally transient across restarts. Explorer/Search restore normally.
             sidebarView: value.sidebarView === 'search' ? 'search' : 'explorer',
             sidebarVisible: value.sidebarVisible !== false,
-            searchSidebarQuery: typeof value.searchSidebarQuery === 'string' ? value.searchSidebarQuery : '',
-            recentSearches: Array.isArray(value.recentSearches) ? value.recentSearches.filter((item) => typeof item === 'string').slice(0, 12) : [],
+            searchSidebarQuery: typeof value.searchSidebarQuery === 'string' && value.searchSidebarQuery.length <= MAX_QUERY_LENGTH ? value.searchSidebarQuery : '',
+            recentSearches: cleanStringList(value.recentSearches, MAX_RECENT_SEARCHES, MAX_QUERY_LENGTH),
             filters: cleanInspectorFilters(value.filters),
-            recentlyClosedFilePaths: Array.isArray(value.recentlyClosedFilePaths)
-                ? value.recentlyClosedFilePaths.filter((path) => typeof path === 'string').slice(-MAX_RECENTLY_CLOSED)
-                : [],
+            recentlyClosedFilePaths: cleanStringList(value.recentlyClosedFilePaths, MAX_RECENTLY_CLOSED, MAX_PATH_LENGTH),
             navigationCurrent: cleanNavigationLocation(value.navigationCurrent),
             navigationPast: Array.isArray(value.navigationPast) ? value.navigationPast.map(cleanNavigationLocation).filter((item) => !!item).slice(-MAX_NAVIGATION_ENTRIES) : [],
             navigationFuture: Array.isArray(value.navigationFuture) ? value.navigationFuture.map(cleanNavigationLocation).filter((item) => !!item).slice(0, MAX_NAVIGATION_ENTRIES) : [],
-            visualSelectedFilePaths: Array.isArray(value.visualSelectedFilePaths)
-                ? value.visualSelectedFilePaths.filter((path) => typeof path === 'string')
-                : [],
+            visualSelectedFilePaths: cleanStringList(value.visualSelectedFilePaths, MAX_VISUAL_SELECTED_PATHS, MAX_PATH_LENGTH),
             visualSettings: cleanVisualLayoutSettings(value.visualSettings),
-            projectGraphSettings: value.projectGraphSettings && typeof value.projectGraphSettings === 'object'
-                ? {
-                    selectedRootPath: typeof value.projectGraphSettings.selectedRootPath === 'string' ? value.projectGraphSettings.selectedRootPath.replace(/\\/g, '/') : undefined,
-                    densityDepth: [4, 6, 8, 12].includes(Number(value.projectGraphSettings.densityDepth)) ? Number(value.projectGraphSettings.densityDepth) : 8,
-                    includeResources: value.projectGraphSettings.includeResources === true,
-                    viewport: value.projectGraphSettings.viewport && typeof value.projectGraphSettings.viewport === 'object'
-                        && Number.isFinite(Number(value.projectGraphSettings.viewport.panX))
-                        && Number.isFinite(Number(value.projectGraphSettings.viewport.panY))
-                        && Number.isFinite(Number(value.projectGraphSettings.viewport.zoom))
-                        ? {
-                            panX: Number(value.projectGraphSettings.viewport.panX),
-                            panY: Number(value.projectGraphSettings.viewport.panY),
-                            zoom: Math.min(2.5, Math.max(0.15, Number(value.projectGraphSettings.viewport.zoom))),
-                        }
-                        : undefined,
-                }
-                : undefined,
+            projectGraphSettings: cleanProjectGraphSettings(value.projectGraphSettings),
         };
     }
     /**
@@ -23207,25 +23330,25 @@ define("projects/projectPersistence", ["require", "exports"], function (require,
     function writeProjectSession(rootPath, session) {
         writeJson(sessionKey(rootPath), {
             version: 1,
-            openFilePaths: session.openFilePaths,
-            activeFilePath: session.activeFilePath,
-            openSourcePaths: (session.openSourcePaths ?? []).slice(0, 50),
-            activeSourcePath: session.activeSourcePath,
-            focusedNode: session.focusedNode,
-            explorerWorkspace: session.explorerWorkspace,
-            explorerFolderState: session.explorerFolderState,
-            sidebarView: session.sidebarView,
+            openFilePaths: cleanStringList(session.openFilePaths, MAX_OPEN_FILE_PATHS, MAX_PATH_LENGTH),
+            activeFilePath: boundedString(session.activeFilePath, MAX_PATH_LENGTH),
+            openSourcePaths: cleanStringList(session.openSourcePaths, MAX_OPEN_SOURCE_PATHS, MAX_PATH_LENGTH),
+            activeSourcePath: boundedString(session.activeSourcePath, MAX_PATH_LENGTH),
+            focusedNode: cleanNavigationLocation(session.focusedNode),
+            explorerWorkspace: boundedString(session.explorerWorkspace, MAX_WORKSPACE_ID_LENGTH) ?? 'all',
+            explorerFolderState: cleanFolderState(session.explorerFolderState),
+            sidebarView: session.sidebarView === 'search' ? 'search' : 'explorer',
             sidebarVisible: session.sidebarVisible,
-            searchSidebarQuery: session.searchSidebarQuery ?? '',
-            recentSearches: (session.recentSearches ?? []).slice(0, 12),
-            filters: session.filters,
-            recentlyClosedFilePaths: session.recentlyClosedFilePaths.slice(-MAX_RECENTLY_CLOSED),
-            navigationCurrent: session.navigationCurrent,
-            navigationPast: session.navigationPast.slice(-MAX_NAVIGATION_ENTRIES),
-            navigationFuture: session.navigationFuture.slice(0, MAX_NAVIGATION_ENTRIES),
-            visualSelectedFilePaths: session.visualSelectedFilePaths,
-            visualSettings: session.visualSettings,
-            projectGraphSettings: session.projectGraphSettings,
+            searchSidebarQuery: typeof session.searchSidebarQuery === 'string' && session.searchSidebarQuery.length <= MAX_QUERY_LENGTH ? session.searchSidebarQuery : '',
+            recentSearches: cleanStringList(session.recentSearches, MAX_RECENT_SEARCHES, MAX_QUERY_LENGTH),
+            filters: cleanInspectorFilters(session.filters),
+            recentlyClosedFilePaths: cleanStringList(session.recentlyClosedFilePaths, MAX_RECENTLY_CLOSED, MAX_PATH_LENGTH),
+            navigationCurrent: cleanNavigationLocation(session.navigationCurrent),
+            navigationPast: session.navigationPast.map(cleanNavigationLocation).filter((item) => !!item).slice(-MAX_NAVIGATION_ENTRIES),
+            navigationFuture: session.navigationFuture.map(cleanNavigationLocation).filter((item) => !!item).slice(0, MAX_NAVIGATION_ENTRIES),
+            visualSelectedFilePaths: cleanStringList(session.visualSelectedFilePaths, MAX_VISUAL_SELECTED_PATHS, MAX_PATH_LENGTH),
+            visualSettings: cleanVisualLayoutSettings(session.visualSettings),
+            projectGraphSettings: cleanProjectGraphSettings(session.projectGraphSettings),
         });
     }
 });
@@ -25656,8 +25779,8 @@ define("components/WorkbenchRail", ["require", "exports", "react/jsx-runtime", "
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.WorkbenchRail = WorkbenchRail;
-    function RailButton({ label, icon, active, badge, onClick, className = '', pressed, }) {
-        return ((0, jsx_runtime_10.jsxs)("button", { className: `rail-button ${active ? 'active' : ''} ${className}`, onClick: onClick, "data-tooltip": label, "data-tooltip-side": "right", "aria-label": label, "aria-pressed": pressed ?? active ?? false, children: [(0, jsx_runtime_10.jsx)("span", { className: "rail-icon", "aria-hidden": "true", children: (0, jsx_runtime_10.jsx)(LucideIcon_7.LucideIcon, { name: icon, size: 20 }) }), badge !== undefined && badge > 0 && (0, jsx_runtime_10.jsx)("span", { className: "rail-badge", children: badge > 99 ? '99+' : badge })] }));
+    function RailButton({ label, icon, active, badge, onClick, className = '', pressed, current, }) {
+        return ((0, jsx_runtime_10.jsxs)("button", { className: `rail-button ${active ? 'active' : ''} ${className}`, onClick: onClick, "data-tooltip": label, "data-tooltip-side": "right", "aria-label": label, "aria-pressed": pressed, "aria-current": current ? 'page' : undefined, children: [(0, jsx_runtime_10.jsx)("span", { className: "rail-icon", "aria-hidden": "true", children: (0, jsx_runtime_10.jsx)(LucideIcon_7.LucideIcon, { name: icon, size: 20 }) }), badge !== undefined && badge > 0 && (0, jsx_runtime_10.jsx)("span", { className: "rail-badge", children: badge > 99 ? '99+' : badge })] }));
     }
     function WorkbenchRail({ onOpenSettings }) {
         const sidebarView = (0, store_7.useWorkbenchStore)((state) => state.sidebarView);
@@ -25680,8 +25803,8 @@ define("components/WorkbenchRail", ["require", "exports", "react/jsx-runtime", "
         const toolSidebarActive = activeTab?.kind === 'visual' || activeTab?.kind === 'project-graph';
         const globalSidebarActive = !toolSidebarActive || Boolean(toolSidebarOverride);
         const effectiveGlobalSidebarView = toolSidebarOverride ?? sidebarView;
-        const sidebarButton = (view, label, icon) => ((0, jsx_runtime_10.jsx)(RailButton, { label: `${label}${sidebarVisible && globalSidebarActive && effectiveGlobalSidebarView === view ? ' — hide sidebar' : ''}`, icon: icon, active: sidebarVisible && globalSidebarActive && effectiveGlobalSidebarView === view, onClick: () => activateSidebar(view) }));
-        return ((0, jsx_runtime_10.jsxs)("nav", { className: "workbench-rail", "aria-label": "Workbench tools", children: [(0, jsx_runtime_10.jsxs)("div", { className: "rail-group rail-sidebar-group", children: [sidebarButton('explorer', 'Explorer', 'folder-tree'), sidebarButton('search', 'Search', 'search')] }), (0, jsx_runtime_10.jsx)("div", { className: "rail-separator" }), (0, jsx_runtime_10.jsxs)("div", { className: "rail-group rail-tool-group", children: [(0, jsx_runtime_10.jsx)(RailButton, { label: "Diagnostics", icon: "triangle-alert", badge: actionableDiagnostics, active: !!activeTabId?.startsWith('tab:diagnostics:'), onClick: () => openDiagnosticsTab() }), (0, jsx_runtime_10.jsx)(RailButton, { label: "Changes", icon: "git-compare-arrows", badge: changeCount, active: activeTabId === 'tab:changes:pending', onClick: openChangesTab }), (0, jsx_runtime_10.jsx)(RailButton, { label: "Layout", icon: "layout-grid", active: activeTabId === 'tab:visual', onClick: openVisualTab }), (0, jsx_runtime_10.jsx)(RailButton, { label: "WorldGen Performance", icon: "circle-dot", active: activeTab?.kind === 'worldgen-performance', onClick: openWorldgenPerformanceTab }), (0, jsx_runtime_10.jsx)(RailButton, { label: "Project Graph", icon: "network", active: activeTab?.kind === 'project-graph', onClick: openProjectGraphTab })] }), (0, jsx_runtime_10.jsx)("div", { className: "rail-spacer" }), (0, jsx_runtime_10.jsxs)("div", { className: "rail-group rail-global-group", children: [(0, jsx_runtime_10.jsx)(RailButton, { label: `Editing ${editing ? 'On' : 'Off'}`, icon: "pencil", className: `editing-rail-button ${editing ? 'editing-on' : 'editing-off'}`, active: editing, pressed: editing, onClick: () => setEditing(!editing) }), (0, jsx_runtime_10.jsx)(RailButton, { label: "Settings", icon: "settings", onClick: onOpenSettings })] })] }));
+        const sidebarButton = (view, label, icon) => ((0, jsx_runtime_10.jsx)(RailButton, { label: `${label}${sidebarVisible && globalSidebarActive && effectiveGlobalSidebarView === view ? ' — hide sidebar' : ''}`, icon: icon, active: sidebarVisible && globalSidebarActive && effectiveGlobalSidebarView === view, pressed: sidebarVisible && globalSidebarActive && effectiveGlobalSidebarView === view, onClick: () => activateSidebar(view) }));
+        return ((0, jsx_runtime_10.jsxs)("nav", { className: "workbench-rail", "aria-label": "Workbench tools", children: [(0, jsx_runtime_10.jsxs)("div", { className: "rail-group rail-sidebar-group", children: [sidebarButton('explorer', 'Explorer', 'folder-tree'), sidebarButton('search', 'Search', 'search')] }), (0, jsx_runtime_10.jsx)("div", { className: "rail-separator" }), (0, jsx_runtime_10.jsxs)("div", { className: "rail-group rail-tool-group", children: [(0, jsx_runtime_10.jsx)(RailButton, { label: "Diagnostics", icon: "triangle-alert", badge: actionableDiagnostics, active: !!activeTabId?.startsWith('tab:diagnostics:'), current: !!activeTabId?.startsWith('tab:diagnostics:'), onClick: () => openDiagnosticsTab() }), (0, jsx_runtime_10.jsx)(RailButton, { label: "Changes", icon: "git-compare-arrows", badge: changeCount, active: activeTabId === 'tab:changes:pending', current: activeTabId === 'tab:changes:pending', onClick: openChangesTab }), (0, jsx_runtime_10.jsx)(RailButton, { label: "Layout", icon: "layout-grid", active: activeTabId === 'tab:visual', current: activeTabId === 'tab:visual', onClick: openVisualTab }), (0, jsx_runtime_10.jsx)(RailButton, { label: "WorldGen Performance", icon: "circle-dot", active: activeTab?.kind === 'worldgen-performance', current: activeTab?.kind === 'worldgen-performance', onClick: openWorldgenPerformanceTab }), (0, jsx_runtime_10.jsx)(RailButton, { label: "Project Graph", icon: "network", active: activeTab?.kind === 'project-graph', current: activeTab?.kind === 'project-graph', onClick: openProjectGraphTab })] }), (0, jsx_runtime_10.jsx)("div", { className: "rail-spacer" }), (0, jsx_runtime_10.jsxs)("div", { className: "rail-group rail-global-group", children: [(0, jsx_runtime_10.jsx)(RailButton, { label: `Editing ${editing ? 'On' : 'Off'}`, icon: "pencil", className: `editing-rail-button ${editing ? 'editing-on' : 'editing-off'}`, active: editing, pressed: editing, onClick: () => setEditing(!editing) }), (0, jsx_runtime_10.jsx)(RailButton, { label: "Settings", icon: "settings", onClick: onOpenSettings })] })] }));
     }
 });
 define("release/releaseIdentity", ["require", "exports"], function (require, exports) {
@@ -26979,7 +27102,7 @@ define("features/visual/visualLayoutUi", ["require", "exports", "core/index"], f
         return 'Preserves the author sketch while cleaning spacing, routing, rows, columns and pixel alignment.';
     }
 });
-define("features/visual/VisualLayoutSidebar", ["require", "exports", "react/jsx-runtime", "react", "components/ToolSidebar", "store", "features/visual/visualLayoutUi"], function (require, exports, jsx_runtime_19, react_17, ToolSidebar_2, store_12, visualLayoutUi_1) {
+define("features/visual/VisualLayoutSidebar", ["require", "exports", "react/jsx-runtime", "react", "core/index", "components/ToolSidebar", "store", "features/visual/visualLayoutUi"], function (require, exports, jsx_runtime_19, react_17, core_12, ToolSidebar_2, store_12, visualLayoutUi_1) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.VisualLayoutSidebar = VisualLayoutSidebar;
@@ -27002,7 +27125,7 @@ define("features/visual/VisualLayoutSidebar", ["require", "exports", "react/jsx-
         const allSelected = eligibleIds.length > 0 && eligibleIds.length === selectedIds.length && eligibleIds.every((id) => selectedIds.includes(id));
         const setSpacingPreset = (preset) => setSettings({ spacingPreset: preset, ...visualLayoutUi_1.spacingDefaults[preset] });
         const setGap = (key, value) => {
-            const next = Math.max(0, Math.round(Number.isFinite(value) ? value : 0));
+            const next = Math.min(core_12.MAX_LAYOUT_SETTING, Math.max(0, Math.round(Number.isFinite(value) ? value : 0)));
             setSettings({ [key]: next, spacingPreset: 'custom' });
         };
         if (!project)
@@ -27011,7 +27134,7 @@ define("features/visual/VisualLayoutSidebar", ["require", "exports", "react/jsx-
                                 ['normalize', 'Normalize', 'Root offset only'],
                                 ['author-normalize', 'Author Normalize', 'Preserve & clean'],
                                 ['dag-rebuild', 'DAG Rebuild', 'Topology rebuild'],
-                            ].map(([strategy, label, detail]) => ((0, jsx_runtime_19.jsxs)("button", { className: settings.strategy === strategy ? 'active' : '', onClick: () => setSettings({ strategy }), children: [(0, jsx_runtime_19.jsx)("strong", { children: label }), (0, jsx_runtime_19.jsx)("small", { children: detail })] }, strategy))) }), (0, jsx_runtime_19.jsx)("small", { className: "visual-layout-sidebar-help", children: (0, visualLayoutUi_1.strategyDescription)(settings.strategy) })] }), settings.strategy !== 'normalize' && ((0, jsx_runtime_19.jsxs)("section", { className: "visual-layout-sidebar-section", children: [(0, jsx_runtime_19.jsx)("div", { className: "visual-layout-sidebar-section-title", children: "Spacing" }), (0, jsx_runtime_19.jsx)("div", { className: "visual-layout-sidebar-segments", role: "group", "aria-label": "Spacing preset", children: ['compact', 'normal', 'spacious'].map((preset) => (0, jsx_runtime_19.jsx)("button", { className: settings.spacingPreset === preset ? 'active' : '', onClick: () => setSpacingPreset(preset), children: (0, visualLayoutUi_1.presetLabel)(preset) }, preset)) }), (0, jsx_runtime_19.jsxs)("div", { className: "visual-layout-sidebar-number-grid", children: [(0, jsx_runtime_19.jsxs)("label", { children: [(0, jsx_runtime_19.jsx)("span", { children: "Horizontal" }), (0, jsx_runtime_19.jsx)("input", { type: "number", min: "0", value: settings.horizontalGap, onChange: (event) => setGap('horizontalGap', Number(event.target.value)) })] }), (0, jsx_runtime_19.jsxs)("label", { children: [(0, jsx_runtime_19.jsx)("span", { children: "Vertical" }), (0, jsx_runtime_19.jsx)("input", { type: "number", min: "0", value: settings.verticalGap, onChange: (event) => setGap('verticalGap', Number(event.target.value)) })] })] }), settings.strategy === 'author-normalize' && ((0, jsx_runtime_19.jsxs)("label", { className: "visual-layout-sidebar-field", children: [(0, jsx_runtime_19.jsx)("span", { children: "Connection plane tolerance" }), (0, jsx_runtime_19.jsx)("input", { type: "number", min: "0", value: settings.alignmentTolerance, onChange: (event) => setGap('alignmentTolerance', Number(event.target.value)) })] })), settings.strategy === 'dag-rebuild' && ((0, jsx_runtime_19.jsxs)(jsx_runtime_19.Fragment, { children: [(0, jsx_runtime_19.jsx)("div", { className: "visual-layout-sidebar-section-title inline", children: "Branches" }), (0, jsx_runtime_19.jsx)("div", { className: "visual-layout-sidebar-segments branches", role: "group", "aria-label": "Branch direction", children: [
+                            ].map(([strategy, label, detail]) => ((0, jsx_runtime_19.jsxs)("button", { className: settings.strategy === strategy ? 'active' : '', onClick: () => setSettings({ strategy }), children: [(0, jsx_runtime_19.jsx)("strong", { children: label }), (0, jsx_runtime_19.jsx)("small", { children: detail })] }, strategy))) }), (0, jsx_runtime_19.jsx)("small", { className: "visual-layout-sidebar-help", children: (0, visualLayoutUi_1.strategyDescription)(settings.strategy) })] }), settings.strategy !== 'normalize' && ((0, jsx_runtime_19.jsxs)("section", { className: "visual-layout-sidebar-section", children: [(0, jsx_runtime_19.jsx)("div", { className: "visual-layout-sidebar-section-title", children: "Spacing" }), (0, jsx_runtime_19.jsx)("div", { className: "visual-layout-sidebar-segments", role: "group", "aria-label": "Spacing preset", children: ['compact', 'normal', 'spacious'].map((preset) => (0, jsx_runtime_19.jsx)("button", { className: settings.spacingPreset === preset ? 'active' : '', onClick: () => setSpacingPreset(preset), children: (0, visualLayoutUi_1.presetLabel)(preset) }, preset)) }), (0, jsx_runtime_19.jsxs)("div", { className: "visual-layout-sidebar-number-grid", children: [(0, jsx_runtime_19.jsxs)("label", { children: [(0, jsx_runtime_19.jsx)("span", { children: "Horizontal" }), (0, jsx_runtime_19.jsx)("input", { type: "number", min: "0", max: core_12.MAX_LAYOUT_SETTING, value: settings.horizontalGap, onChange: (event) => setGap('horizontalGap', Number(event.target.value)) })] }), (0, jsx_runtime_19.jsxs)("label", { children: [(0, jsx_runtime_19.jsx)("span", { children: "Vertical" }), (0, jsx_runtime_19.jsx)("input", { type: "number", min: "0", max: core_12.MAX_LAYOUT_SETTING, value: settings.verticalGap, onChange: (event) => setGap('verticalGap', Number(event.target.value)) })] })] }), settings.strategy === 'author-normalize' && ((0, jsx_runtime_19.jsxs)("label", { className: "visual-layout-sidebar-field", children: [(0, jsx_runtime_19.jsx)("span", { children: "Connection plane tolerance" }), (0, jsx_runtime_19.jsx)("input", { type: "number", min: "0", max: core_12.MAX_LAYOUT_SETTING, value: settings.alignmentTolerance, onChange: (event) => setGap('alignmentTolerance', Number(event.target.value)) })] })), settings.strategy === 'dag-rebuild' && ((0, jsx_runtime_19.jsxs)(jsx_runtime_19.Fragment, { children: [(0, jsx_runtime_19.jsx)("div", { className: "visual-layout-sidebar-section-title inline", children: "Branches" }), (0, jsx_runtime_19.jsx)("div", { className: "visual-layout-sidebar-segments branches", role: "group", "aria-label": "Branch direction", children: [
                                         ['auto', 'Auto'], ['down', 'Down'], ['up', 'Up'], ['type', 'Type'],
                                     ].map(([direction, label]) => (0, jsx_runtime_19.jsx)("button", { className: settings.dagBranchDirection === direction ? 'active' : '', onClick: () => setSettings({ dagBranchDirection: direction }), children: label }, direction)) })] }))] })), (0, jsx_runtime_19.jsxs)("section", { className: "visual-layout-sidebar-section", children: [(0, jsx_runtime_19.jsx)("div", { className: "visual-layout-sidebar-section-title", children: "Advanced" }), (0, jsx_runtime_19.jsx)(SettingToggle, { label: "Live nodes", detail: settings.strategy === 'normalize' ? 'Normalize translates all positioned metadata.' : 'Include positioned live nodes.', checked: settings.includeLive, disabled: settings.strategy === 'normalize', onChange: (includeLive) => setSettings({ includeLive }) }), (0, jsx_runtime_19.jsx)(SettingToggle, { label: "Floating geometry", detail: "Include floating-node geometry in coverage counters.", checked: settings.includeFloating, onChange: (includeFloating) => setSettings({ includeFloating }) }), (0, jsx_runtime_19.jsxs)("label", { className: "visual-layout-sidebar-field", children: [(0, jsx_runtime_19.jsx)("span", { children: "Floater handling" }), (0, jsx_runtime_19.jsxs)("select", { disabled: settings.strategy === 'normalize', value: settings.floaterMode, onChange: (event) => {
                                         const floaterMode = event.target.value;
@@ -27129,7 +27252,7 @@ define("components/WorkbenchSplitter", ["require", "exports", "react/jsx-runtime
             }, children: (0, jsx_runtime_21.jsx)("span", { "aria-hidden": "true" }) }));
     }
 });
-define("features/inspector/queryTabs", ["require", "exports", "core/index", "features/inspector/visibility"], function (require, exports, core_12, visibility_2) {
+define("features/inspector/queryTabs", ["require", "exports", "core/index", "features/inspector/visibility"], function (require, exports, core_13, visibility_2) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.DIAGNOSTIC_ORDER = void 0;
@@ -27196,7 +27319,7 @@ define("features/inspector/queryTabs", ["require", "exports", "core/index", "fea
                         fileId: occurrence.fileId,
                         nodeId: occurrence.nodeId,
                         location: occurrence.location,
-                        matchedFieldPaths: [(0, core_12.jsonPathKey)(occurrence.jsonPath)],
+                        matchedFieldPaths: [(0, core_13.jsonPathKey)(occurrence.jsonPath)],
                     });
                 }
                 continue;
@@ -27224,7 +27347,7 @@ define("features/inspector/queryTabs", ["require", "exports", "core/index", "fea
                 fileId: change.fileId,
                 nodeId: change.nodeId,
                 location: change.location,
-                matchedFieldPaths: [(0, core_12.jsonPathKey)(change.jsonPath)],
+                matchedFieldPaths: [(0, core_13.jsonPathKey)(change.jsonPath)],
             });
         }
         return [...merged.values()];
@@ -27254,7 +27377,7 @@ define("features/inspector/queryTabs", ["require", "exports", "core/index", "fea
         if (!match.matchedFieldPaths.length)
             return true;
         const matched = new Set(match.matchedFieldPaths);
-        return node.fields.some((field) => matched.has((0, core_12.jsonPathKey)(field.jsonPath)) && (0, visibility_2.fieldVisible)(field, filters));
+        return node.fields.some((field) => matched.has((0, core_13.jsonPathKey)(field.jsonPath)) && (0, visibility_2.fieldVisible)(field, filters));
     }
     function queryTabVisibleMatches(project, tab, changeSet, filters) {
         return queryTabMatches(project, tab, changeSet).flatMap((match) => {
@@ -27279,7 +27402,7 @@ define("features/inspector/queryTabs", ["require", "exports", "core/index", "fea
         });
     }
 });
-define("components/FileTabs", ["require", "exports", "react/jsx-runtime", "react", "core/index", "features/inspector/queryTabs", "store", "features/fileState", "components/FileStateIndicators", "components/LucideIcon"], function (require, exports, jsx_runtime_22, react_19, core_13, queryTabs_1, store_14, fileState_3, FileStateIndicators_2, LucideIcon_13) {
+define("components/FileTabs", ["require", "exports", "react/jsx-runtime", "react", "core/index", "features/inspector/queryTabs", "store", "features/fileState", "components/FileStateIndicators", "components/LucideIcon"], function (require, exports, jsx_runtime_22, react_19, core_14, queryTabs_1, store_14, fileState_3, FileStateIndicators_2, LucideIcon_13) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.workbenchTabDomId = workbenchTabDomId;
@@ -27307,7 +27430,7 @@ define("components/FileTabs", ["require", "exports", "react/jsx-runtime", "react
             return 'WorldGen Performance';
         if (tab.canonical)
             return 'Project Graph';
-        const root = (0, core_13.projectGraphRoots)(project).find((item) => item.path === tab.settings.selectedRootPath);
+        const root = (0, core_14.projectGraphRoots)(project).find((item) => item.path === tab.settings.selectedRootPath);
         return `Project Graph · ${root?.label ?? 'View'}`;
     }
     function workbenchTabDomId(paneId, tabId) {
@@ -27425,7 +27548,7 @@ define("components/FileTabs", ["require", "exports", "react/jsx-runtime", "react
                     }) }), menu && menuTab && ((0, jsx_runtime_22.jsxs)("div", { ref: menuRef, className: "tab-context-menu", style: { left: menu.x, top: menu.y }, onPointerDown: (event) => event.stopPropagation(), role: "menu", "aria-label": `Tab actions for ${tabTitle(menuTab, project)}`, children: [(0, jsx_runtime_22.jsx)("strong", { children: tabTitle(menuTab, project) }), (0, jsx_runtime_22.jsx)("button", { role: "menuitem", onClick: () => { closeTab(menuTab.id, paneId); setMenu(undefined); }, children: "Close" }), (0, jsx_runtime_22.jsx)("button", { role: "menuitem", disabled: paneTabs.length <= 1, onClick: () => { closeOtherTabs(menuTab.id, paneId); setMenu(undefined); }, children: "Close Others" }), (0, jsx_runtime_22.jsx)("button", { role: "menuitem", disabled: menuIndex < 0 || menuIndex === paneTabs.length - 1, onClick: () => { closeTabsToRight(menuTab.id, paneId); setMenu(undefined); }, children: "Close to the Right" }), (0, jsx_runtime_22.jsx)("button", { role: "menuitem", onClick: () => { closeAllTabs(paneId); setMenu(undefined); }, children: "Close All" }), menuPath && (0, jsx_runtime_22.jsx)("div", { className: "tab-context-separator" }), menuPath && (0, jsx_runtime_22.jsx)("button", { role: "menuitem", onClick: () => void copyPath(), children: "Copy Relative Path" }), menuFile && (0, jsx_runtime_22.jsx)("button", { role: "menuitem", onClick: () => { openSourceTab(menuFile.path); setMenu(undefined); }, children: "Open Read-only Source" }), menuFile && (0, jsx_runtime_22.jsx)("button", { role: "menuitem", onClick: () => { revealFileInExplorer(menuFile.id); setMenu(undefined); }, children: "Reveal in Explorer" }), menuTab.kind === 'source' && (0, jsx_runtime_22.jsx)("button", { role: "menuitem", onClick: () => { revealPathInExplorer(menuTab.path); setMenu(undefined); }, children: "Reveal in Explorer" })] }))] }));
     }
 });
-define("components/FilterBar", ["require", "exports", "react/jsx-runtime", "workbench/WorkbenchPaneContext", "react", "core/index", "features/inspector/visibility", "features/inspector/queryTabs", "store", "components/LucideIcon"], function (require, exports, jsx_runtime_23, WorkbenchPaneContext_2, react_20, core_14, visibility_3, queryTabs_2, store_15, LucideIcon_14) {
+define("components/FilterBar", ["require", "exports", "react/jsx-runtime", "workbench/WorkbenchPaneContext", "react", "core/index", "features/inspector/visibility", "features/inspector/queryTabs", "store", "components/LucideIcon"], function (require, exports, jsx_runtime_23, WorkbenchPaneContext_2, react_20, core_15, visibility_3, queryTabs_2, store_15, LucideIcon_14) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.FilterBar = FilterBar;
@@ -27494,10 +27617,10 @@ define("components/FilterBar", ["require", "exports", "react/jsx-runtime", "work
             if (!project)
                 return [];
             // Stable per file/search snapshot: quick slots do not reshuffle when a filter button is toggled.
-            return (0, core_14.getAdaptiveQuickFieldStats)(project, contextNodeRefs(project, activeTab, changeSet), true, 2, 1);
+            return (0, core_15.getAdaptiveQuickFieldStats)(project, contextNodeRefs(project, activeTab, changeSet), true, 2, 1);
         }, [project, activeTabId, activeTab, changeSet]);
         const quickFields = quickStats.map((item) => item.key);
-        const pickerStats = (0, react_20.useMemo)(() => project ? (0, core_14.getScopedFieldStats)(project, {
+        const pickerStats = (0, react_20.useMemo)(() => project ? (0, core_15.getScopedFieldStats)(project, {
             workspace: filters.workspace,
             live: filters.live,
             floating: filters.floating,
@@ -27543,7 +27666,7 @@ define("components/ExplorerSelectionDialog", ["require", "exports", "react/jsx-r
                             } }) }), (0, jsx_runtime_24.jsxs)("footer", { children: [(0, jsx_runtime_24.jsx)("span", { children: renderSummary ? renderSummary(draftSelectedFileIds) : (0, jsx_runtime_24.jsxs)(jsx_runtime_24.Fragment, { children: [(0, jsx_runtime_24.jsx)("strong", { children: draftSelectedFileIds.length }), " files selected"] }) }), (0, jsx_runtime_24.jsxs)("div", { children: [(0, jsx_runtime_24.jsx)("button", { onClick: onCancel, children: "Cancel" }), (0, jsx_runtime_24.jsx)("button", { className: "primary", onClick: commit, children: confirmLabel })] })] })] }) }));
     }
 });
-define("features/visual/VisualLayoutTab", ["require", "exports", "react/jsx-runtime", "react", "core/index", "components/ExplorerSelectionDialog", "support/performanceTracing", "features/visual/visualLayoutUi", "store"], function (require, exports, jsx_runtime_25, react_22, core_15, ExplorerSelectionDialog_1, performanceTracing_9, visualLayoutUi_2, store_16) {
+define("features/visual/VisualLayoutTab", ["require", "exports", "react/jsx-runtime", "react", "core/index", "components/ExplorerSelectionDialog", "support/performanceTracing", "features/visual/visualLayoutUi", "store"], function (require, exports, jsx_runtime_25, react_22, core_16, ExplorerSelectionDialog_1, performanceTracing_9, visualLayoutUi_2, store_16) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.VisualLayoutTab = VisualLayoutTab;
@@ -27583,7 +27706,7 @@ define("features/visual/VisualLayoutTab", ["require", "exports", "react/jsx-runt
         const fileRows = (0, react_22.useMemo)(() => project.files.map((file) => ({ file, ...(0, visualLayoutUi_2.graphFileInfo)(file) })), [project]);
         const eligibleRows = fileRows.filter((row) => row.eligible);
         const selectedFiles = visualSelectedFileIds.map((id) => project.fileMap.get(id)).filter((file) => Boolean(file));
-        const summary = (0, react_22.useMemo)(() => (0, core_15.summarizeGeometry)(selectedFiles, settings.includeLive, settings.includeFloating), [selectedFiles, settings.includeLive, settings.includeFloating]);
+        const summary = (0, react_22.useMemo)(() => (0, core_16.summarizeGeometry)(selectedFiles, settings.includeLive, settings.includeFloating), [selectedFiles, settings.includeLive, settings.includeFloating]);
         const currentProposalKey = (0, react_22.useMemo)(() => JSON.stringify({
             projectVersion,
             fileIds: [...visualSelectedFileIds].sort(),
@@ -27631,7 +27754,7 @@ define("features/visual/VisualLayoutTab", ["require", "exports", "react/jsx-runt
                     includeLive: settings.strategy === 'normalize' ? true : settings.includeLive,
                     floaterMode: settings.strategy === 'normalize' ? 'ignore' : settings.floaterMode,
                 }));
-                const next = operation.phase('proposal-build', () => (0, core_15.buildLayoutProposal)(selectedFiles, layoutSettings), { fileCount: selectedFiles.length });
+                const next = operation.phase('proposal-build', () => (0, core_16.buildLayoutProposal)(selectedFiles, layoutSettings), { fileCount: selectedFiles.length });
                 operation.phase('result.materialize', () => {
                     layoutRenderStartedRef.current = performance.now();
                     layoutRenderTraceRef.current = operation.traceId;
@@ -27658,7 +27781,7 @@ define("features/visual/VisualLayoutTab", ["require", "exports", "react/jsx-runt
                 return;
             const operation = (0, performanceTracing_9.beginPerformanceOperation)('layout.stage', { data: { patchCount: proposal.patches.length, fileCount: proposal.files.length } });
             try {
-                const next = operation.phase('changeset.apply', () => (0, core_15.stageLayoutProposal)(changeSet, proposal));
+                const next = operation.phase('changeset.apply', () => (0, core_16.stageLayoutProposal)(changeSet, proposal));
                 operation.phase('state.commit', () => setChangeSet(next));
                 setStageStatus(`Staged ${proposal.patches.length} layout value change(s). Existing staged layout values on the same JSON paths were replaced.`);
                 operation.end();
@@ -27698,7 +27821,7 @@ define("features/visual/VisualLayoutTab", ["require", "exports", "react/jsx-runt
                     }, renderSummary: (fileIds) => ((0, jsx_runtime_25.jsxs)(jsx_runtime_25.Fragment, { children: [(0, jsx_runtime_25.jsx)("strong", { children: fileIds.length }), " files \u00B7 ", (0, jsx_runtime_25.jsx)("strong", { children: fileIds.reduce((sum, id) => sum + (project.fileMap.get(id)?.nodes.length ?? 0), 0) }), " nodes selected"] })) })] }));
     }
 });
-define("features/project-graph/ProjectGraphView", ["require", "exports", "react/jsx-runtime", "react", "core/index", "store", "support/performanceTracing", "workbench/WorkbenchPaneContext"], function (require, exports, jsx_runtime_26, react_23, core_16, store_17, performanceTracing_10, WorkbenchPaneContext_3) {
+define("features/project-graph/ProjectGraphView", ["require", "exports", "react/jsx-runtime", "react", "core/index", "store", "support/performanceTracing", "workbench/WorkbenchPaneContext"], function (require, exports, jsx_runtime_26, react_23, core_17, store_17, performanceTracing_10, WorkbenchPaneContext_3) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.ProjectGraphView = ProjectGraphView;
@@ -27770,7 +27893,7 @@ define("features/project-graph/ProjectGraphView", ["require", "exports", "react/
         const selectFile = (0, store_17.useWorkbenchStore)((state) => state.selectFile);
         const openReferenceTab = (0, store_17.useWorkbenchStore)((state) => state.openReferenceTab);
         const openSourceTab = (0, store_17.useWorkbenchStore)((state) => state.openSourceTab);
-        const roots = (0, react_23.useMemo)(() => project ? (0, core_16.projectGraphRoots)(project) : [], [project]);
+        const roots = (0, react_23.useMemo)(() => project ? (0, core_17.projectGraphRoots)(project) : [], [project]);
         const liveTab = (0, store_17.useWorkbenchStore)((state) => state.tabs.find((item) => item.id === tab.id && item.kind === 'project-graph'));
         const graphSettings = liveTab?.settings ?? tab.settings;
         const fitRequest = liveTab?.fitRequest ?? tab.fitRequest;
@@ -27833,7 +27956,7 @@ define("features/project-graph/ProjectGraphView", ["require", "exports", "react/
                 setGraphSettings({ selectedRootPath: nextPath, viewport: undefined });
         }, [selectedRoot?.path, graphSettings.selectedRootPath, setGraphSettings]);
         const graph = (0, react_23.useMemo)(() => project
-            ? (0, performanceTracing_10.measurePerformanceSync)('graph.build', () => (0, core_16.buildProjectGraph)(project, selectedRoot?.fileId, graphSettings.densityDepth, graphSettings.includeResources), {
+            ? (0, performanceTracing_10.measurePerformanceSync)('graph.build', () => (0, core_17.buildProjectGraph)(project, selectedRoot?.fileId, graphSettings.densityDepth, graphSettings.includeResources), {
                 data: { projectFiles: project.files.length, rootIndex: selectedRootIndex, rootKind: selectedRoot?.kind ?? 'none', rootCount: roots.length, densityDepth: graphSettings.densityDepth, includeResources: graphSettings.includeResources },
             })
             : undefined, [project, selectedRoot?.fileId, graphSettings.densityDepth, graphSettings.includeResources]);
@@ -28131,7 +28254,7 @@ define("features/worldgen-performance/WorldgenPerformanceTab", ["require", "expo
                                     : (0, jsx_runtime_27.jsx)("button", { onClick: () => void chooseLog(), children: "Change log" })] })] }), (0, jsx_runtime_27.jsxs)("div", { className: "worldgen-performance-status", "aria-live": "polite", children: [(0, jsx_runtime_27.jsxs)("span", { className: "worldgen-performance-status-mode", children: [(0, jsx_runtime_27.jsx)(LucideIcon_15.LucideIcon, { name: "circle-dot", size: 11 }), tab.selection.sourceKind === 'folder' ? 'Newest .log in folder' : 'Selected log file'] }), (0, jsx_runtime_27.jsxs)("span", { children: [(0, jsx_runtime_27.jsx)("strong", { children: "Last check" }), formatCheckedAt(checkedAt)] }), scanSummary && (0, jsx_runtime_27.jsxs)("span", { children: [(0, jsx_runtime_27.jsx)("strong", { children: "Scanned" }), scanSummary] }), (0, jsx_runtime_27.jsxs)("span", { children: [(0, jsx_runtime_27.jsx)("strong", { children: "Refresh" }), "60 s"] }), tab.selection.sourceKind === 'folder' && (0, jsx_runtime_27.jsx)("span", { className: "worldgen-performance-status-note", children: "Top-level .log only \u00B7 .log.lck ignored" })] }), error && (0, jsx_runtime_27.jsxs)("div", { className: "worldgen-performance-error", role: "alert", children: [(0, jsx_runtime_27.jsx)("strong", { children: "WorldGen monitor error" }), (0, jsx_runtime_27.jsx)("span", { children: error })] }), !error && !loading && result && !report && ((0, jsx_runtime_27.jsxs)("div", { className: "worldgen-performance-no-report", role: "status", children: [(0, jsx_runtime_27.jsx)(LucideIcon_15.LucideIcon, { name: "circle-dot", size: 18 }), (0, jsx_runtime_27.jsxs)("div", { children: [(0, jsx_runtime_27.jsx)("h3", { children: "No complete WorldGen performance report found" }), (0, jsx_runtime_27.jsx)("p", { children: "The source stays active and will be checked again automatically." })] })] })), report && summaryMetrics && ((0, jsx_runtime_27.jsxs)(jsx_runtime_27.Fragment, { children: [(0, jsx_runtime_27.jsxs)("div", { className: "worldgen-performance-report-bar", children: [(0, jsx_runtime_27.jsxs)("div", { className: "worldgen-performance-sample-count", "aria-label": "Current sample count", children: [(0, jsx_runtime_27.jsx)("span", { children: "Sample Count" }), (0, jsx_runtime_27.jsx)("strong", { children: formatCount(report.sampleCount) })] }), (0, jsx_runtime_27.jsxs)("div", { className: "worldgen-performance-report-identity", children: [(0, jsx_runtime_27.jsx)("span", { children: "World Structure" }), (0, jsx_runtime_27.jsx)("strong", { children: report.worldStructureName }), (0, jsx_runtime_27.jsxs)("small", { children: [report.timestamp || 'Timestamp unavailable', " \u00B7 latest complete report"] })] })] }), (0, jsx_runtime_27.jsxs)("div", { className: "worldgen-performance-metrics worldgen-performance-kpi-grid", "aria-label": "WorldGen summary metrics", children: [(0, jsx_runtime_27.jsxs)("div", { className: "worldgen-performance-metric primary-metric", children: [(0, jsx_runtime_27.jsx)("span", { children: "Total" }), (0, jsx_runtime_27.jsx)("strong", { children: formatMs(report.totalMs) })] }), (0, jsx_runtime_27.jsxs)("div", { className: "worldgen-performance-metric", children: [(0, jsx_runtime_27.jsx)("span", { children: "Content Generation" }), (0, jsx_runtime_27.jsx)("strong", { children: formatMs(report.contentGenerationMs) })] }), (0, jsx_runtime_27.jsxs)("div", { className: "worldgen-performance-metric", children: [(0, jsx_runtime_27.jsx)("span", { children: "Access Init" }), (0, jsx_runtime_27.jsx)("strong", { children: formatMs(report.accessInitializationMs) })] }), (0, jsx_runtime_27.jsxs)("div", { className: "worldgen-performance-metric", children: [(0, jsx_runtime_27.jsx)("span", { children: "BiomeStage" }), (0, jsx_runtime_27.jsx)("strong", { children: formatMs(summaryMetrics.biomeStageMs) })] }), (0, jsx_runtime_27.jsxs)("div", { className: "worldgen-performance-metric", children: [(0, jsx_runtime_27.jsx)("span", { children: "TerrainStage" }), (0, jsx_runtime_27.jsx)("strong", { children: formatMs(summaryMetrics.terrainStageMs) })] }), (0, jsx_runtime_27.jsxs)("div", { className: "worldgen-performance-metric", children: [(0, jsx_runtime_27.jsx)("span", { children: "PropStage" }), (0, jsx_runtime_27.jsx)("strong", { children: formatMs(summaryMetrics.propStageMs) })] }), (0, jsx_runtime_27.jsxs)("div", { className: "worldgen-performance-metric", children: [(0, jsx_runtime_27.jsx)("span", { children: "TintStage" }), (0, jsx_runtime_27.jsx)("strong", { children: formatMs(summaryMetrics.tintStageMs) })] }), (0, jsx_runtime_27.jsxs)("div", { className: "worldgen-performance-metric", children: [(0, jsx_runtime_27.jsx)("span", { children: "Data Transfer" }), (0, jsx_runtime_27.jsx)("strong", { children: formatMs(report.dataTransferMs) })] }), (0, jsx_runtime_27.jsxs)("div", { className: "worldgen-performance-metric", children: [(0, jsx_runtime_27.jsx)("span", { children: "Material (Sum)" }), (0, jsx_runtime_27.jsx)("strong", { children: formatMs(summaryMetrics.materialSumMs) }), (0, jsx_runtime_27.jsxs)("small", { children: [summaryMetrics.materialTimings.length, " section", summaryMetrics.materialTimings.length === 1 ? '' : 's'] })] })] }), (0, jsx_runtime_27.jsxs)("div", { className: "worldgen-performance-details-stack", children: [(0, jsx_runtime_27.jsxs)("details", { className: "worldgen-performance-section worldgen-performance-collapsible", children: [(0, jsx_runtime_27.jsxs)("summary", { className: "worldgen-performance-section-title", children: [(0, jsx_runtime_27.jsxs)("div", { children: [(0, jsx_runtime_27.jsx)("h3", { children: "Content Generation" }), (0, jsx_runtime_27.jsx)("p", { children: "Exact stage totals, preparation, execution and async start." })] }), (0, jsx_runtime_27.jsx)("span", { className: "worldgen-performance-summary-value", children: formatMs(report.contentGenerationMs) }), (0, jsx_runtime_27.jsx)(LucideIcon_15.LucideIcon, { name: "chevron-right", size: 15, className: "worldgen-performance-chevron" })] }), (0, jsx_runtime_27.jsx)("div", { className: "worldgen-performance-stage-table-wrap", children: (0, jsx_runtime_27.jsxs)("table", { className: "worldgen-performance-stage-table", children: [(0, jsx_runtime_27.jsx)("thead", { children: (0, jsx_runtime_27.jsxs)("tr", { children: [(0, jsx_runtime_27.jsx)("th", { children: "Stage" }), (0, jsx_runtime_27.jsx)("th", { children: "Total" }), (0, jsx_runtime_27.jsx)("th", { children: "Preparation" }), (0, jsx_runtime_27.jsx)("th", { children: "Execution" }), (0, jsx_runtime_27.jsx)("th", { children: "Async Start" })] }) }), (0, jsx_runtime_27.jsx)("tbody", { children: report.stages.map((stage) => ((0, jsx_runtime_27.jsxs)("tr", { children: [(0, jsx_runtime_27.jsxs)("th", { scope: "row", children: [(0, jsx_runtime_27.jsx)("span", { className: "worldgen-stage-index", children: stage.stage }), stage.name] }), (0, jsx_runtime_27.jsx)("td", { children: formatMs(stage.durationMs) }), (0, jsx_runtime_27.jsx)("td", { children: formatMs(stage.preparationMs) }), (0, jsx_runtime_27.jsx)("td", { children: formatMs(stage.executionMs) }), (0, jsx_runtime_27.jsx)("td", { children: formatMs(stage.asyncProcessesStartMs) })] }, `${stage.stage}-${stage.name}`))) })] }) })] }), (0, jsx_runtime_27.jsxs)("details", { className: "worldgen-performance-section worldgen-performance-collapsible", children: [(0, jsx_runtime_27.jsxs)("summary", { className: "worldgen-performance-section-title", children: [(0, jsx_runtime_27.jsxs)("div", { children: [(0, jsx_runtime_27.jsx)("h3", { children: "Material Sections" }), (0, jsx_runtime_27.jsx)("p", { children: "Exact values contributing to the Material (Sum) KPI." })] }), (0, jsx_runtime_27.jsx)("span", { className: "worldgen-performance-summary-value", children: formatMs(summaryMetrics.materialSumMs) }), (0, jsx_runtime_27.jsx)(LucideIcon_15.LucideIcon, { name: "chevron-right", size: 15, className: "worldgen-performance-chevron" })] }), (0, jsx_runtime_27.jsx)("div", { className: "worldgen-performance-value-grid", children: summaryMetrics.materialTimings.length > 0 ? summaryMetrics.materialTimings.map((timing, index) => ((0, jsx_runtime_27.jsxs)("div", { children: [(0, jsx_runtime_27.jsx)("span", { children: timing.label }), (0, jsx_runtime_27.jsx)("strong", { children: formatMs(timing.durationMs) })] }, `${timing.label}-${index}`))) : (0, jsx_runtime_27.jsx)("p", { className: "worldgen-performance-section-empty", children: "No material section timings in this report." }) })] }), (0, jsx_runtime_27.jsxs)("details", { className: "worldgen-performance-section worldgen-performance-collapsible", children: [(0, jsx_runtime_27.jsxs)("summary", { className: "worldgen-performance-section-title", children: [(0, jsx_runtime_27.jsxs)("div", { children: [(0, jsx_runtime_27.jsx)("h3", { children: "Data Transfer" }), (0, jsx_runtime_27.jsx)("p", { children: "Environment, write, tint, entity and block-state timings." })] }), (0, jsx_runtime_27.jsx)("span", { className: "worldgen-performance-summary-value", children: formatMs(report.dataTransferMs) }), (0, jsx_runtime_27.jsx)(LucideIcon_15.LucideIcon, { name: "chevron-right", size: 15, className: "worldgen-performance-chevron" })] }), (0, jsx_runtime_27.jsx)("div", { className: "worldgen-performance-stage-table-wrap", children: (0, jsx_runtime_27.jsxs)("table", { className: "worldgen-performance-stage-table worldgen-performance-key-value-table", children: [(0, jsx_runtime_27.jsx)("thead", { children: (0, jsx_runtime_27.jsxs)("tr", { children: [(0, jsx_runtime_27.jsx)("th", { children: "Entry" }), (0, jsx_runtime_27.jsx)("th", { children: "Time" })] }) }), (0, jsx_runtime_27.jsx)("tbody", { children: summaryMetrics.otherTransferTimings.map((timing, index) => ((0, jsx_runtime_27.jsxs)("tr", { children: [(0, jsx_runtime_27.jsx)("th", { scope: "row", children: timing.label }), (0, jsx_runtime_27.jsx)("td", { children: formatMs(timing.durationMs) })] }, `${timing.label}-${index}`))) })] }) })] }), (0, jsx_runtime_27.jsxs)("details", { className: "worldgen-performance-section worldgen-performance-collapsible", children: [(0, jsx_runtime_27.jsxs)("summary", { className: "worldgen-performance-section-title", children: [(0, jsx_runtime_27.jsxs)("div", { children: [(0, jsx_runtime_27.jsx)("h3", { children: "Memory Usage" }), (0, jsx_runtime_27.jsx)("p", { children: "Buffer memory and per-grid allocation." })] }), (0, jsx_runtime_27.jsx)("span", { className: "worldgen-performance-summary-value", children: formatMb(report.buffersMemoryMb) }), (0, jsx_runtime_27.jsx)(LucideIcon_15.LucideIcon, { name: "chevron-right", size: 15, className: "worldgen-performance-chevron" })] }), (0, jsx_runtime_27.jsx)("div", { className: "worldgen-performance-stage-table-wrap", children: (0, jsx_runtime_27.jsxs)("table", { className: "worldgen-performance-stage-table", children: [(0, jsx_runtime_27.jsx)("thead", { children: (0, jsx_runtime_27.jsxs)("tr", { children: [(0, jsx_runtime_27.jsx)("th", { children: "Grid" }), (0, jsx_runtime_27.jsx)("th", { children: "Index" }), (0, jsx_runtime_27.jsx)("th", { children: "Memory" }), (0, jsx_runtime_27.jsx)("th", { children: "Buffers" })] }) }), (0, jsx_runtime_27.jsx)("tbody", { children: report.memoryGrids.map((grid) => ((0, jsx_runtime_27.jsxs)("tr", { children: [(0, jsx_runtime_27.jsx)("th", { scope: "row", children: grid.name }), (0, jsx_runtime_27.jsx)("td", { children: grid.index }), (0, jsx_runtime_27.jsx)("td", { children: formatMb(grid.memoryFootprintMb) }), (0, jsx_runtime_27.jsx)("td", { children: formatCount(grid.bufferCount) })] }, `${grid.index}-${grid.name}`))) })] }) })] }), (0, jsx_runtime_27.jsxs)("details", { className: "worldgen-performance-section worldgen-performance-collapsible", children: [(0, jsx_runtime_27.jsxs)("summary", { className: "worldgen-performance-section-title", children: [(0, jsx_runtime_27.jsxs)("div", { children: [(0, jsx_runtime_27.jsx)("h3", { children: "Context Dependencies" }), (0, jsx_runtime_27.jsx)("p", { children: "Buffer-column and chunk-column output sizes." })] }), (0, jsx_runtime_27.jsxs)("span", { className: "worldgen-performance-summary-value", children: [report.contextDependencies.length, " stages"] }), (0, jsx_runtime_27.jsx)(LucideIcon_15.LucideIcon, { name: "chevron-right", size: 15, className: "worldgen-performance-chevron" })] }), (0, jsx_runtime_27.jsx)("div", { className: "worldgen-performance-stage-table-wrap", children: (0, jsx_runtime_27.jsxs)("table", { className: "worldgen-performance-stage-table", children: [(0, jsx_runtime_27.jsx)("thead", { children: (0, jsx_runtime_27.jsxs)("tr", { children: [(0, jsx_runtime_27.jsx)("th", { children: "Stage" }), (0, jsx_runtime_27.jsx)("th", { children: "Buffer Column" }), (0, jsx_runtime_27.jsx)("th", { children: "Chunk Column" })] }) }), (0, jsx_runtime_27.jsx)("tbody", { children: report.contextDependencies.map((dependency) => ((0, jsx_runtime_27.jsxs)("tr", { children: [(0, jsx_runtime_27.jsxs)("th", { scope: "row", children: [(0, jsx_runtime_27.jsx)("span", { className: "worldgen-stage-index", children: dependency.stage }), dependency.name] }), (0, jsx_runtime_27.jsx)("td", { children: formatVector(dependency.outputBufferX, dependency.outputBufferZ) }), (0, jsx_runtime_27.jsx)("td", { children: formatVector(dependency.outputChunkX, dependency.outputChunkZ) })] }, `${dependency.stage}-${dependency.name}`))) })] }) })] }), (0, jsx_runtime_27.jsxs)("details", { className: "worldgen-performance-section worldgen-performance-collapsible", children: [(0, jsx_runtime_27.jsxs)("summary", { className: "worldgen-performance-section-title", children: [(0, jsx_runtime_27.jsxs)("div", { children: [(0, jsx_runtime_27.jsx)("h3", { children: "Buffer Cache" }), (0, jsx_runtime_27.jsx)("p", { children: "Requests, misses and miss ratio." })] }), (0, jsx_runtime_27.jsxs)("span", { className: "worldgen-performance-summary-value", children: [report.missedTotalRatioPercent, "% missed"] }), (0, jsx_runtime_27.jsx)(LucideIcon_15.LucideIcon, { name: "chevron-right", size: 15, className: "worldgen-performance-chevron" })] }), (0, jsx_runtime_27.jsxs)("div", { className: "worldgen-performance-cache-grid", children: [(0, jsx_runtime_27.jsxs)("div", { children: [(0, jsx_runtime_27.jsx)("span", { children: "Total requests" }), (0, jsx_runtime_27.jsx)("strong", { children: formatCount(report.totalCacheBufferRequests) })] }), (0, jsx_runtime_27.jsxs)("div", { children: [(0, jsx_runtime_27.jsx)("span", { children: "Missed requests" }), (0, jsx_runtime_27.jsx)("strong", { children: formatCount(report.missedCacheBufferRequests) })] }), (0, jsx_runtime_27.jsxs)("div", { children: [(0, jsx_runtime_27.jsx)("span", { children: "Miss ratio" }), (0, jsx_runtime_27.jsxs)("strong", { children: [report.missedTotalRatioPercent, "%"] })] })] })] }), (0, jsx_runtime_27.jsxs)("details", { className: "worldgen-performance-section worldgen-performance-collapsible worldgen-performance-raw", children: [(0, jsx_runtime_27.jsxs)("summary", { className: "worldgen-performance-section-title", children: [(0, jsx_runtime_27.jsxs)("div", { children: [(0, jsx_runtime_27.jsx)("h3", { children: "Raw Performance Report" }), (0, jsx_runtime_27.jsx)("p", { children: "Original normalized block for exact inspection." })] }), (0, jsx_runtime_27.jsx)("span", { className: "worldgen-performance-summary-value", children: "Raw" }), (0, jsx_runtime_27.jsx)(LucideIcon_15.LucideIcon, { name: "chevron-right", size: 15, className: "worldgen-performance-chevron" })] }), (0, jsx_runtime_27.jsx)("pre", { children: report.rawReport })] })] })] }))] }));
     }
 });
-define("components/FieldMatchesDrawer", ["require", "exports", "react/jsx-runtime", "react", "core/index", "store", "components/WorkbenchDrawer"], function (require, exports, jsx_runtime_28, react_25, core_17, store_19, WorkbenchDrawer_2) {
+define("components/FieldMatchesDrawer", ["require", "exports", "react/jsx-runtime", "react", "core/index", "store", "components/WorkbenchDrawer"], function (require, exports, jsx_runtime_28, react_25, core_18, store_19, WorkbenchDrawer_2) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.FieldMatchesDrawer = FieldMatchesDrawer;
@@ -28140,16 +28263,16 @@ define("components/FieldMatchesDrawer", ["require", "exports", "react/jsx-runtim
         const changeSet = (0, store_19.useWorkbenchStore)((state) => state.changeSet);
         const setChangeSet = (0, store_19.useWorkbenchStore)((state) => state.setChangeSet);
         const focusNode = (0, store_19.useWorkbenchStore)((state) => state.focusNode);
-        const matches = (0, react_25.useMemo)(() => (0, core_17.findMatchingFields)(project, node, field), [project, node, field]);
+        const matches = (0, react_25.useMemo)(() => (0, core_18.findMatchingFields)(project, node, field), [project, node, field]);
         const [selected, setSelected] = (0, react_25.useState)(new Set());
         const hasNewValue = newValue !== field.value;
-        const keyFor = (item) => `${item.fileId}|${(0, core_17.jsonPathKey)(item.field.jsonPath)}`;
+        const keyFor = (item) => `${item.fileId}|${(0, core_18.jsonPathKey)(item.field.jsonPath)}`;
         const stageSelected = () => {
             let next = changeSet;
             for (const item of matches) {
                 if (!selected.has(keyFor(item)))
                     continue;
-                next = (0, core_17.stageFieldChange)(next, {
+                next = (0, core_18.stageFieldChange)(next, {
                     fileId: item.fileId,
                     filePath: item.filePath,
                     nodeId: item.nodeId,
@@ -28178,7 +28301,7 @@ define("components/FieldMatchesDrawer", ["require", "exports", "react/jsx-runtim
                         })] })] }));
     }
 });
-define("components/RenameSymbolDialog", ["require", "exports", "react/jsx-runtime", "react", "core/index", "store", "components/LucideIcon", "workbench/modalFocus"], function (require, exports, jsx_runtime_29, react_26, core_18, store_20, LucideIcon_16, modalFocus_6) {
+define("components/RenameSymbolDialog", ["require", "exports", "react/jsx-runtime", "react", "core/index", "store", "components/LucideIcon", "workbench/modalFocus"], function (require, exports, jsx_runtime_29, react_26, core_19, store_20, LucideIcon_16, modalFocus_6) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.RenameSymbolDialog = RenameSymbolDialog;
@@ -28189,7 +28312,7 @@ define("components/RenameSymbolDialog", ["require", "exports", "react/jsx-runtim
         const { node, field, newName } = request;
         const oldName = String(field.value);
         const symbolType = field.symbolType;
-        const record = project.symbolIndex.get((0, core_18.symbolKey)(symbolType, oldName));
+        const record = project.symbolIndex.get((0, core_19.symbolKey)(symbolType, oldName));
         const liveDefinitions = record?.definitions.filter((item) => item.location === 'live').length ?? 0;
         const floatingDefinitions = record?.definitions.filter((item) => item.location === 'floating').length ?? 0;
         const liveReferences = record?.references.filter((item) => item.location === 'live').length ?? 0;
@@ -28214,7 +28337,7 @@ define("components/RenameSymbolDialog", ["require", "exports", "react/jsx-runtim
             return count;
         }, [includeDefinition, includeReferences, includeLive, includeFloating, liveDefinitions, floatingDefinitions, liveReferences, floatingReferences]);
         const apply = () => {
-            const next = (0, core_18.renameSymbol)(project, changeSet, symbolType, oldName, newName, {
+            const next = (0, core_19.renameSymbol)(project, changeSet, symbolType, oldName, newName, {
                 includeDefinition,
                 includeReferences,
                 includeLive,
@@ -28226,7 +28349,7 @@ define("components/RenameSymbolDialog", ["require", "exports", "react/jsx-runtim
         return ((0, jsx_runtime_29.jsx)("div", { className: "modal-backdrop", onMouseDown: onClose, children: (0, jsx_runtime_29.jsxs)("section", { ref: dialogRef, className: "rename-modal", role: "dialog", "aria-modal": "true", "aria-labelledby": "rename-symbol-title", "aria-describedby": "rename-symbol-description", tabIndex: -1, onMouseDown: (event) => event.stopPropagation(), children: [(0, jsx_runtime_29.jsxs)("header", { children: [(0, jsx_runtime_29.jsxs)("div", { children: [(0, jsx_runtime_29.jsxs)("h3", { id: "rename-symbol-title", children: ["Rename ", symbolType, " symbol"] }), (0, jsx_runtime_29.jsx)("small", { id: "rename-symbol-description", children: "Choose exactly which symbol occurrences are staged." })] }), (0, jsx_runtime_29.jsx)("button", { onClick: onClose, "aria-label": "Close rename dialog", children: (0, jsx_runtime_29.jsx)(LucideIcon_16.LucideIcon, { name: "x", size: 15 }) })] }), (0, jsx_runtime_29.jsxs)("div", { className: "rename-values", children: [(0, jsx_runtime_29.jsx)("code", { children: oldName }), (0, jsx_runtime_29.jsx)("span", { children: "\u2192" }), (0, jsx_runtime_29.jsx)("code", { children: newName })] }), (0, jsx_runtime_29.jsxs)("div", { className: "rename-options", children: [(0, jsx_runtime_29.jsxs)("label", { children: [(0, jsx_runtime_29.jsx)("input", { ref: firstOptionRef, type: "checkbox", checked: includeDefinition, onChange: (event) => setIncludeDefinition(event.target.checked) }), " Definition(s) ", (0, jsx_runtime_29.jsxs)("small", { children: [liveDefinitions, " live \u00B7 ", floatingDefinitions, " floating"] })] }), (0, jsx_runtime_29.jsxs)("label", { children: [(0, jsx_runtime_29.jsx)("input", { type: "checkbox", checked: includeReferences, onChange: (event) => setIncludeReferences(event.target.checked) }), " References ", (0, jsx_runtime_29.jsxs)("small", { children: [liveReferences, " live \u00B7 ", floatingReferences, " floating"] })] }), (0, jsx_runtime_29.jsxs)("div", { className: "rename-location-options", children: [(0, jsx_runtime_29.jsxs)("label", { children: [(0, jsx_runtime_29.jsx)("input", { type: "checkbox", checked: includeLive, onChange: (event) => setIncludeLive(event.target.checked) }), " Live"] }), (0, jsx_runtime_29.jsxs)("label", { children: [(0, jsx_runtime_29.jsx)("input", { type: "checkbox", checked: includeFloating, onChange: (event) => setIncludeFloating(event.target.checked) }), " Floating"] })] })] }), (0, jsx_runtime_29.jsxs)("footer", { children: [(0, jsx_runtime_29.jsxs)("span", { children: [stagedCount, " occurrence(s) will be staged. Seeds and unrelated literals are never propagated."] }), (0, jsx_runtime_29.jsx)("button", { onClick: onClose, children: "Cancel" }), (0, jsx_runtime_29.jsx)("button", { className: "primary", disabled: stagedCount === 0 || oldName === newName, onClick: apply, children: "Stage rename" })] })] }) }));
     }
 });
-define("components/NodeCard", ["require", "exports", "react/jsx-runtime", "react", "core/index", "store", "features/inspector/visibility", "components/FieldMatchesDrawer", "components/RenameSymbolDialog", "workbench/WorkbenchPaneContext", "components/LucideIcon"], function (require, exports, jsx_runtime_30, react_27, core_19, store_21, visibility_4, FieldMatchesDrawer_1, RenameSymbolDialog_1, WorkbenchPaneContext_4, LucideIcon_17) {
+define("components/NodeCard", ["require", "exports", "react/jsx-runtime", "react", "core/index", "store", "features/inspector/visibility", "components/FieldMatchesDrawer", "components/RenameSymbolDialog", "workbench/WorkbenchPaneContext", "components/LucideIcon"], function (require, exports, jsx_runtime_30, react_27, core_20, store_21, visibility_4, FieldMatchesDrawer_1, RenameSymbolDialog_1, WorkbenchPaneContext_4, LucideIcon_17) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.NodeCard = NodeCard;
@@ -28264,7 +28387,7 @@ define("components/NodeCard", ["require", "exports", "react/jsx-runtime", "react
         const primaryField = visibleFields.find((field) => field.category === 'export')
             ?? visibleFields.find((field) => field.category === 'import')
             ?? visibleFields.find((field) => field.category === 'seed');
-        const pendingFor = (field) => changeSet.changes.find((change) => change.fileId === node.fileId && (0, core_19.jsonPathKey)(change.jsonPath) === (0, core_19.jsonPathKey)(field.jsonPath));
+        const pendingFor = (field) => changeSet.changes.find((change) => change.fileId === node.fileId && (0, core_20.jsonPathKey)(change.jsonPath) === (0, core_20.jsonPathKey)(field.jsonPath));
         const parseValue = (field, rawNewValue) => {
             if (typeof field.value === 'number') {
                 const parsed = Number(rawNewValue);
@@ -28287,7 +28410,7 @@ define("components/NodeCard", ["require", "exports", "react/jsx-runtime", "react
                 setRenameRequest({ node, field, newName: newValue });
                 return;
             }
-            setChangeSet((0, core_19.stageFieldChange)(changeSet, {
+            setChangeSet((0, core_20.stageFieldChange)(changeSet, {
                 fileId: node.fileId,
                 filePath: file.path,
                 nodeId: node.id,
@@ -28301,13 +28424,13 @@ define("components/NodeCard", ["require", "exports", "react/jsx-runtime", "react
         };
         return ((0, jsx_runtime_30.jsxs)(jsx_runtime_30.Fragment, { children: [(0, jsx_runtime_30.jsxs)("article", { className: `node-card ${node.location} ${collapsed ? 'collapsed' : ''}`, id: `node-${paneId}-${encodeURIComponent(node.id)}`, children: [(0, jsx_runtime_30.jsxs)("header", { children: [(0, jsx_runtime_30.jsxs)("div", { className: "node-heading", children: [(0, jsx_runtime_30.jsx)("strong", { children: node.nodeKind }), primaryField && (0, jsx_runtime_30.jsx)("span", { className: "node-primary-value", children: String(primaryField.value) }), node.type !== node.nodeKind && (0, jsx_runtime_30.jsx)("small", { children: node.type })] }), (0, jsx_runtime_30.jsxs)("div", { className: "node-header-actions", children: [(0, jsx_runtime_30.jsxs)("div", { className: "node-header-badges", children: [matchedNodeMetadata && (0, jsx_runtime_30.jsx)("span", { className: "search-match-badge", children: matchedNodeLabel }), (0, jsx_runtime_30.jsx)("span", { className: `location-badge ${node.location}`, children: node.location })] }), (0, jsx_runtime_30.jsx)("button", { className: "node-collapse-button", onClick: () => setCollapsed((value) => !value), "aria-expanded": !collapsed, "aria-label": `${collapsed ? 'Expand' : 'Collapse'} ${node.nodeKind} node`, "data-tooltip": collapsed ? 'Expand node' : 'Collapse node', children: (0, jsx_runtime_30.jsx)(LucideIcon_17.LucideIcon, { name: collapsed ? 'chevron-right' : 'chevron-down', size: 15 }) })] })] }), !collapsed && (0, jsx_runtime_30.jsx)("div", { className: "field-list", children: visibleFields.map((field) => {
                                 const record = field.symbolType && typeof field.value === 'string'
-                                    ? project.symbolIndex.get((0, core_19.symbolKey)(field.symbolType, field.value))
+                                    ? project.symbolIndex.get((0, core_20.symbolKey)(field.symbolType, field.value))
                                     : undefined;
                                 const pending = pendingFor(field);
-                                const suggestion = (0, core_19.suggestRule)(changeSet, field.symbolType, field.value);
-                                const draftKey = (0, core_19.jsonPathKey)(field.jsonPath);
+                                const suggestion = (0, core_20.suggestRule)(changeSet, field.symbolType, field.value);
+                                const draftKey = (0, core_20.jsonPathKey)(field.jsonPath);
                                 const displayValue = pending?.newValue ?? field.value;
-                                const matches = field.refactorBehavior === 'symbol' ? [] : (0, core_19.findMatchingFields)(project, node, field);
+                                const matches = field.refactorBehavior === 'symbol' ? [] : (0, core_20.findMatchingFields)(project, node, field);
                                 return ((0, jsx_runtime_30.jsxs)("div", { className: `field-row ${matchedPaths.has(draftKey) ? 'search-match-field' : ''}`, children: [(0, jsx_runtime_30.jsxs)("div", { className: "field-meta", children: [(0, jsx_runtime_30.jsx)("span", { className: `field-category ${field.category}`, children: field.category }), (0, jsx_runtime_30.jsx)("strong", { children: field.key }), matchedPaths.has(draftKey) && (0, jsx_runtime_30.jsx)("span", { className: "search-match-badge", children: matchedFieldLabel })] }), (0, jsx_runtime_30.jsxs)("div", { className: "field-value", children: [(0, jsx_runtime_30.jsx)("span", { className: "current-value", "data-tooltip": String(field.value), children: String(field.value) }), editing && ((0, jsx_runtime_30.jsxs)(jsx_runtime_30.Fragment, { children: [(0, jsx_runtime_30.jsx)("span", { className: "arrow", children: "\u2192" }), (0, jsx_runtime_30.jsx)("input", { value: drafts[draftKey] ?? String(displayValue), onChange: (event) => setDrafts((current) => ({ ...current, [draftKey]: event.target.value })), onKeyDown: (event) => { if (event.key === 'Enter')
                                                                 event.currentTarget.blur(); }, onBlur: (event) => {
                                                                 if (event.target.value !== String(displayValue))
@@ -28329,7 +28452,7 @@ define("components/ReferenceDrawer", ["require", "exports", "react/jsx-runtime",
         return ((0, jsx_runtime_31.jsxs)(WorkbenchDrawer_3.WorkbenchDrawer, { title: record.key.name, subtitle: `${record.key.symbolType} · ${liveRefs} live refs · ${floatingRefs} floating refs`, onClose: onClose, ariaLabel: "references", children: [(0, jsx_runtime_31.jsxs)("div", { className: "drawer-primary-action", children: [(0, jsx_runtime_31.jsx)("button", { className: "primary", onClick: () => onOpenAsTab(record), children: "Open all as tab" }), (0, jsx_runtime_31.jsx)("small", { children: "Creates a stable reference snapshot using the normal Workbench filters." })] }), (0, jsx_runtime_31.jsxs)("div", { className: "drawer-section", children: [(0, jsx_runtime_31.jsxs)("h4", { children: ["Definitions (", record.definitions.length, ")"] }), record.definitions.length === 0 && (0, jsx_runtime_31.jsx)("div", { className: "drawer-empty", children: "No definition in the loaded project." }), record.definitions.map((item, index) => (0, jsx_runtime_31.jsx)(OccurrenceRow, { item: item, onOpen: onOpenOccurrence }, `d-${index}`))] }), (0, jsx_runtime_31.jsxs)("div", { className: "drawer-section", children: [(0, jsx_runtime_31.jsxs)("h4", { children: ["References (", record.references.length, ")"] }), record.references.length === 0 && (0, jsx_runtime_31.jsx)("div", { className: "drawer-empty", children: "No references in the loaded project." }), record.references.map((item, index) => (0, jsx_runtime_31.jsx)(OccurrenceRow, { item: item, onOpen: onOpenOccurrence }, `r-${index}`))] })] }));
     }
 });
-define("features/inspector/InspectorPane", ["require", "exports", "react/jsx-runtime", "react", "io/folderLoader", "core/index", "components/FileTabs", "components/LucideIcon", "components/FilterBar", "features/visual/VisualLayoutTab", "features/project-graph/ProjectGraphView", "features/worldgen-performance/WorldgenPerformanceTab", "components/NodeCard", "components/ReferenceDrawer", "store", "workbench/WorkbenchPaneContext", "features/inspector/visibility", "features/inspector/queryTabs"], function (require, exports, jsx_runtime_32, react_28, folderLoader_6, core_20, FileTabs_1, LucideIcon_18, FilterBar_1, VisualLayoutTab_1, ProjectGraphView_1, WorldgenPerformanceTab_1, NodeCard_1, ReferenceDrawer_1, store_22, WorkbenchPaneContext_5, visibility_5, queryTabs_3) {
+define("features/inspector/InspectorPane", ["require", "exports", "react/jsx-runtime", "react", "io/folderLoader", "core/index", "components/FileTabs", "components/LucideIcon", "components/FilterBar", "features/visual/VisualLayoutTab", "features/project-graph/ProjectGraphView", "features/worldgen-performance/WorldgenPerformanceTab", "components/NodeCard", "components/ReferenceDrawer", "store", "workbench/WorkbenchPaneContext", "features/inspector/visibility", "features/inspector/queryTabs"], function (require, exports, jsx_runtime_32, react_28, folderLoader_6, core_21, FileTabs_1, LucideIcon_18, FilterBar_1, VisualLayoutTab_1, ProjectGraphView_1, WorldgenPerformanceTab_1, NodeCard_1, ReferenceDrawer_1, store_22, WorkbenchPaneContext_5, visibility_5, queryTabs_3) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.InspectorPane = InspectorPane;
@@ -28394,7 +28517,7 @@ define("features/inspector/InspectorPane", ["require", "exports", "react/jsx-run
             }, 80);
             return () => window.clearTimeout(timer);
         }, [activePane, focusedNode, file.id, paneId]);
-        return ((0, jsx_runtime_32.jsxs)(jsx_runtime_32.Fragment, { children: [(0, jsx_runtime_32.jsxs)("div", { className: "file-heading", children: [(0, jsx_runtime_32.jsxs)("div", { children: [(0, jsx_runtime_32.jsxs)("div", { className: "heading-line", children: [(0, jsx_runtime_32.jsx)("h2", { children: file.name }), (0, jsx_runtime_32.jsx)("span", { className: `workspace-badge ${(0, core_20.workspaceCssClass)(file.workspace)}`, children: (0, core_20.workspaceLabel)(file.workspace) })] }), (0, jsx_runtime_32.jsx)("small", { children: file.path })] }), (0, jsx_runtime_32.jsxs)("div", { className: "file-stats", children: [(0, jsx_runtime_32.jsxs)("span", { children: [groups.live.length, " relevant live"] }), (0, jsx_runtime_32.jsxs)("span", { children: [groups.floating.length, " relevant floating"] }), (0, jsx_runtime_32.jsxs)("span", { children: [file.nodes.length, " total nodes"] }), (0, jsx_runtime_32.jsxs)("button", { className: "source-open-button", onClick: () => openSourceTab(file.path), children: [(0, jsx_runtime_32.jsx)(LucideIcon_18.LucideIcon, { name: "file-text", size: 13 }), " Source"] })] })] }), resourceReferences.length > 0 && ((0, jsx_runtime_32.jsxs)("div", { className: "resource-reference-strip", children: [(0, jsx_runtime_32.jsxs)("span", { className: "resource-reference-strip-label", children: [(0, jsx_runtime_32.jsx)(LucideIcon_18.LucideIcon, { name: "link-2", size: 12 }), " Resources"] }), (0, jsx_runtime_32.jsx)("div", { className: "resource-reference-strip-items", children: resourceReferences.map((reference) => ((0, jsx_runtime_32.jsxs)("button", { className: `resource-reference-chip ${reference.status}`, onClick: () => openResourceReferenceTab(reference.target.resourceKind, reference.target.name, reference.target.resourcePath), "data-tooltip": `${reference.relation} · ${reference.status}`, children: [(0, jsx_runtime_32.jsx)("span", { children: reference.target.type }), (0, jsx_runtime_32.jsx)("strong", { children: reference.target.name })] }, reference.id))) })] })), file.parseError && ((0, jsx_runtime_32.jsxs)("div", { className: "source-parse-error", role: "alert", children: [(0, jsx_runtime_32.jsxs)("div", { children: [(0, jsx_runtime_32.jsx)("strong", { children: "JSON parse error" }), (0, jsx_runtime_32.jsx)("span", { children: file.parseError })] }), (0, jsx_runtime_32.jsx)("button", { onClick: () => openSourceTab(file.path), children: "Open read-only source" })] })), filters.live && ((0, jsx_runtime_32.jsxs)("section", { className: "node-section", children: [(0, jsx_runtime_32.jsxs)("button", { className: "section-toggle", onClick: () => setLiveOpen((value) => !value), children: [(0, jsx_runtime_32.jsxs)("span", { children: [(0, jsx_runtime_32.jsx)(LucideIcon_18.LucideIcon, { name: liveOpen ? 'chevron-down' : 'chevron-right', size: 13 }), " Live nodes"] }), (0, jsx_runtime_32.jsx)("small", { children: groups.live.length })] }), liveOpen && (groups.live.length
+        return ((0, jsx_runtime_32.jsxs)(jsx_runtime_32.Fragment, { children: [(0, jsx_runtime_32.jsxs)("div", { className: "file-heading", children: [(0, jsx_runtime_32.jsxs)("div", { children: [(0, jsx_runtime_32.jsxs)("div", { className: "heading-line", children: [(0, jsx_runtime_32.jsx)("h2", { children: file.name }), (0, jsx_runtime_32.jsx)("span", { className: `workspace-badge ${(0, core_21.workspaceCssClass)(file.workspace)}`, children: (0, core_21.workspaceLabel)(file.workspace) })] }), (0, jsx_runtime_32.jsx)("small", { children: file.path })] }), (0, jsx_runtime_32.jsxs)("div", { className: "file-stats", children: [(0, jsx_runtime_32.jsxs)("span", { children: [groups.live.length, " relevant live"] }), (0, jsx_runtime_32.jsxs)("span", { children: [groups.floating.length, " relevant floating"] }), (0, jsx_runtime_32.jsxs)("span", { children: [file.nodes.length, " total nodes"] }), (0, jsx_runtime_32.jsxs)("button", { className: "source-open-button", onClick: () => openSourceTab(file.path), children: [(0, jsx_runtime_32.jsx)(LucideIcon_18.LucideIcon, { name: "file-text", size: 13 }), " Source"] })] })] }), resourceReferences.length > 0 && ((0, jsx_runtime_32.jsxs)("div", { className: "resource-reference-strip", children: [(0, jsx_runtime_32.jsxs)("span", { className: "resource-reference-strip-label", children: [(0, jsx_runtime_32.jsx)(LucideIcon_18.LucideIcon, { name: "link-2", size: 12 }), " Resources"] }), (0, jsx_runtime_32.jsx)("div", { className: "resource-reference-strip-items", children: resourceReferences.map((reference) => ((0, jsx_runtime_32.jsxs)("button", { className: `resource-reference-chip ${reference.status}`, onClick: () => openResourceReferenceTab(reference.target.resourceKind, reference.target.name, reference.target.resourcePath), "data-tooltip": `${reference.relation} · ${reference.status}`, children: [(0, jsx_runtime_32.jsx)("span", { children: reference.target.type }), (0, jsx_runtime_32.jsx)("strong", { children: reference.target.name })] }, reference.id))) })] })), file.parseError && ((0, jsx_runtime_32.jsxs)("div", { className: "source-parse-error", role: "alert", children: [(0, jsx_runtime_32.jsxs)("div", { children: [(0, jsx_runtime_32.jsx)("strong", { children: "JSON parse error" }), (0, jsx_runtime_32.jsx)("span", { children: file.parseError })] }), (0, jsx_runtime_32.jsx)("button", { onClick: () => openSourceTab(file.path), children: "Open read-only source" })] })), filters.live && ((0, jsx_runtime_32.jsxs)("section", { className: "node-section", children: [(0, jsx_runtime_32.jsxs)("button", { className: "section-toggle", onClick: () => setLiveOpen((value) => !value), children: [(0, jsx_runtime_32.jsxs)("span", { children: [(0, jsx_runtime_32.jsx)(LucideIcon_18.LucideIcon, { name: liveOpen ? 'chevron-down' : 'chevron-right', size: 13 }), " Live nodes"] }), (0, jsx_runtime_32.jsx)("small", { children: groups.live.length })] }), liveOpen && (groups.live.length
                             ? groups.live.map((node) => (0, jsx_runtime_32.jsx)(NodeCard_1.NodeCard, { node: node, onShowReferences: setReferences }, `live-${node.id}`))
                             : (0, jsx_runtime_32.jsx)("div", { className: "section-empty", children: "No live nodes match the normal filters." }))] })), filters.floating && ((0, jsx_runtime_32.jsxs)("section", { className: "node-section floating-section", children: [(0, jsx_runtime_32.jsxs)("button", { className: "section-toggle", onClick: () => setFloatingOpen((value) => !value), children: [(0, jsx_runtime_32.jsxs)("span", { children: [(0, jsx_runtime_32.jsx)(LucideIcon_18.LucideIcon, { name: floatingOpen ? 'chevron-down' : 'chevron-right', size: 13 }), " Floating / editor-only nodes"] }), (0, jsx_runtime_32.jsx)("small", { children: groups.floating.length })] }), floatingOpen && (groups.floating.length
                             ? groups.floating.map((node) => (0, jsx_runtime_32.jsx)(NodeCard_1.NodeCard, { node: node, onShowReferences: setReferences }, `floating-${node.id}`))
@@ -28467,7 +28590,7 @@ define("features/inspector/InspectorPane", ["require", "exports", "react/jsx-run
             }
             return [...groups.values()];
         }, [visibleMatches]);
-        return ((0, jsx_runtime_32.jsxs)(jsx_runtime_32.Fragment, { children: [(0, jsx_runtime_32.jsxs)("div", { className: "query-node-results", children: [grouped.map((group) => ((0, jsx_runtime_32.jsxs)("section", { className: "search-file-group", children: [(0, jsx_runtime_32.jsxs)("header", { children: [(0, jsx_runtime_32.jsxs)("div", { children: [(0, jsx_runtime_32.jsx)("strong", { children: group.file.name }), (0, jsx_runtime_32.jsx)("small", { children: group.file.path })] }), (0, jsx_runtime_32.jsxs)("div", { children: [(0, jsx_runtime_32.jsx)("span", { className: `workspace-badge ${(0, core_20.workspaceCssClass)(group.file.workspace)}`, children: (0, core_20.workspaceLabel)(group.file.workspace) }), (0, jsx_runtime_32.jsxs)("small", { children: [group.items.length, " shown"] })] })] }), group.items.map(({ node, match }) => ((0, jsx_runtime_32.jsx)(NodeCard_1.NodeCard, { node: node, onShowReferences: setReferences, matchedFieldPaths: match.matchedFieldPaths, matchedNodeMetadata: match.matchedNodeMetadata, matchedFieldLabel: matchedFieldLabel, matchedNodeLabel: matchedNodeLabel }, `${group.file.id}:${node.location}:${node.id}`)))] }, group.file.id))), !visibleMatches.length && ((0, jsx_runtime_32.jsxs)("div", { className: "search-empty-state", children: [(0, jsx_runtime_32.jsx)("h3", { children: emptyTitle }), (0, jsx_runtime_32.jsx)("p", { children: emptyText })] }))] }), references && (0, jsx_runtime_32.jsx)(ReferenceDrawerHost, { record: references, onClose: () => setReferences(undefined) })] }));
+        return ((0, jsx_runtime_32.jsxs)(jsx_runtime_32.Fragment, { children: [(0, jsx_runtime_32.jsxs)("div", { className: "query-node-results", children: [grouped.map((group) => ((0, jsx_runtime_32.jsxs)("section", { className: "search-file-group", children: [(0, jsx_runtime_32.jsxs)("header", { children: [(0, jsx_runtime_32.jsxs)("div", { children: [(0, jsx_runtime_32.jsx)("strong", { children: group.file.name }), (0, jsx_runtime_32.jsx)("small", { children: group.file.path })] }), (0, jsx_runtime_32.jsxs)("div", { children: [(0, jsx_runtime_32.jsx)("span", { className: `workspace-badge ${(0, core_21.workspaceCssClass)(group.file.workspace)}`, children: (0, core_21.workspaceLabel)(group.file.workspace) }), (0, jsx_runtime_32.jsxs)("small", { children: [group.items.length, " shown"] })] })] }), group.items.map(({ node, match }) => ((0, jsx_runtime_32.jsx)(NodeCard_1.NodeCard, { node: node, onShowReferences: setReferences, matchedFieldPaths: match.matchedFieldPaths, matchedNodeMetadata: match.matchedNodeMetadata, matchedFieldLabel: matchedFieldLabel, matchedNodeLabel: matchedNodeLabel }, `${group.file.id}:${node.location}:${node.id}`)))] }, group.file.id))), !visibleMatches.length && ((0, jsx_runtime_32.jsxs)("div", { className: "search-empty-state", children: [(0, jsx_runtime_32.jsx)("h3", { children: emptyTitle }), (0, jsx_runtime_32.jsx)("p", { children: emptyText })] }))] }), references && (0, jsx_runtime_32.jsx)(ReferenceDrawerHost, { record: references, onClose: () => setReferences(undefined) })] }));
     }
     function SnapshotStaleBanner({ tab }) {
         const projectVersion = (0, store_22.useWorkbenchStore)((state) => state.projectVersion);
@@ -28767,6 +28890,7 @@ define("App", ["require", "exports", "react/jsx-runtime", "react", "commands/com
         const [uiScale, setUiScale] = (0, react_29.useState)(() => (0, appearancePreferences_2.readWorkbenchAppearancePreferences)().uiScale);
         const worldgenToken = (0, store_23.useWorkbenchStore)((state) => state.tabs.find((tab) => tab.kind === 'worldgen-performance')?.selection?.token);
         const desktop = (0, desktopBridge_7.hasDesktopBridge)();
+        const projectRoot = workspace?.projectRoot;
         const publishWorkbenchLayoutSupport = (0, react_29.useCallback)((persisted, nextSidebarWidth = sidebarWidth, nextSplitRatio = splitRatio, splitEnabled = splitViewEnabled) => {
             (0, runtimeDiagnostics_10.setWorkbenchLayoutSupportSnapshot)({
                 version: 2,
@@ -28947,6 +29071,16 @@ define("App", ["require", "exports", "react/jsx-runtime", "react", "commands/com
                 (0, runtimeDiagnostics_10.recordRuntimeError)('worldgen.log.revoke-failed', error);
             });
         }, [desktop, worldgenToken]);
+        (0, react_29.useEffect)(() => {
+            if (watcherTimer.current) {
+                window.clearTimeout(watcherTimer.current);
+                watcherTimer.current = undefined;
+            }
+            watcherPaths.current.clear();
+            watcherReloadGeneration.current += 1;
+            clearExternalChangeNotice();
+            setWatcherError(undefined);
+        }, [clearExternalChangeNotice, projectRoot]);
         (0, react_29.useEffect)(() => {
             if (!desktop)
                 return;

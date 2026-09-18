@@ -846,6 +846,8 @@ struct ApplyRecoveryJournal {
     project_root: String,
     txn_id: u64,
     files: Vec<String>,
+    #[serde(default)]
+    intended_fingerprints: HashMap<String, u64>,
 }
 
 fn app_data_file(app: &AppHandle, name: &str) -> Result<PathBuf, String> {
@@ -921,6 +923,18 @@ fn sync_write(path: &Path, bytes: &[u8], context: &str) -> Result<(), String> {
     file.sync_all().map_err(|error| io_error(context, error))
 }
 
+fn apply_content_fingerprint(bytes: &[u8]) -> u64 {
+    // Stable FNV-1a identity fingerprint for crash/race disambiguation. This is not
+    // a cryptographic trust primitive; it distinguishes Workbench's own intended
+    // bytes from later ordinary filesystem writes without persisting project content.
+    let mut hash = 0xcbf29ce484222325u64;
+    for byte in bytes {
+        hash ^= *byte as u64;
+        hash = hash.wrapping_mul(0x100000001b3);
+    }
+    hash
+}
+
 fn recovery_journal_path(app: &AppHandle) -> Result<PathBuf, String> {
     app_data_file(app, TRANSACTION_JOURNAL_FILE)
 }
@@ -929,9 +943,20 @@ fn recovery_commit_path(app: &AppHandle) -> Result<PathBuf, String> {
     app_data_file(app, TRANSACTION_COMMIT_FILE)
 }
 
+fn read_optional_utf8_file(path: &Path, context: &str) -> Result<Option<String>, String> {
+    match fs::read_to_string(path) {
+        Ok(raw) => Ok(Some(raw)),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(io_error(context, error)),
+    }
+}
+
 fn read_recovery_journal(app: &AppHandle) -> Result<Option<ApplyRecoveryJournal>, String> {
     let path = recovery_journal_path(app)?;
-    let Ok(raw) = fs::read_to_string(&path) else { return Ok(None); };
+    let Some(raw) = read_optional_utf8_file(
+        &path,
+        "Cannot read Apply recovery journal; refusing Apply until recovery metadata is readable",
+    )? else { return Ok(None); };
     let journal = serde_json::from_str::<ApplyRecoveryJournal>(&raw)
         .map_err(|error| io_error("Cannot parse Apply recovery journal; no project files were modified", error))?;
     Ok(Some(journal))
@@ -994,39 +1019,89 @@ fn journal_matches_root(journal: &ApplyRecoveryJournal, root: &Path) -> bool {
     fs::canonicalize(&journal.project_root).map(|value| value == root).unwrap_or(false)
 }
 
-fn recover_journal_for_root(app: &AppHandle, root: &Path, journal: &ApplyRecoveryJournal) -> Result<(), String> {
-    let commit_path = recovery_commit_path(app)?;
-    let committed = fs::read_to_string(&commit_path)
-        .ok()
-        .and_then(|value| value.trim().parse::<u64>().ok())
-        .map(|id| id == journal.txn_id)
-        .unwrap_or(false);
+fn parse_recovery_commit_marker(raw: &str, txn_id: u64) -> Result<bool, String> {
+    let id = raw.trim().parse::<u64>()
+        .map_err(|error| io_error("Cannot parse Apply commit marker; refusing recovery", error))?;
+    if id != txn_id {
+        return Err(format!(
+            "Apply commit marker belongs to transaction {id}, but the recovery journal expects {txn_id}; refusing recovery."
+        ));
+    }
+    Ok(true)
+}
 
+fn recovery_commit_state(app: &AppHandle, txn_id: u64) -> Result<bool, String> {
+    let commit_path = recovery_commit_path(app)?;
+    let Some(raw) = read_optional_utf8_file(
+        &commit_path,
+        "Cannot read Apply commit marker; refusing recovery",
+    )? else { return Ok(false); };
+    parse_recovery_commit_marker(&raw, txn_id)
+}
+
+fn recover_journal_for_root(app: &AppHandle, root: &Path, journal: &ApplyRecoveryJournal) -> Result<(), String> {
+    let committed = recovery_commit_state(app, journal.txn_id)?;
+
+    // Removing staged temp files is always safe: they are transaction-owned and are
+    // never the user-visible target. Do this even if a later ambiguity forces us to
+    // preserve both the current target and its backup for manual reconciliation.
     for raw in journal.files.iter().rev() {
         let target = recovery_target(root, raw)?;
         let temp = transaction_file(&target, journal.txn_id, "tmp")?;
+        remove_recovery_artifact(&temp)?;
+    }
+
+    if !committed {
+        // Preflight every target before restoring any backup. A crash can occur after
+        // Workbench replaced a target but before it wrote the commit marker. If another
+        // process then writes newer content, recovery must never overwrite that newer
+        // file. Older journals without fingerprints are therefore ambiguous only when
+        // both target and backup exist, and fail closed in that state.
+        for raw in &journal.files {
+            let target = recovery_target(root, raw)?;
+            let backup = transaction_file(&target, journal.txn_id, "bak")?;
+            if !backup.exists() || !target.exists() { continue; }
+
+            let backup_metadata = fs::symlink_metadata(&backup)
+                .map_err(|error| io_error("Cannot inspect Apply backup", error))?;
+            if backup_metadata.file_type().is_symlink() || metadata_is_reparse_point(&backup_metadata) || !backup_metadata.is_file() {
+                return Err(format!("Refusing unsafe Apply backup: {}", backup.display()));
+            }
+            let target_metadata = fs::symlink_metadata(&target)
+                .map_err(|error| io_error("Cannot inspect recovery target", error))?;
+            if target_metadata.file_type().is_symlink() || metadata_is_reparse_point(&target_metadata) || !target_metadata.is_file() {
+                return Err(format!("Refusing unsafe Apply recovery target: {}", target.display()));
+            }
+            let expected = journal.intended_fingerprints.get(raw).ok_or_else(|| format!(
+                "Apply recovery for {raw} is ambiguous because this older journal has no intended-content fingerprint. Current file and backup were preserved."
+            ))?;
+            let current = fs::read(&target)
+                .map_err(|error| io_error(&format!("Cannot inspect recovery target {raw}"), error))?;
+            if apply_content_fingerprint(&current) != *expected {
+                return Err(format!(
+                    "Apply recovery refused to overwrite a newer external edit for {raw}. Current file and backup were preserved."
+                ));
+            }
+        }
+    }
+
+    for raw in journal.files.iter().rev() {
+        let target = recovery_target(root, raw)?;
         let backup = transaction_file(&target, journal.txn_id, "bak")?;
         if committed {
-            remove_recovery_artifact(&temp)?;
             remove_recovery_artifact(&backup)?;
             continue;
         }
-
-        remove_recovery_artifact(&temp)?;
-        if backup.exists() {
-            let metadata = fs::symlink_metadata(&backup).map_err(|error| io_error("Cannot inspect Apply backup", error))?;
-            if metadata.file_type().is_symlink() || !metadata.is_file() {
-                return Err(format!("Refusing unsafe Apply backup: {}", backup.display()));
-            }
-            if target.exists() {
-                let target_metadata = fs::symlink_metadata(&target).map_err(|error| io_error("Cannot inspect recovery target", error))?;
-                if target_metadata.file_type().is_symlink() || !target_metadata.is_file() {
-                    return Err(format!("Refusing unsafe Apply recovery target: {}", target.display()));
-                }
-                fs::remove_file(&target).map_err(|error| io_error(&format!("Cannot roll back {}", target.display()), error))?;
-            }
-            fs::rename(&backup, &target).map_err(|error| io_error(&format!("Cannot restore {}", target.display()), error))?;
+        if !backup.exists() { continue; }
+        let metadata = fs::symlink_metadata(&backup).map_err(|error| io_error("Cannot inspect Apply backup", error))?;
+        if metadata.file_type().is_symlink() || metadata_is_reparse_point(&metadata) || !metadata.is_file() {
+            return Err(format!("Refusing unsafe Apply backup: {}", backup.display()));
         }
+        if target.exists() {
+            // Preflight above proved this is still Workbench's intended replacement.
+            fs::remove_file(&target).map_err(|error| io_error(&format!("Cannot roll back {}", target.display()), error))?;
+        }
+        fs::rename(&backup, &target).map_err(|error| io_error(&format!("Cannot restore {}", target.display()), error))?;
     }
 
     clear_recovery_journal(app)?;
@@ -1627,12 +1702,30 @@ fn clear_active_project(state: &State<'_, DesktopState>) -> Result<(), String> {
     Ok(())
 }
 
+fn revalidate_authorized_directory(path: &Path, expected_canonical: &Path, label: &str) -> Result<(), String> {
+    let metadata = fs::symlink_metadata(path)
+        .map_err(|error| io_error(&format!("Cannot revalidate {label}"), error))?;
+    if metadata.file_type().is_symlink() || metadata_is_reparse_point(&metadata) || !metadata.is_dir() {
+        return Err(format!("{label} changed after native authorization; select/open it again."));
+    }
+    let canonical = fs::canonicalize(path)
+        .map_err(|error| io_error(&format!("Cannot canonicalize {label}"), error))?;
+    if canonical != expected_canonical {
+        return Err(format!("{label} changed after native authorization; select/open it again."));
+    }
+    Ok(())
+}
+
 fn active_project(state: &State<'_, DesktopState>) -> Result<ProjectState, String> {
-    state.project.lock().map_err(|_| "Project state lock is poisoned.".to_string())?.clone()
-        .ok_or_else(|| "No project is currently open.".to_string())
+    let project = state.project.lock().map_err(|_| "Project state lock is poisoned.".to_string())?.clone()
+        .ok_or_else(|| "No project is currently open.".to_string())?;
+    revalidate_authorized_directory(&project.root, &project.canonical_root, "Active project root")?;
+    Ok(project)
 }
 
 fn set_active_project(app: &AppHandle, state: &State<'_, DesktopState>, root: PathBuf, trace_id: Option<String>) -> Result<ProjectScan, String> {
+    let _transaction_guard = state.apply_transaction_lock.lock()
+        .map_err(|_| "Apply transaction lock is poisoned.".to_string())?;
     let native_open_started = Instant::now();
     let canonical_started = Instant::now();
     let canonical_root = fs::canonicalize(&root)
@@ -1726,6 +1819,7 @@ fn commit_discovery_roots(
     project: &ProjectState,
     mut discovery_roots: Vec<String>,
 ) -> Result<ProjectScan, String> {
+    revalidate_authorized_directory(&project.root, &project.canonical_root, "Active project root")?;
     discovery_roots.retain(|raw| safe_relative(raw).is_ok());
     discovery_roots.sort();
     discovery_roots.dedup();
@@ -1845,16 +1939,22 @@ fn ensure_output_path(root: &Path, raw: &str) -> Result<PathBuf, String> {
     let target = root.join(relative);
     if target.exists() {
         let metadata = fs::symlink_metadata(&target).map_err(|error| io_error("Cannot inspect output file", error))?;
-        if metadata.file_type().is_symlink() || metadata.is_dir() {
+        if metadata.file_type().is_symlink() || metadata_is_reparse_point(&metadata) || metadata.is_dir() {
             return Err(format!("Unsafe output target: {}", target.display()));
+        }
+        let canonical = fs::canonicalize(&target).map_err(|error| io_error("Cannot canonicalize output target", error))?;
+        if !canonical.starts_with(root) {
+            return Err(format!("Output path escaped the selected output root: {raw}"));
         }
     }
     Ok(target)
 }
 
 fn output_root(state: &State<'_, DesktopState>, token: &str) -> Result<PathBuf, String> {
-    state.output_roots.lock().map_err(|_| "Output state lock is poisoned.".to_string())?.get(token).cloned()
-        .ok_or_else(|| "The selected output folder is no longer registered.".to_string())
+    let root = state.output_roots.lock().map_err(|_| "Output state lock is poisoned.".to_string())?.get(token).cloned()
+        .ok_or_else(|| "The selected output folder is no longer registered.".to_string())?;
+    revalidate_authorized_directory(&root, &root, "Selected output folder")?;
+    Ok(root)
 }
 
 #[tauri::command]
@@ -1891,6 +1991,8 @@ fn revoke_recent_project(payload: RootPayload, app: AppHandle, state: State<'_, 
 
 #[tauri::command]
 async fn reload_project(app: AppHandle, state: State<'_, DesktopState>) -> Result<ProjectScan, String> {
+    let _transaction_guard = state.apply_transaction_lock.lock()
+        .map_err(|_| "Apply transaction lock is poisoned.".to_string())?;
     let project = active_project(&state)?;
     recover_project_transaction(&app, &project.root)?;
     scan_tree(&project.root, &project.discovery_roots)
@@ -1970,6 +2072,8 @@ async fn reset_project_probe_paths(app: AppHandle, state: State<'_, DesktopState
 
 #[tauri::command]
 fn close_project(state: State<'_, DesktopState>) -> Result<ClosedResult, String> {
+    let _transaction_guard = state.apply_transaction_lock.lock()
+        .map_err(|_| "Apply transaction lock is poisoned.".to_string())?;
     clear_active_project(&state)?;
     Ok(ClosedResult { closed: true })
 }
@@ -2188,7 +2292,9 @@ async fn install_update(
 }
 
 #[tauri::command]
-fn exit_application(app: AppHandle) -> Result<ExitingResult, String> {
+fn exit_application(app: AppHandle, state: State<'_, DesktopState>) -> Result<ExitingResult, String> {
+    let _transaction_guard = state.apply_transaction_lock.lock()
+        .map_err(|_| "Apply transaction lock is poisoned.".to_string())?;
     app.exit(0);
     Ok(ExitingResult { exiting: true })
 }
@@ -2236,40 +2342,92 @@ async fn check_conflicts(payload: FilesPayload, state: State<'_, DesktopState>) 
     Ok(ConflictsResult { conflicts })
 }
 
+#[derive(Debug)]
+struct PreparedApplyFile {
+    target: PathBuf,
+    temp: PathBuf,
+    backup: PathBuf,
+    display: String,
+    expected: String,
+    text: String,
+}
+
 fn transaction_file(path: &Path, txn_id: u64, kind: &str) -> Result<PathBuf, String> {
     let name = path.file_name().and_then(|value| value.to_str()).ok_or_else(|| "Project file name is not valid UTF-8.".to_string())?;
     Ok(path.with_file_name(format!(".{name}.hgw-txn-{txn_id}.{kind}")))
 }
 
-fn rollback_prepared(prepared: &[(PathBuf, PathBuf, PathBuf, String)]) -> Result<(), String> {
+fn secure_original_for_apply(entry: &PreparedApplyFile) -> Result<bool, String> {
+    fs::rename(&entry.target, &entry.backup)
+        .map_err(|error| io_error(&format!("Cannot secure original before apply: {}", entry.target.display()), error))?;
+    let current = fs::read_to_string(&entry.backup)
+        .map_err(|error| io_error(&format!("Cannot revalidate apply source: {}", entry.display), error))?;
+    Ok(current == entry.expected)
+}
+
+fn sync_committed_apply_target(entry: &PreparedApplyFile) -> Result<(), String> {
+    // The atomic rename installed Workbench's staged file. Do not compare content and
+    // roll back here: a later external writer is newer authority and must be allowed to
+    // win. The watcher will surface a differing post-Apply write.
+    fs::File::open(&entry.target)
+        .and_then(|file| file.sync_all())
+        .map_err(|error| io_error(&format!("Cannot sync applied target: {}", entry.display), error))
+}
+
+fn rollback_prepared(prepared: &[PreparedApplyFile]) -> Result<(), String> {
     let mut failures = Vec::new();
-    for (target, temp, backup, _) in prepared.iter().rev() {
-        if temp.exists() {
-            if let Err(error) = fs::remove_file(temp) {
-                failures.push(io_error(&format!("Cannot remove staged Apply file {}", temp.display()), error));
-            }
-        }
-        if backup.exists() {
-            let mut target_ready = true;
-            if target.exists() {
-                if let Err(error) = fs::remove_file(target) {
-                    failures.push(io_error(&format!("Cannot remove partially committed Apply target {}", target.display()), error));
-                    target_ready = false;
-                }
-            }
-            if target_ready {
-                if let Err(error) = fs::rename(backup, target) {
-                    failures.push(io_error(&format!("Cannot restore Apply backup {}", backup.display()), error));
-                }
+
+    // Temp files are transaction-owned, so they may always be removed independently.
+    for entry in prepared.iter().rev() {
+        if entry.temp.exists() {
+            if let Err(error) = fs::remove_file(&entry.temp) {
+                failures.push(io_error(&format!("Cannot remove staged Apply file {}", entry.temp.display()), error));
             }
         }
     }
-    if failures.is_empty() { Ok(()) } else { Err(failures.join(" | ")) }
+
+    // Before restoring any backup, prove every currently visible target is still the
+    // replacement Workbench wrote. This prevents partial rollback and, critically,
+    // prevents deleting a newer external edit that arrived after Workbench's rename.
+    for entry in prepared.iter().rev() {
+        if !entry.backup.exists() || !entry.target.exists() { continue; }
+        let metadata = match fs::symlink_metadata(&entry.target) {
+            Ok(metadata) => metadata,
+            Err(error) => {
+                failures.push(io_error(&format!("Cannot inspect partially committed Apply target {}", entry.target.display()), error));
+                continue;
+            }
+        };
+        if metadata.file_type().is_symlink() || metadata_is_reparse_point(&metadata) || !metadata.is_file() {
+            failures.push(format!("Refusing to overwrite unsafe or newer Apply target {}", entry.target.display()));
+            continue;
+        }
+        match fs::read_to_string(&entry.target) {
+            Ok(current) if current == entry.text => {}
+            Ok(_) => failures.push(format!(
+                "Refusing to overwrite a newer external edit at {}; current file and backup were preserved.",
+                entry.display
+            )),
+            Err(error) => failures.push(io_error(&format!("Cannot inspect partially committed Apply target {}", entry.target.display()), error)),
+        }
+    }
+    if !failures.is_empty() { return Err(failures.join(" | ")); }
+
+    for entry in prepared.iter().rev() {
+        if !entry.backup.exists() { continue; }
+        if entry.target.exists() {
+            fs::remove_file(&entry.target)
+                .map_err(|error| io_error(&format!("Cannot remove partially committed Apply target {}", entry.target.display()), error))?;
+        }
+        fs::rename(&entry.backup, &entry.target)
+            .map_err(|error| io_error(&format!("Cannot restore Apply backup {}", entry.backup.display()), error))?;
+    }
+    Ok(())
 }
 
 fn rollback_apply_failure(
     app: &AppHandle,
-    prepared: &[(PathBuf, PathBuf, PathBuf, String)],
+    prepared: &[PreparedApplyFile],
     primary_error: String,
 ) -> String {
     match rollback_prepared(prepared) {
@@ -2283,6 +2441,20 @@ fn rollback_apply_failure(
             "{primary_error} Automatic rollback was incomplete: {rollback_error}. Recovery journal and backups were retained; reopen this project to retry recovery before applying more changes."
         ),
     }
+}
+
+fn rollback_apply_conflict(
+    app: &AppHandle,
+    prepared: &[PreparedApplyFile],
+    display: &str,
+) -> Result<ApplyResult, String> {
+    rollback_prepared(prepared).map_err(|rollback_error| format!(
+        "Apply detected a concurrent external change for {display}, but automatic rollback was incomplete: {rollback_error}. Recovery metadata and backups were retained; reopen this project before applying more changes."
+    ))?;
+    clear_recovery_journal(app).map_err(|metadata_error| format!(
+        "Apply detected a concurrent external change for {display} and rolled back safely, but recovery metadata could not be cleared: {metadata_error}. Reopen this project before applying more changes."
+    ))?;
+    Ok(ApplyResult { conflicts: vec![display.to_string()], written: 0 })
 }
 
 #[tauri::command]
@@ -2312,7 +2484,7 @@ fn apply_project_files(payload: ApplyPayload, app: AppHandle, state: State<'_, D
             Err(_) => { conflicts.push(file.path); continue; }
         };
         match fs::read_to_string(&path) {
-            Ok(current) if current == file.expected => resolved.push((path, file.path, file.text)),
+            Ok(current) if current == file.expected => resolved.push((path, file.path, file.expected, file.text)),
             _ => conflicts.push(file.path),
         }
     }
@@ -2326,12 +2498,15 @@ fn apply_project_files(payload: ApplyPayload, app: AppHandle, state: State<'_, D
     let journal = ApplyRecoveryJournal {
         project_root: project.canonical_root.to_string_lossy().to_string(),
         txn_id,
-        files: resolved.iter().map(|(_, display, _)| display.clone()).collect(),
+        files: resolved.iter().map(|(_, display, _, _)| display.clone()).collect(),
+        intended_fingerprints: resolved.iter()
+            .map(|(_, display, _, text)| (display.clone(), apply_content_fingerprint(text.as_bytes())))
+            .collect(),
     };
     write_recovery_journal(&app, &journal)?;
-    let mut prepared: Vec<(PathBuf, PathBuf, PathBuf, String)> = Vec::with_capacity(resolved.len());
+    let mut prepared: Vec<PreparedApplyFile> = Vec::with_capacity(resolved.len());
 
-    for (target, display, text) in resolved {
+    for (target, display, expected, text) in resolved {
         let temp = transaction_file(&target, txn_id, "tmp")?;
         let backup = transaction_file(&target, txn_id, "bak")?;
         if temp.exists() || backup.exists() {
@@ -2341,22 +2516,20 @@ fn apply_project_files(payload: ApplyPayload, app: AppHandle, state: State<'_, D
                 format!("Apply transaction artifact already exists for {display}. Reopen the project to recover it safely."),
             ));
         }
-        // Register the current artifacts before I/O starts. fs::copy/fs::write can fail
-        // after creating a partial temp file; recovery must still know to remove it.
-        prepared.push((target, temp, backup, text));
-        let (target, temp, _, text) = prepared.last().expect("prepared Apply entry");
-        if let Err(error) = fs::copy(target, temp) {
-            let primary = io_error(&format!("Cannot prepare apply transaction for {display}"), error);
+        prepared.push(PreparedApplyFile { target, temp, backup, display, expected, text });
+        let entry = prepared.last().expect("prepared Apply entry");
+        if let Err(error) = fs::copy(&entry.target, &entry.temp) {
+            let primary = io_error(&format!("Cannot prepare apply transaction for {}", entry.display), error);
             return Err(rollback_apply_failure(&app, &prepared, primary));
         }
-        if let Err(error) = fs::write(temp, text.as_bytes()) {
-            let primary = io_error(&format!("Cannot stage apply transaction for {display}"), error);
+        if let Err(error) = fs::write(&entry.temp, entry.text.as_bytes()) {
+            let primary = io_error(&format!("Cannot stage apply transaction for {}", entry.display), error);
             return Err(rollback_apply_failure(&app, &prepared, primary));
         }
-        match fs::File::open(temp).and_then(|file| file.sync_all()) {
+        match fs::File::open(&entry.temp).and_then(|file| file.sync_all()) {
             Ok(()) => {}
             Err(error) => {
-                let primary = io_error(&format!("Cannot sync staged apply transaction for {display}"), error);
+                let primary = io_error(&format!("Cannot sync staged apply transaction for {}", entry.display), error);
                 return Err(rollback_apply_failure(&app, &prepared, primary));
             }
         }
@@ -2364,19 +2537,31 @@ fn apply_project_files(payload: ApplyPayload, app: AppHandle, state: State<'_, D
 
     {
         let mut active = state.active_write_paths.lock().map_err(|_| "Active-write state lock is poisoned.".to_string())?;
-        for (target, _, _, _) in &prepared { active.insert(target.clone()); }
+        for entry in &prepared { active.insert(entry.target.clone()); }
     }
 
-    for index in 0..prepared.len() {
-        let (target, temp, backup, _) = &prepared[index];
-        if let Err(error) = fs::rename(target, backup) {
+    for entry in &prepared {
+        match secure_original_for_apply(entry) {
+            Ok(true) => {}
+            Ok(false) => {
+                if let Ok(mut active) = state.active_write_paths.lock() { active.clear(); }
+                return rollback_apply_conflict(&app, &prepared, &entry.display);
+            }
+            Err(primary) => {
+                if let Ok(mut active) = state.active_write_paths.lock() { active.clear(); }
+                return Err(rollback_apply_failure(&app, &prepared, primary));
+            }
+        }
+        if let Err(error) = fs::rename(&entry.temp, &entry.target) {
             if let Ok(mut active) = state.active_write_paths.lock() { active.clear(); }
-            let primary = io_error(&format!("Cannot secure original before apply: {}", target.display()), error);
+            let primary = io_error(&format!("Cannot commit apply transaction: {}", entry.target.display()), error);
             return Err(rollback_apply_failure(&app, &prepared, primary));
         }
-        if let Err(error) = fs::rename(temp, target) {
+    }
+
+    for entry in &prepared {
+        if let Err(primary) = sync_committed_apply_target(entry) {
             if let Ok(mut active) = state.active_write_paths.lock() { active.clear(); }
-            let primary = io_error(&format!("Cannot commit apply transaction: {}", target.display()), error);
             return Err(rollback_apply_failure(&app, &prepared, primary));
         }
     }
@@ -2391,16 +2576,16 @@ fn apply_project_files(payload: ApplyPayload, app: AppHandle, state: State<'_, D
     }
 
     if let Ok(mut suppression) = state.watch_suppression.lock() {
-        for (target, _, _, text) in &prepared {
-            suppression.insert(target.clone(), SuppressedWrite { expected: text.clone(), until: Instant::now() + Duration::from_secs(2) });
+        for entry in &prepared {
+            suppression.insert(entry.target.clone(), SuppressedWrite { expected: entry.text.clone(), until: Instant::now() + Duration::from_secs(2) });
         }
     }
     if let Ok(mut active) = state.active_write_paths.lock() { active.clear(); }
 
     let mut cleanup_complete = true;
-    for (_, temp, backup, _) in &prepared {
-        if temp.exists() && fs::remove_file(temp).is_err() { cleanup_complete = false; }
-        if backup.exists() && fs::remove_file(backup).is_err() { cleanup_complete = false; }
+    for entry in &prepared {
+        if entry.temp.exists() && fs::remove_file(&entry.temp).is_err() { cleanup_complete = false; }
+        if entry.backup.exists() && fs::remove_file(&entry.backup).is_err() { cleanup_complete = false; }
     }
     if cleanup_complete { clear_recovery_journal(&app)?; }
 
@@ -2408,6 +2593,11 @@ fn apply_project_files(payload: ApplyPayload, app: AppHandle, state: State<'_, D
 }
 
 fn select_worldgen_log_from_folder(folder: &Path) -> Result<PathBuf, String> {
+    let canonical_folder = fs::canonicalize(folder)
+        .map_err(|error| io_error("Cannot canonicalize selected WorldGen log folder", error))?;
+    if !canonical_folder.is_dir() {
+        return Err("Selected WorldGen log folder is no longer a directory.".to_string());
+    }
     let mut newest: Option<(std::time::SystemTime, String, PathBuf)> = None;
     for entry in fs::read_dir(folder)
         .map_err(|error| io_error("Cannot read selected WorldGen log folder", error))?
@@ -2429,10 +2619,14 @@ fn select_worldgen_log_from_folder(folder: &Path) -> Result<PathBuf, String> {
         .map(|(_, _, path)| path)
         .ok_or_else(|| "No .log file was found in the selected folder.".to_string())?;
     let metadata = fs::symlink_metadata(&selected).map_err(|error| io_error("Cannot inspect resolved WorldGen log", error))?;
-    if metadata.file_type().is_symlink() || !metadata.is_file() {
+    if metadata.file_type().is_symlink() || metadata_is_reparse_point(&metadata) || !metadata.is_file() {
         return Err("Resolved WorldGen log must be a regular local file.".to_string());
     }
-    fs::canonicalize(selected).map_err(|error| io_error("Cannot canonicalize resolved WorldGen log", error))
+    let canonical = fs::canonicalize(selected).map_err(|error| io_error("Cannot canonicalize resolved WorldGen log", error))?;
+    if !canonical.starts_with(&canonical_folder) {
+        return Err("Resolved WorldGen log escaped the selected log folder; choose the folder again.".to_string());
+    }
+    Ok(canonical)
 }
 
 #[tauri::command]
@@ -2444,7 +2638,7 @@ async fn select_worldgen_log(app: AppHandle, state: State<'_, DesktopState>) -> 
     let Some(selected) = selected else { return Ok(None); };
     let raw = selected.into_path().map_err(|_| "The selected log is not a local filesystem path.".to_string())?;
     let metadata = fs::symlink_metadata(&raw).map_err(|error| io_error("Cannot inspect selected WorldGen log", error))?;
-    if metadata.file_type().is_symlink() || !metadata.is_file() {
+    if metadata.file_type().is_symlink() || metadata_is_reparse_point(&metadata) || !metadata.is_file() {
         return Err("Selected WorldGen log must be a regular local file, not a symlink, junction or directory.".to_string());
     }
     let path = fs::canonicalize(&raw).map_err(|error| io_error("Cannot canonicalize selected WorldGen log", error))?;
@@ -2463,7 +2657,7 @@ async fn select_worldgen_log_folder(app: AppHandle, state: State<'_, DesktopStat
     let Some(selected) = selected else { return Ok(None); };
     let raw = selected.into_path().map_err(|_| "The selected log folder is not a local filesystem path.".to_string())?;
     let metadata = fs::symlink_metadata(&raw).map_err(|error| io_error("Cannot inspect selected WorldGen log folder", error))?;
-    if metadata.file_type().is_symlink() || !metadata.is_dir() {
+    if metadata.file_type().is_symlink() || metadata_is_reparse_point(&metadata) || !metadata.is_dir() {
         return Err("Selected WorldGen log folder must be a regular local directory, not a symlink or junction.".to_string());
     }
     let path = fs::canonicalize(&raw).map_err(|error| io_error("Cannot canonicalize selected WorldGen log folder", error))?;
@@ -2486,10 +2680,13 @@ async fn read_worldgen_performance(payload: WorldgenLogPayload, state: State<'_,
         .get(&payload.token).cloned().ok_or_else(|| "The selected WorldGen log source is no longer registered. Choose it again.".to_string())?;
     let path = match source {
         WorldgenLogSource::File(path) => path,
-        WorldgenLogSource::Folder(folder) => select_worldgen_log_from_folder(&folder)?
+        WorldgenLogSource::Folder(folder) => {
+            revalidate_authorized_directory(&folder, &folder, "Selected WorldGen log folder")?;
+            select_worldgen_log_from_folder(&folder)?
+        }
     };
     let metadata = fs::symlink_metadata(&path).map_err(|error| io_error("Cannot inspect selected WorldGen log", error))?;
-    if metadata.file_type().is_symlink() || !metadata.is_file() {
+    if metadata.file_type().is_symlink() || metadata_is_reparse_point(&metadata) || !metadata.is_file() {
         return Err("The selected WorldGen log is no longer a regular local file. Choose it again.".to_string());
     }
     let (bytes_scanned, lines_scanned, truncated, report) = read_worldgen_performance_log(&path)?;
@@ -2728,6 +2925,68 @@ mod windows_scan_safety_tests {
     use std::time::{SystemTime, UNIX_EPOCH};
 
     #[test]
+    fn authorized_directory_retarget_is_rejected() {
+        let unique = SystemTime::now().duration_since(UNIX_EPOCH).expect("clock").as_nanos();
+        let base = std::env::temp_dir().join(format!("hgw-authority-retarget-{unique}"));
+        let authorized = base.join("authorized");
+        let moved = base.join("authorized-original");
+        let outside = base.join("outside");
+        fs::create_dir_all(&authorized).expect("create authorized fixture");
+        fs::create_dir_all(&outside).expect("create outside fixture");
+        let expected = fs::canonicalize(&authorized).expect("canonicalize authorized fixture");
+        fs::rename(&authorized, &moved).expect("move authorized fixture");
+        let status = Command::new("cmd").arg("/C").arg("mklink").arg("/J").arg(&authorized).arg(&outside)
+            .status().expect("run mklink /J");
+        assert!(status.success());
+        revalidate_authorized_directory(&authorized, &expected, "Fixture authority")
+            .expect_err("retargeted authority must be rejected");
+        fs::remove_dir(&authorized).expect("remove authority junction");
+        fs::remove_dir_all(&base).expect("clean authority fixture");
+    }
+
+    #[test]
+    fn output_authority_retarget_is_rejected_before_write() {
+        let unique = SystemTime::now().duration_since(UNIX_EPOCH).expect("clock").as_nanos();
+        let base = std::env::temp_dir().join(format!("hgw-output-retarget-{unique}"));
+        let output = base.join("output");
+        let moved = base.join("output-original");
+        let outside = base.join("outside");
+        fs::create_dir_all(&output).expect("create output fixture");
+        fs::create_dir_all(&outside).expect("create outside fixture");
+        let expected = fs::canonicalize(&output).expect("canonicalize output fixture");
+        fs::rename(&output, &moved).expect("move output fixture");
+        let status = Command::new("cmd").arg("/C").arg("mklink").arg("/J").arg(&output).arg(&outside)
+            .status().expect("run mklink /J");
+        assert!(status.success());
+        revalidate_authorized_directory(&output, &expected, "Selected output folder")
+            .expect_err("retargeted output authority must be rejected");
+        assert!(!outside.join("escape.json").exists());
+        fs::remove_dir(&output).expect("remove output junction");
+        fs::remove_dir_all(&base).expect("clean output fixture");
+    }
+
+    #[test]
+    fn worldgen_folder_authority_retarget_is_rejected() {
+        let unique = SystemTime::now().duration_since(UNIX_EPOCH).expect("clock").as_nanos();
+        let base = std::env::temp_dir().join(format!("hgw-worldgen-retarget-{unique}"));
+        let folder = base.join("logs");
+        let moved = base.join("logs-original");
+        let outside = base.join("outside");
+        fs::create_dir_all(&folder).expect("create log folder fixture");
+        fs::create_dir_all(&outside).expect("create outside fixture");
+        fs::write(outside.join("outside.log"), b"outside").expect("write outside log");
+        let expected = fs::canonicalize(&folder).expect("canonicalize log folder fixture");
+        fs::rename(&folder, &moved).expect("move log folder fixture");
+        let status = Command::new("cmd").arg("/C").arg("mklink").arg("/J").arg(&folder).arg(&outside)
+            .status().expect("run mklink /J");
+        assert!(status.success());
+        revalidate_authorized_directory(&folder, &expected, "Selected WorldGen log folder")
+            .expect_err("retargeted WorldGen authority must be rejected");
+        fs::remove_dir(&folder).expect("remove WorldGen junction");
+        fs::remove_dir_all(&base).expect("clean WorldGen fixture");
+    }
+
+    #[test]
     fn project_scan_rejects_external_junction_and_reports_reparse() {
         let unique = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -2907,6 +3166,101 @@ Total: 1 ms
     }
 
     #[test]
+    fn optional_recovery_metadata_read_fails_closed_on_non_file() {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system clock before UNIX epoch")
+            .as_nanos();
+        let base = std::env::temp_dir().join(format!("hgw-recovery-metadata-{unique}"));
+        fs::create_dir_all(&base).expect("create recovery metadata fixture");
+        let missing = base.join("missing.json");
+        assert!(read_optional_utf8_file(&missing, "read optional metadata").expect("missing is allowed").is_none());
+        let not_a_file = base.join("journal.json");
+        fs::create_dir(&not_a_file).expect("create directory at journal path");
+        let error = read_optional_utf8_file(&not_a_file, "read recovery metadata")
+            .expect_err("non-file recovery metadata must fail closed");
+        assert!(error.contains("read recovery metadata"));
+        fs::remove_dir_all(&base).expect("clean recovery metadata fixture");
+    }
+
+    #[test]
+    fn recovery_commit_marker_requires_exact_transaction_identity() {
+        assert!(parse_recovery_commit_marker("42
+", 42).expect("matching marker"));
+        assert!(parse_recovery_commit_marker("41", 42).expect_err("mismatch must fail closed").contains("expects 42"));
+        assert!(parse_recovery_commit_marker("not-a-number", 42).expect_err("invalid marker must fail closed").contains("Cannot parse Apply commit marker"));
+    }
+
+    #[test]
+    fn late_apply_conflict_preserves_external_change_for_rollback() {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system clock before UNIX epoch")
+            .as_nanos();
+        let base = std::env::temp_dir().join(format!("hgw-apply-late-conflict-{unique}"));
+        fs::create_dir_all(&base).expect("create late-conflict fixture");
+        let target = base.join("target.json");
+        let temp = base.join("temp.json");
+        let backup = base.join("backup.json");
+        fs::write(&target, br#"{"value":2}"#).expect("write external edit");
+        fs::write(&temp, br#"{"value":3}"#).expect("write staged edit");
+        let prepared = vec![PreparedApplyFile {
+            target: target.clone(),
+            temp: temp.clone(),
+            backup: backup.clone(),
+            display: "target.json".to_string(),
+            expected: r#"{"value":1}"#.to_string(),
+            text: r#"{"value":3}"#.to_string(),
+        }];
+
+        assert!(!secure_original_for_apply(&prepared[0]).expect("secure current file"));
+        assert!(backup.exists(), "external edit must be captured as the backup");
+        rollback_prepared(&prepared).expect("rollback late conflict");
+        assert_eq!(fs::read_to_string(&target).expect("restored target"), r#"{"value":2}"#);
+        assert!(!temp.exists());
+        assert!(!backup.exists());
+
+        fs::remove_dir_all(&base).expect("clean late-conflict fixture");
+    }
+
+    #[test]
+    fn rollback_preserves_newer_external_target_and_backup() {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system clock before UNIX epoch")
+            .as_nanos();
+        let base = std::env::temp_dir().join(format!("hgw-apply-late-writer-{unique}"));
+        fs::create_dir_all(&base).expect("create late-writer fixture");
+        let target = base.join("target.json");
+        let temp = base.join("temp.json");
+        let backup = base.join("backup.json");
+        fs::write(&target, br#"{"value":4}"#).expect("write newer external target");
+        fs::write(&temp, br#"{"value":3}"#).expect("write stale transaction temp");
+        fs::write(&backup, br#"{"value":1}"#).expect("write original backup");
+        let prepared = vec![PreparedApplyFile {
+            target: target.clone(),
+            temp: temp.clone(),
+            backup: backup.clone(),
+            display: "target.json".to_string(),
+            expected: r#"{"value":1}"#.to_string(),
+            text: r#"{"value":3}"#.to_string(),
+        }];
+
+        let error = rollback_prepared(&prepared).expect_err("newer external target must make rollback fail closed");
+        assert!(error.contains("newer external edit"));
+        assert_eq!(fs::read_to_string(&target).expect("newer target preserved"), r#"{"value":4}"#);
+        assert_eq!(fs::read_to_string(&backup).expect("backup preserved"), r#"{"value":1}"#);
+        assert!(!temp.exists(), "transaction-owned temp may still be cleaned");
+        fs::remove_dir_all(&base).expect("clean late-writer fixture");
+    }
+
+    #[test]
+    fn apply_content_fingerprint_is_stable_and_content_sensitive() {
+        assert_eq!(apply_content_fingerprint(b"same"), apply_content_fingerprint(b"same"));
+        assert_ne!(apply_content_fingerprint(b"same"), apply_content_fingerprint(b"different"));
+    }
+
+    #[test]
     fn rollback_prepared_surfaces_restore_failure_and_retains_backup() {
         let unique = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -2921,10 +3275,17 @@ Total: 1 ms
         fs::create_dir(&target).expect("create non-file rollback target");
         fs::write(&temp, b"new").expect("write staged temp");
         fs::write(&backup, b"old").expect("write backup");
-        let prepared = vec![(target.clone(), temp.clone(), backup.clone(), "new".to_string())];
+        let prepared = vec![PreparedApplyFile {
+            target: target.clone(),
+            temp: temp.clone(),
+            backup: backup.clone(),
+            display: "target.json".to_string(),
+            expected: "old".to_string(),
+            text: "new".to_string(),
+        }];
 
         let error = rollback_prepared(&prepared).expect_err("rollback failure must be surfaced");
-        assert!(error.contains("Cannot remove partially committed Apply target"));
+        assert!(error.contains("Refusing to overwrite unsafe or newer Apply target"));
         assert!(!temp.exists(), "independent staged temp cleanup should still be attempted");
         assert!(backup.exists(), "backup must be retained when restore cannot complete");
 

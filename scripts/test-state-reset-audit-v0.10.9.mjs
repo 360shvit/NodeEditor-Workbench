@@ -29,13 +29,13 @@ assert.match(graphView, /setGraphSettings\(\{ selectedRootPath: nextPath, viewpo
 assert.match(graphView, /graphSettings\.densityDepth/);
 assert.match(graphView, /graphSettings\.includeResources/);
 
-// Per-project persistence stores only UI context; destructive/edit state remains absent.
+// Per-project persistence stores only bounded UI context; destructive/edit state remains absent.
 assert.match(persistence, /projectGraphSettings\?: ProjectGraphViewSettings/);
 assert.match(persistence, /selectedRootPath/);
 assert.match(persistence, /densityDepth/);
 assert.match(persistence, /includeResources/);
 const writer = persistence.slice(persistence.indexOf('export function writeProjectSession'));
-assert.match(writer, /projectGraphSettings: session\.projectGraphSettings/);
+assert.match(writer, /projectGraphSettings: cleanProjectGraphSettings\(session\.projectGraphSettings\)/);
 assert.doesNotMatch(writer, /changeSet\s*:/i);
 assert.doesNotMatch(writer, /changePast\s*:/i);
 assert.doesNotMatch(writer, /changeFuture\s*:/i);
@@ -73,6 +73,5 @@ const externalReloadStart = store.indexOf('applyExternalWorkspaceReload: (worksp
 const externalReload = store.slice(externalReloadStart, store.indexOf('clearExternalChangeNotice: () =>', externalReloadStart));
 assert.match(externalReload, /validExplorerWorkspaceId\(project, state\.explorerWorkspace\)/);
 assert.match(externalReload, /validProjectWorkspaceId\(project, state\.filters\.workspace\)/);
-
 
 console.log('v0.10.9 State / Reset Audit checks passed');

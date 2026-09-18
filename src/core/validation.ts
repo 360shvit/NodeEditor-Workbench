@@ -1,8 +1,14 @@
 import type { Diagnostic, ProjectModel } from './types.js';
 
 function diagnosticKey(item: Diagnostic): string {
-  const symbol = item.symbol ? `${item.symbol.symbolType}:${item.symbol.name}` : '';
-  return `${item.code}|${item.fileId ?? ''}|${item.nodeId ?? ''}|${symbol}|${item.message}`;
+  return JSON.stringify([
+    item.code,
+    item.severity,
+    item.fileId ?? null,
+    item.nodeId ?? null,
+    item.symbol ? [item.symbol.symbolType, item.symbol.name] : null,
+    item.message,
+  ]);
 }
 
 export interface ValidationDiff {

@@ -47,7 +47,7 @@ assert.match(store, /paneTabIds: WorkbenchPaneTabs/);
 assert.doesNotMatch(store, /primaryTabs: WorkbenchTab|secondaryTabs: WorkbenchTab|tabsByPane/);
 assert.doesNotMatch(persistence, /activePane|paneActiveTabIds|splitViewEnabled|splitRatio/);
 assert.match(persistence, /version: 1/);
-assert.equal(hashFile('src/projects/projectPersistence.ts'), '497c6791bfc3eadc6b664db607f6664235aecf8b25bf5b4985063c46f1b2ed0b');
+assert.equal(hashFile('src/projects/projectPersistence.ts'), '7e6df70a194355682a7eab6bea8c1a9f05a38d3c2119bf6fc32fe17476ecb31f');
 
 // Split mode is transient, ratio is a global migrated Workbench preference.
 assert.match(prefs, /hytale-workbench\.layout\.v2/);

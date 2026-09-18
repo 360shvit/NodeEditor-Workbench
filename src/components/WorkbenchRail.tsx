@@ -9,6 +9,7 @@ function RailButton({
   onClick,
   className = '',
   pressed,
+  current,
 }: {
   label: string;
   icon: LucideIconName;
@@ -17,6 +18,7 @@ function RailButton({
   onClick: () => void;
   className?: string;
   pressed?: boolean;
+  current?: boolean;
 }) {
   return (
     <button
@@ -25,7 +27,8 @@ function RailButton({
       data-tooltip={label}
       data-tooltip-side="right"
       aria-label={label}
-      aria-pressed={pressed ?? active ?? false}
+      aria-pressed={pressed}
+      aria-current={current ? 'page' : undefined}
     >
       <span className="rail-icon" aria-hidden="true"><LucideIcon name={icon} size={20} /></span>
       {badge !== undefined && badge > 0 && <span className="rail-badge">{badge > 99 ? '99+' : badge}</span>}
@@ -60,6 +63,7 @@ export function WorkbenchRail({ onOpenSettings }: { onOpenSettings: () => void }
       label={`${label}${sidebarVisible && globalSidebarActive && effectiveGlobalSidebarView === view ? ' — hide sidebar' : ''}`}
       icon={icon}
       active={sidebarVisible && globalSidebarActive && effectiveGlobalSidebarView === view}
+      pressed={sidebarVisible && globalSidebarActive && effectiveGlobalSidebarView === view}
       onClick={() => activateSidebar(view)}
     />
   );
@@ -79,6 +83,7 @@ export function WorkbenchRail({ onOpenSettings }: { onOpenSettings: () => void }
           icon="triangle-alert"
           badge={actionableDiagnostics}
           active={!!activeTabId?.startsWith('tab:diagnostics:')}
+          current={!!activeTabId?.startsWith('tab:diagnostics:')}
           onClick={() => openDiagnosticsTab()}
         />
         <RailButton
@@ -86,24 +91,28 @@ export function WorkbenchRail({ onOpenSettings }: { onOpenSettings: () => void }
           icon="git-compare-arrows"
           badge={changeCount}
           active={activeTabId === 'tab:changes:pending'}
+          current={activeTabId === 'tab:changes:pending'}
           onClick={openChangesTab}
         />
         <RailButton
           label="Layout"
           icon="layout-grid"
           active={activeTabId === 'tab:visual'}
+          current={activeTabId === 'tab:visual'}
           onClick={openVisualTab}
         />
         <RailButton
           label="WorldGen Performance"
           icon="circle-dot"
           active={activeTab?.kind === 'worldgen-performance'}
+          current={activeTab?.kind === 'worldgen-performance'}
           onClick={openWorldgenPerformanceTab}
         />
         <RailButton
           label="Project Graph"
           icon="network"
           active={activeTab?.kind === 'project-graph'}
+          current={activeTab?.kind === 'project-graph'}
           onClick={openProjectGraphTab}
         />
       </div>

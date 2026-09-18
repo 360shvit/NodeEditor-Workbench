@@ -51,7 +51,7 @@ assert.match(read('src/styles.css'), /search-recent-dropdown\[open\].*details-ch
 
 // Hardening's native/security/persistence boundaries remain byte-identical; later product work may intentionally evolve store/graph UI state.
 const frozen = {
-  'src/projects/projectPersistence.ts': '497c6791bfc3eadc6b664db607f6664235aecf8b25bf5b4985063c46f1b2ed0b',
+  'src/projects/projectPersistence.ts': '7e6df70a194355682a7eab6bea8c1a9f05a38d3c2119bf6fc32fe17476ecb31f',
   'src/commands/commandRegistry.ts': '47f00fedb615856a9f44dbbb1e5123b0ede5fbe1a32942218a0b477d66247245',
   'src/workbench/workbenchLayoutPreferences.ts': '156f1f39dcd45df58d3ab2d7dc31adc8824e69a97e8e2b3e2cb5cb2ad4ca5322',
   'src-tauri/capabilities/default.json': '5042c8d799a75be8248b9877ea2c59aabca2c6fccaed0082c2cdd438c6e345a4',
