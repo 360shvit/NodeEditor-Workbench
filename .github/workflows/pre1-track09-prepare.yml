@@ -1,9 +1,7 @@
 name: Validate Pre-1.0 Track 09
 
 on:
-  push:
-    branches:
-      - audit/pre-1.0-full-review
+  workflow_dispatch:
 
 permissions:
   contents: write
