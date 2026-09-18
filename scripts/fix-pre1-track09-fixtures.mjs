@@ -44,4 +44,21 @@ for (const invalid of ['br#r#"', 'b"{"value":', '"{"value":1}".to_string()', '"{
 }
 
 fs.writeFileSync(path, source);
-console.log('Normalized Track 09 Rust fixtures and rollback expectation.');
+
+// v0.11.11 originally pinned the exact one-argument exit_application signature.
+// Track 09 intentionally widens that lifecycle boundary so application exit is
+// serialized against an active Apply transaction. Keep the old window-state
+// behavior assertion, but update it to require the stronger transaction guard.
+const windowTestPath = 'scripts/test-native-window-persistence-v0.11.11.mjs';
+let windowTest = fs.readFileSync(windowTestPath, 'utf8');
+const oldExitAssertion = 'assert.match(rust, /fn exit_application\\(app: AppHandle\\)/);';
+const hardenedExitAssertions = `assert.match(rust, /fn exit_application\\(app: AppHandle, state: State<'_, DesktopState>\\)/);\nassert.match(rust, /state\\.apply_transaction_lock\\.lock\\(\\)/);`;
+if (windowTest.includes(oldExitAssertion)) {
+  windowTest = windowTest.replace(oldExitAssertion, hardenedExitAssertions);
+}
+if (!windowTest.includes("fn exit_application\\\\(app: AppHandle, state: State<'_, DesktopState>\\\\)")) {
+  throw new Error('v0.11.11 window-state regression guard was not updated for Track 09 exit serialization.');
+}
+fs.writeFileSync(windowTestPath, windowTest);
+
+console.log('Normalized Track 09 Rust fixtures, rollback expectation, and lifecycle regression guard.');
