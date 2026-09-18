@@ -30,7 +30,9 @@ jobs:
           save-if: "false"
       - run: npm ci --ignore-scripts
       - name: Prepare Track 09 hardening in runner
-        run: node scripts/prepare-pre1-track09.mjs
+        run: |
+          node scripts/prepare-pre1-track09.mjs
+          node scripts/fix-pre1-track09-fixtures.mjs
       - name: Run Track 09 transaction gate
         run: npm run test:pre1-apply-transaction-recovery
       - name: Run locked native failure/race tests
@@ -48,7 +50,7 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git rm .github/workflows/pre1-track09-apply-transaction.yml scripts/prepare-pre1-track09.mjs
+          git rm .github/workflows/pre1-track09-apply-transaction.yml scripts/prepare-pre1-track09.mjs scripts/fix-pre1-track09-fixtures.mjs
           git add src-tauri/src/main.rs package.json scripts/test-pre1-apply-transaction-recovery.mjs
           git commit -m "Harden Pre-1.0 Track 09 apply transactions"
           git push origin HEAD:audit/pre-1.0-full-review
