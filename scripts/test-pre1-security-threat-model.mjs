@@ -7,11 +7,13 @@ const read = (file) => fs.readFileSync(file, 'utf8');
 const config = JSON.parse(read('src-tauri/tauri.conf.json'));
 const capability = JSON.parse(read('src-tauri/capabilities/default.json'));
 const rust = read('src-tauri/src/main.rs');
+const cargoLock = read('src-tauri/Cargo.lock');
 const runtime = read('tauri-ui/tauri-runtime.js');
 const desktopBridge = read('src/io/desktopBridge.ts');
 const releaseWorkflow = read('.github/workflows/release-windows.yml');
 const validationWorkflow = read('.github/workflows/build-tauri-windows.yml');
 const dependencyWorkflow = read('.github/workflows/dependency-approval.yml');
+const dependabotConfig = read('.github/dependabot.yml');
 const securityPolicy = read('SECURITY.md');
 const updaterPublicKey = read('src-tauri/updater.pubkey').trim();
 
@@ -63,6 +65,13 @@ assert.ok(testModuleIndex >= 0, 'Windows native safety test module is required')
 const productionRust = rust.slice(0, testModuleIndex);
 assert.doesNotMatch(productionRust, /std::process::Command|Command::new\s*\(/);
 
+// Tauri security floor: GHSA-7gmj-67g7-phm9 / CVE-2026-42184 affects Tauri
+// >=2.0 through <=2.11.0 on Windows/Android. Keep the checked lock above 2.11.0.
+const tauriLockMatch = cargoLock.match(/\[\[package\]\]\s+name = "tauri"\s+version = "(\d+)\.(\d+)\.(\d+)"/m);
+assert.ok(tauriLockMatch, 'Cargo.lock must contain the resolved tauri package');
+const tauriLockedVersion = tauriLockMatch.slice(1, 4).map(Number);
+assert.ok(atLeastTriplet(tauriLockedVersion, [2, 11, 1]), `locked Tauri ${tauriLockedVersion.join('.')} is below the 2.11.1 origin-confusion security floor`);
+
 // Updater trust stays native and signature-bound. The public verification key is
 // source material; private signing material must remain GitHub Environment secrets.
 assert.match(rust, /include_str!\("\.\.\/updater\.pubkey"\)/);
@@ -102,6 +111,10 @@ assert.match(releaseWorkflow, /-- --locked/);
 assert.match(dependencyWorkflow, /pull_request_target:/);
 assert.doesNotMatch(dependencyWorkflow, /actions\/checkout|npm\s|node\s+scripts\/|cargo\s/);
 assert.match(dependencyWorkflow, /commit_id == \\"\$PR_HEAD_SHA\\"/);
+for (const ecosystem of ['npm', 'cargo', 'github-actions']) {
+  assert.match(dependabotConfig, new RegExp(`package-ecosystem:\\s*["']?${ecosystem}["']?`), `Dependabot must monitor ${ecosystem}`);
+}
+assert.match(dependabotConfig, /interval:\s*["']weekly["']/);
 
 // Tracked-source secret hygiene. Variable names and GitHub secret references are fine;
 // literal private-key/PAT material and obvious local-secret files are not.
@@ -132,13 +145,24 @@ console.log(JSON.stringify({
   rendererRawHtmlOrEvalSinks: 0,
   productionProcessSpawns: 0,
   frontendNativeCapabilities: capability.permissions,
+  tauriLockedVersion: tauriLockedVersion.join('.'),
+  tauriOriginConfusionFloor: '>=2.11.1',
   updaterVerificationKey: 'public minisign key embedded; private key absent from source',
   externalActionsPinnedBySha: true,
+  dependabotEcosystems: ['npm', 'cargo', 'github-actions'],
   dependencyPrTargetExecutesPrCode: false,
   trackedSecretLiteralScan: 'PASS',
   privateVulnerabilityReporting: 'manual/admin verification required before stable 1.0',
 }, null, 2));
 console.log('Pre-1.0 Audit 08 — Security & threat model: PASS');
+
+function atLeastTriplet(actual, minimum) {
+  for (let index = 0; index < 3; index += 1) {
+    if (actual[index] > minimum[index]) return true;
+    if (actual[index] < minimum[index]) return false;
+  }
+  return true;
+}
 
 function walk(root) {
   const out = [];
