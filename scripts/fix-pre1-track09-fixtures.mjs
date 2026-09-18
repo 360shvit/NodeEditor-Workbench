@@ -56,7 +56,7 @@ const hardenedExitAssertions = `assert.match(rust, /fn exit_application\\(app: A
 if (windowTest.includes(oldExitAssertion)) {
   windowTest = windowTest.replace(oldExitAssertion, hardenedExitAssertions);
 }
-if (!windowTest.includes("fn exit_application\\\\(app: AppHandle, state: State<'_, DesktopState>\\\\)")) {
+if (!windowTest.includes("fn exit_application\\(app: AppHandle, state: State<'_, DesktopState>\\)")) {
   throw new Error('v0.11.11 window-state regression guard was not updated for Track 09 exit serialization.');
 }
 fs.writeFileSync(windowTestPath, windowTest);
