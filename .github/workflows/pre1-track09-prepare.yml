@@ -30,9 +30,10 @@ jobs:
           save-if: "false"
       - run: npm ci --ignore-scripts
       - name: Apply Track 09 hardening in validation workspace
-        run: node scripts/prepare-pre1-track09.mjs
-      - name: Normalize generated Rust validation fixtures
-        run: node scripts/fix-pre1-track09-fixtures.mjs
+        run: |
+          node scripts/prepare-pre1-track09.mjs
+          node scripts/fix-pre1-track09-fixtures.mjs
+          node scripts/harden-pre1-track09-late-writer.mjs
       - name: Run Track 09 source contract
         run: npm run test:pre1-apply-transaction-recovery
       - name: Strict application TypeScript check
@@ -53,7 +54,7 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add src-tauri/src/main.rs package.json scripts/test-pre1-apply-transaction-recovery.mjs
-          git rm scripts/prepare-pre1-track09.mjs scripts/fix-pre1-track09-fixtures.mjs .github/workflows/pre1-track09-prepare.yml
+          git rm scripts/prepare-pre1-track09.mjs scripts/fix-pre1-track09-fixtures.mjs scripts/harden-pre1-track09-late-writer.mjs .github/workflows/pre1-track09-prepare.yml .github/workflows/pre1-track09-apply-transaction.yml
           git diff --cached --check
           git commit -m "Harden Pre-1.0 Track 09 apply recovery"
           git push origin HEAD:audit/pre-1.0-full-review
