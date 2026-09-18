@@ -52,7 +52,7 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git rm .github/workflows/pre1-track09-apply-transaction.yml .github/workflows/pre1-track09-prepare.yml scripts/prepare-pre1-track09.mjs scripts/fix-pre1-track09-fixtures.mjs scripts/harden-pre1-track09-late-writer.mjs
-          git add src-tauri/src/main.rs package.json scripts/test-pre1-apply-transaction-recovery.mjs
+          git add src-tauri/src/main.rs package.json scripts/test-pre1-apply-transaction-recovery.mjs scripts/test-native-window-persistence-v0.11.11.mjs
           git diff --cached --check
           git commit -m "Harden Pre-1.0 Track 09 apply transactions"
           git push origin HEAD:audit/pre-1.0-full-review
