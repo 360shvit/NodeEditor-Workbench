@@ -29,7 +29,7 @@ assert.match(journalRead, /Cannot read Apply recovery journal; refusing Apply/);
 
 const fingerprint = sliceBetween(rust, 'fn apply_content_fingerprint(', '\nfn recovery_journal_path(');
 assert.match(fingerprint, /0xcbf29ce484222325u64/);
-assert.match(fingerprint, /wrapping_mul\(0x100000001b\)/);
+assert.match(fingerprint, /wrapping_mul\(0x100000001b3\)/);
 
 const commitMarker = sliceBetween(rust, 'fn parse_recovery_commit_marker(', '\nfn recovery_commit_state(');
 assert.match(commitMarker, /parse::<u64>/);
