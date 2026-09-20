@@ -32,6 +32,8 @@ const MAX_DISCOVERY_PROBE_FILES: usize = 10_000;
 const MAX_DISCOVERY_PROBE_FILE_BYTES: u64 = 8 * 1024 * 1024;
 const MAX_DISCOVERY_PROBE_TOTAL_BYTES: u64 = 128 * 1024 * 1024;
 const MAX_SOURCE_PREVIEW_BYTES: u64 = 4 * 1024 * 1024;
+const MAX_BINARY_READ_BYTES: u64 = 256 * 1024 * 1024;
+const MAX_ZIP_SAVE_BYTES: usize = 512 * 1024 * 1024;
 const PERSISTENT_LOG_FILE: &str = "workbench-current.jsonl";
 const PERSISTENT_LOG_ROTATED_PREFIX: &str = "workbench";
 const PERSISTENT_LOG_MAX_FILE_BYTES: u64 = 2 * 1024 * 1024;
@@ -200,6 +202,8 @@ struct ExportPayload {
     token: String,
     scope: String,
     changed_files: Vec<TextFile>,
+    #[serde(default)]
+    allow_overwrite: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -783,11 +787,12 @@ fn relative_display(root: &Path, path: &Path) -> Result<String, String> {
         .map_err(|_| "Path escaped the selected project root.".to_string())?;
     Ok(relative
         .components()
-        .filter_map(|component| match component {
-            Component::Normal(value) => Some(value.to_string_lossy().to_string()),
-            _ => None,
+        .map(|component| match component {
+            Component::Normal(value) => value.to_str().map(str::to_owned)
+                .ok_or_else(|| "Project filename cannot be represented as UTF-8; refusing a lossy inventory.".to_string()),
+            _ => Err("Invalid project-relative path component.".to_string()),
         })
-        .collect::<Vec<_>>()
+        .collect::<Result<Vec<_>, String>>()?
         .join("/"))
 }
 
@@ -798,6 +803,17 @@ fn safe_relative(raw: &str) -> Result<PathBuf, String> {
     let normalized = raw.replace('\\', "/");
     if normalized.starts_with('/') || normalized.is_empty() {
         return Err(format!("Invalid relative path: {raw}"));
+    }
+    for segment in normalized.split('/') {
+        let stem = segment.split('.').next().unwrap_or("").to_ascii_uppercase();
+        let device = matches!(stem.as_str(), "CON" | "PRN" | "AUX" | "NUL")
+            || ["COM", "LPT"].iter().any(|prefix| stem.strip_prefix(prefix)
+                .map(|suffix| matches!(suffix, "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9" | "¹" | "²" | "³"))
+                .unwrap_or(false));
+        if segment.is_empty() || segment == "." || segment == ".." || segment.ends_with(['.', ' '])
+            || segment.chars().any(|value| value.is_control() || "<>:\"|?*".contains(value)) || device {
+            return Err(format!("Unsafe relative path rejected: {raw}"));
+        }
     }
     let mut result = PathBuf::new();
     for component in Path::new(&normalized).components() {
@@ -812,11 +828,14 @@ fn safe_relative(raw: &str) -> Result<PathBuf, String> {
     Ok(result)
 }
 
-fn sorted_directory_entries(directory: &Path) -> Result<Vec<fs::DirEntry>, String> {
-    let mut entries = fs::read_dir(directory)
-        .map_err(|error| io_error(&format!("Cannot read {}", directory.display()), error))?
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(|error| io_error(&format!("Cannot enumerate {}", directory.display()), error))?;
+fn sorted_directory_entries(directory: &Path, remaining: usize) -> Result<Vec<fs::DirEntry>, String> {
+    let mut entries = Vec::new();
+    for entry in fs::read_dir(directory).map_err(|error| io_error("Cannot read project directory", error))? {
+        if entries.len() >= remaining {
+            return Err(format!("Project safety limit exceeded: more than {MAX_PROJECT_ENTRIES} files/directories."));
+        }
+        entries.push(entry.map_err(|error| io_error("Cannot enumerate project directory", error))?);
+    }
     entries.sort_by_key(|entry| entry.file_name().to_string_lossy().to_lowercase());
     Ok(entries)
 }
@@ -1325,15 +1344,34 @@ fn detect_semantic_file(path: &str, text: &str, allow_default_fallback: bool, di
 
 fn read_probe_text(path: &Path, relative: &str, size: u64, total_probe_bytes: &mut u64) -> Result<Option<String>, String> {
     if size > MAX_DISCOVERY_PROBE_FILE_BYTES { return Ok(None); }
-    *total_probe_bytes = total_probe_bytes.saturating_add(size);
-    if *total_probe_bytes > MAX_DISCOVERY_PROBE_TOTAL_BYTES {
-        return Err(format!("Semantic discovery safety limit exceeded: probed text is larger than {} MiB.", MAX_DISCOVERY_PROBE_TOTAL_BYTES / (1024 * 1024)));
-    }
-    let bytes = fs::read(path).map_err(|error| io_error(&format!("Cannot probe {relative}"), error))?;
+    let limit = MAX_DISCOVERY_PROBE_FILE_BYTES.min(MAX_DISCOVERY_PROBE_TOTAL_BYTES.saturating_sub(*total_probe_bytes));
+    let bytes = read_bounded_file(path, limit, &format!("Semantic discovery probe {relative}"))?;
+    *total_probe_bytes += bytes.len() as u64;
     let Ok(text) = String::from_utf8(bytes) else { return Ok(None); };
     let first = text.trim_start().chars().next();
     if !matches!(first, Some('{') | Some('[')) { return Ok(None); }
     Ok(Some(text))
+}
+
+fn read_bounded_bytes(reader: impl Read, limit: u64, context: &str) -> Result<Vec<u8>, String> {
+    let mut bytes = Vec::new();
+    reader.take(limit.saturating_add(1)).read_to_end(&mut bytes)
+        .map_err(|error| io_error(context, error))?;
+    if bytes.len() as u64 > limit {
+        return Err(format!("{context}: safety limit of {limit} bytes exceeded; nothing was truncated."));
+    }
+    Ok(bytes)
+}
+
+fn read_bounded_file(path: &Path, limit: u64, context: &str) -> Result<Vec<u8>, String> {
+    let file = File::open(path).map_err(|error| io_error(context, error))?;
+    let metadata = file.metadata().map_err(|error| io_error(context, error))?;
+    if !metadata.is_file() { return Err(format!("{context}: expected a regular file.")); }
+    if metadata.len() > limit {
+        return Err(format!("{context}: safety limit of {limit} bytes exceeded; nothing was truncated."));
+    }
+    // Metadata is only an early rejection. Bound the actual read even if the file grows.
+    read_bounded_bytes(file, limit, context)
 }
 
 fn trace_duration_ms(duration: Duration) -> f64 {
@@ -1407,7 +1445,7 @@ fn scan_tree_traced(root: &Path, discovery_roots: &[String], trace_id: Option<St
         }
         visited_directories += 1;
         let directory_enumerate_started = Instant::now();
-        let directory_entries = sorted_directory_entries(&canonical_directory)?;
+        let directory_entries = sorted_directory_entries(&canonical_directory, MAX_PROJECT_ENTRIES.saturating_sub(visited_entries))?;
         directory_enumerate_duration += directory_enumerate_started.elapsed();
         for entry in directory_entries {
             visited_entries += 1;
@@ -1430,7 +1468,7 @@ fn scan_tree_traced(root: &Path, discovery_roots: &[String], trace_id: Option<St
                 let child_canonicalize_started = Instant::now();
                 let canonical = fs::canonicalize(&path);
                 directory_canonicalize_duration += child_canonicalize_started.elapsed();
-                let Ok(canonical) = canonical else { continue; };
+                let canonical = canonical.map_err(|error| io_error("Cannot resolve project directory; refusing an incomplete inventory", error))?;
                 if canonical.starts_with(&canonical_root) { stack.push(canonical); }
                 continue;
             }
@@ -1562,16 +1600,18 @@ fn scan_tree_traced(root: &Path, discovery_roots: &[String], trace_id: Option<St
                     size / (1024 * 1024), MAX_JSON_FILE_BYTES / (1024 * 1024),
                 ));
             }
-            total_semantic_bytes = total_semantic_bytes.saturating_add(*size);
-            if total_semantic_bytes > MAX_TOTAL_JSON_BYTES {
-                return Err(format!("Project JSON safety limit exceeded: semantic input is larger than {} MiB.", MAX_TOTAL_JSON_BYTES / (1024 * 1024)));
-            }
-            Some(fs::read_to_string(canonical_file).map_err(|error| io_error(&format!("Cannot read semantic JSON file {relative}"), error))?)
+            let limit = MAX_JSON_FILE_BYTES.min(MAX_TOTAL_JSON_BYTES.saturating_sub(total_semantic_bytes));
+            let bytes = read_bounded_file(canonical_file, limit, &format!("Semantic JSON file {relative}"))?;
+            Some(String::from_utf8(bytes).map_err(|_| format!("Semantic JSON file {relative} is not valid UTF-8."))?)
         } else {
             read_probe_text(canonical_file, relative, *size, &mut total_probe_bytes)?
         };
         semantic_read_duration += semantic_read_started.elapsed();
         let Some(text) = text else { continue; };
+        total_semantic_bytes = total_semantic_bytes.saturating_add(text.len() as u64);
+        if total_semantic_bytes > MAX_TOTAL_JSON_BYTES {
+            return Err(format!("Project JSON safety limit exceeded: semantic input is larger than {} MiB.", MAX_TOTAL_JSON_BYTES / (1024 * 1024)));
+        }
         if relative.to_ascii_lowercase().ends_with(".json") { validate_json_nesting(&text, relative)?; }
 
         let source = if manual_candidate && !default_candidate { "manual-probe" } else if instance_descriptor_path(relative) { "detector" } else { "default" };
@@ -2303,7 +2343,7 @@ fn exit_application(app: AppHandle, state: State<'_, DesktopState>) -> Result<Ex
 fn read_project_file(payload: ProjectPathPayload, state: State<'_, DesktopState>) -> Result<Response, String> {
     let project = active_project(&state)?;
     let path = resolve_existing_project_file(&project, &payload.path)?;
-    let data = fs::read(path).map_err(|error| io_error(&format!("Cannot read {}", payload.path), error))?;
+    let data = read_bounded_file(&path, MAX_BINARY_READ_BYTES, "Project binary read (use native folder output for larger files)")?;
     Ok(Response::new(data))
 }
 
@@ -2311,15 +2351,20 @@ fn read_project_file(payload: ProjectPathPayload, state: State<'_, DesktopState>
 fn read_project_text_preview(payload: ProjectPathPayload, state: State<'_, DesktopState>) -> Result<ProjectTextPreview, String> {
     let project = active_project(&state)?;
     let path = resolve_existing_project_file(&project, &payload.path)?;
-    let metadata = fs::metadata(&path).map_err(|error| io_error(&format!("Cannot inspect {}", payload.path), error))?;
+    project_text_preview(&path, payload.path)
+}
+
+fn project_text_preview(path: &Path, display: String) -> Result<ProjectTextPreview, String> {
+    let metadata = fs::metadata(path).map_err(|error| io_error("Cannot inspect source preview", error))?;
     let size = metadata.len();
     if size > MAX_SOURCE_PREVIEW_BYTES {
-        return Ok(ProjectTextPreview { path: payload.path, size, kind: "too-large".to_string(), text: None });
+        return Ok(ProjectTextPreview { path: display, size, kind: "too-large".to_string(), text: None });
     }
-    let bytes = fs::read(&path).map_err(|error| io_error(&format!("Cannot preview {}", payload.path), error))?;
+    let bytes = read_bounded_file(path, MAX_SOURCE_PREVIEW_BYTES, "Source preview")?;
+    let size = bytes.len() as u64;
     match String::from_utf8(bytes) {
-        Ok(text) => Ok(ProjectTextPreview { path: payload.path, size, kind: "text".to_string(), text: Some(text) }),
-        Err(_) => Ok(ProjectTextPreview { path: payload.path, size, kind: "binary".to_string(), text: None }),
+        Ok(text) => Ok(ProjectTextPreview { path: display, size, kind: "text".to_string(), text: Some(text) }),
+        Err(_) => Ok(ProjectTextPreview { path: display, size, kind: "binary".to_string(), text: None }),
     }
 }
 
@@ -2714,6 +2759,7 @@ async fn select_output_directory(app: AppHandle, state: State<'_, DesktopState>)
 
 #[tauri::command]
 async fn existing_output_files(payload: OutputPathsPayload, state: State<'_, DesktopState>) -> Result<ExistingResult, String> {
+    if payload.paths.len() > MAX_PROJECT_ENTRIES { return Err("Output path-count safety limit exceeded.".to_string()); }
     let root = output_root(&state, &payload.token)?;
     let mut existing = Vec::new();
     for raw in payload.paths {
@@ -2726,33 +2772,137 @@ async fn existing_output_files(payload: OutputPathsPayload, state: State<'_, Des
 
 #[tauri::command]
 async fn export_output(payload: ExportPayload, state: State<'_, DesktopState>) -> Result<WrittenResult, String> {
+    let _transaction_guard = state.apply_transaction_lock.lock()
+        .map_err(|_| "Apply transaction lock is poisoned.".to_string())?;
     let project = active_project(&state)?;
     let output = output_root(&state, &payload.token)?;
-    let changed: HashMap<String, String> = payload.changed_files.into_iter().map(|file| (file.path, file.text)).collect();
-    let mut paths = if payload.scope == "full" {
+    export_project_files(&project, &output, &payload.scope, payload.changed_files, payload.allow_overwrite)
+}
+
+fn export_project_files(project: &ProjectState, output: &Path, scope: &str, changed_files: Vec<TextFile>, allow_overwrite: bool) -> Result<WrittenResult, String> {
+    let output = fs::canonicalize(output).map_err(|error| io_error("Cannot revalidate output root", error))?;
+    if output.starts_with(&project.canonical_root) || project.canonical_root.starts_with(&output) {
+        return Err("Folder export must be outside the source project tree. Use Apply to Project for source changes.".to_string());
+    }
+    if changed_files.len() > MAX_APPLY_FILES { return Err("Output changed-file count safety limit exceeded.".to_string()); }
+    let mut changed = HashMap::new();
+    let mut changed_identities = HashSet::new();
+    let mut changed_bytes = 0u64;
+    for file in changed_files {
+        let path = safe_relative(&file.path)?.to_string_lossy().replace('\\', "/");
+        changed_bytes = changed_bytes.saturating_add(file.text.len() as u64);
+        if file.text.len() as u64 > MAX_JSON_FILE_BYTES || changed_bytes > MAX_TOTAL_JSON_BYTES {
+            return Err("Output changed-text safety limit exceeded.".to_string());
+        }
+        if !changed_identities.insert(path.to_lowercase()) { return Err(format!("Duplicate output path: {path}")); }
+        changed.insert(path, file.text);
+    }
+    let mut paths = if scope == "full" {
         scan_tree(&project.root, &project.discovery_roots)?.entries
-    } else if payload.scope == "changed" {
+    } else if scope == "changed" {
         changed.keys().cloned().collect()
     } else {
-        return Err(format!("Unknown output scope: {}", payload.scope));
+        return Err(format!("Unknown output scope: {scope}"));
     };
-    if payload.scope == "full" { paths.extend(changed.keys().cloned()); }
+    if scope == "full" { paths.extend(changed.keys().cloned()); }
     let mut unique = HashSet::new();
     paths.retain(|path| unique.insert(path.clone()));
     paths.sort();
+    if paths.len() > MAX_PROJECT_ENTRIES { return Err("Output path-count safety limit exceeded.".to_string()); }
+
+    // Validate the entire plan before creating directories or replacing any file.
+    let mut identities = HashSet::new();
+    let mut parents = HashSet::new();
+    for raw in &paths {
+        let identity = raw.to_lowercase();
+        if !identities.insert(identity.clone()) || parents.contains(&identity) {
+            return Err(format!("Conflicting output path: {raw}"));
+        }
+        let mut parent = Path::new(&identity).parent();
+        while let Some(directory) = parent.filter(|value| !value.as_os_str().is_empty()) {
+            let key = directory.to_string_lossy().replace('\\', "/");
+            if identities.contains(&key) { return Err(format!("Conflicting output path: {raw}")); }
+            parents.insert(key);
+            parent = directory.parent();
+        }
+        let target = inspect_output_path(&output, raw)?;
+        if target.exists() && !allow_overwrite { return Err(format!("Output already exists; confirm overwrite first: {raw}")); }
+        if !changed.contains_key(raw) { resolve_existing_project_file(project, raw)?; }
+    }
 
     let mut written = 0usize;
     for raw in paths {
-        let target = ensure_output_path(&output, &raw)?;
-        if let Some(text) = changed.get(&raw) {
-            fs::write(&target, text.as_bytes()).map_err(|error| io_error(&format!("Cannot write output {raw}"), error))?;
-        } else {
-            let source = resolve_existing_project_file(&project, &raw)?;
-            fs::copy(&source, &target).map_err(|error| io_error(&format!("Cannot copy output {raw}"), error))?;
+        let result = (|| {
+            let target = ensure_output_path(&output, &raw)?;
+            stage_file_replacement(&target, allow_overwrite, |file| {
+                if let Some(text) = changed.get(&raw) {
+                    file.write_all(text.as_bytes()).map_err(|error| io_error("Cannot stage output text", error))?;
+                } else {
+                    let source = resolve_existing_project_file(project, &raw)?;
+                    let input = File::open(&source).map_err(|error| io_error("Cannot open output source", error))?;
+                    let size = input.metadata().map_err(|error| io_error("Cannot inspect output source", error))?.len();
+                    let copied = std::io::copy(&mut input.take(size.saturating_add(1)), file)
+                        .map_err(|error| io_error("Cannot stage binary output", error))?;
+                    if copied != size { return Err(format!("Source size changed while copying: {raw}")); }
+                }
+                Ok(())
+            }, || { inspect_output_path(&output, &raw)?; Ok(()) })
+        })();
+        if let Err(error) = result {
+            return Err(format!("Export stopped after {written} completed file(s). Earlier output files remain; the source project was not written. {error}"));
         }
         written += 1;
     }
     Ok(WrittenResult { written })
+}
+
+#[cfg(windows)]
+fn commit_staged_file(staged: &Path, target: &Path, allow_overwrite: bool) -> Result<(), String> {
+    use std::os::windows::ffi::OsStrExt;
+    #[link(name = "kernel32")]
+    extern "system" {
+        fn MoveFileExW(existing: *const u16, destination: *const u16, flags: u32) -> i32;
+    }
+    let from: Vec<u16> = staged.as_os_str().encode_wide().chain(Some(0)).collect();
+    let to: Vec<u16> = target.as_os_str().encode_wide().chain(Some(0)).collect();
+    // Same-directory move: WRITE_THROUGH, with REPLACE_EXISTING only after approval.
+    // Without REPLACE_EXISTING a late collision also fails atomically.
+    let flags = 0x8 | if allow_overwrite { 0x1 } else { 0 };
+    // SAFETY: both buffers are NUL-terminated and remain alive for the synchronous call.
+    if unsafe { MoveFileExW(from.as_ptr(), to.as_ptr(), flags) } == 0 {
+        return Err(io_error("Cannot commit output (target may exist or be locked)", std::io::Error::last_os_error()));
+    }
+    Ok(())
+}
+
+#[cfg(not(windows))]
+fn commit_staged_file(staged: &Path, target: &Path, allow_overwrite: bool) -> Result<(), String> {
+    if allow_overwrite { return fs::rename(staged, target).map_err(|error| io_error("Cannot commit output", error)); }
+    fs::hard_link(staged, target).map_err(|error| io_error("Cannot commit new output", error))?;
+    fs::remove_file(staged).map_err(|error| io_error("Cannot clean committed output staging file", error))
+}
+
+fn stage_file_replacement(
+    target: &Path,
+    allow_overwrite: bool,
+    write: impl FnOnce(&mut File) -> Result<(), String>,
+    validate: impl FnOnce() -> Result<(), String>,
+) -> Result<(), String> {
+    static NEXT_OUTPUT: AtomicU64 = AtomicU64::new(1);
+    let name = target.file_name().and_then(|value| value.to_str()).ok_or_else(|| "Invalid output filename.".to_string())?;
+    let staged = target.with_file_name(format!(".{name}.hgw-export-{}-{}.tmp", std::process::id(), NEXT_OUTPUT.fetch_add(1, Ordering::Relaxed)));
+    let mut file = OpenOptions::new().write(true).create_new(true).open(&staged)
+        .map_err(|error| io_error("Cannot create output staging file", error))?;
+    let staged_result = write(&mut file).and_then(|_| file.sync_all().map_err(|error| io_error("Cannot sync output staging file", error)));
+    drop(file);
+    let result = staged_result.and_then(|_| validate()).and_then(|_| commit_staged_file(&staged, target, allow_overwrite));
+    if let Err(error) = result {
+        if let Err(cleanup) = fs::remove_file(&staged) {
+            return Err(format!("{error} Staging cleanup failed: {cleanup}"));
+        }
+        return Err(error);
+    }
+    Ok(())
 }
 
 
@@ -2856,8 +3006,13 @@ fn write_registered_binary(request: Request<'_>, state: State<'_, DesktopState>)
     let target = state.save_targets.lock().map_err(|_| "Save-target state lock is poisoned.".to_string())?.remove(token)
         .ok_or_else(|| "Native save token is no longer valid.".to_string())?;
     let InvokeBody::Raw(bytes) = request.body() else { return Err("Expected binary export data.".to_string()); };
+    if matches!(target.kind, SaveTargetKind::Zip) && bytes.len() > MAX_ZIP_SAVE_BYTES {
+        return Err("ZIP export exceeds the 512 MiB in-memory safety limit. Use folder output.".to_string());
+    }
     revalidate_registered_save_target(&target)?;
-    fs::write(&target.path, bytes).map_err(|error| io_error(&format!("Cannot save {}", target.path.display()), error))?;
+    stage_file_replacement(&target.path, true,
+        |file| file.write_all(bytes).map_err(|error| io_error("Cannot stage selected save file", error)),
+        || revalidate_registered_save_target(&target))?;
     Ok(())
 }
 
@@ -2917,6 +3072,9 @@ fn clear_persistent_logs(app: AppHandle, state: State<'_, DesktopState>) -> Resu
     }
     persistent_log_status_for(&app)
 }
+
+#[cfg(all(test, windows))]
+mod io_safety_tests;
 
 #[cfg(all(test, windows))]
 mod windows_scan_safety_tests {

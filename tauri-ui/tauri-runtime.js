@@ -86,11 +86,15 @@
       if (url.pathname === '/api/project/file') {
         const path = url.searchParams.get('path') ?? '';
         const data = await invoke('read_project_file', { payload: { path } });
+        if (!(data instanceof ArrayBuffer) && !ArrayBuffer.isView(data)
+          && !(Array.isArray(data) && data.every((byte) => Number.isInteger(byte) && byte >= 0 && byte <= 255))) {
+          throw new Error('Invalid native binary file response; refusing an incomplete export.');
+        }
         const body = data instanceof ArrayBuffer
           ? data
           : ArrayBuffer.isView(data)
             ? data
-            : new Uint8Array(Array.isArray(data) ? data : []);
+            : new Uint8Array(data);
         return new Response(body, { status: 200, headers: { 'Content-Type': 'application/octet-stream' } });
       }
       if (url.pathname === '/api/project/text-preview') {
@@ -118,9 +122,20 @@
       }
       if (url.pathname === '/api/output/existing') return jsonResponse(await invoke('existing_output_files', { payload: requestBody(init) }));
       if (url.pathname === '/api/output/export') return jsonResponse(await invoke('export_output', { payload: requestBody(init) }));
+      if (url.pathname === '/api/output/save-zip') {
+        const blob = init?.body;
+        if (!(blob instanceof Blob) || blob.size > 512 * 1024 * 1024) throw new Error('Invalid or oversized ZIP save request.');
+        const suggestedName = url.searchParams.get('name') ?? 'HytaleProject-Changed-Files.zip';
+        const target = await invoke('select_save_target', { payload: { suggestedName } });
+        if (!target?.token) return new Response(null, { status: 204 });
+        await invoke('write_registered_binary', new Uint8Array(await blob.arrayBuffer()), {
+          headers: { 'X-Hytale-Save-Token': target.token },
+        });
+        return jsonResponse({ saved: true });
+      }
       return jsonResponse({ error: `Unknown desktop endpoint: ${url.pathname}` }, 404);
     } catch (error) {
-      if (String(error).toLowerCase().includes('cancel')) return new Response(null, { status: 204 });
+      if (url.pathname !== '/api/output/save-zip' && String(error).toLowerCase().includes('cancel')) return new Response(null, { status: 204 });
       console.error('[Workbench Tauri bridge]', error);
       return errorResponse(error);
     }

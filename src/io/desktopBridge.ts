@@ -375,6 +375,7 @@ export async function desktopExportToDirectory(
   target: DesktopOutputDirectory,
   scope: 'full' | 'changed',
   changedTexts: Map<string, string>,
+  allowOverwrite = false,
 ): Promise<number> {
   const payload = await jsonRequest<{ written: number }>('/api/output/export', {
     method: 'POST',
@@ -382,9 +383,18 @@ export async function desktopExportToDirectory(
       token: target.token,
       scope,
       changedFiles: [...changedTexts].map(([path, text]) => ({ path, text })),
+      allowOverwrite,
     }),
   });
   return payload.written;
+}
+
+export async function desktopSaveZip(filename: string, blob: Blob): Promise<void> {
+  await jsonRequest<{ saved: boolean }>(`/api/output/save-zip?name=${encodeURIComponent(filename)}`, {
+    method: 'POST',
+    body: blob,
+    headers: { 'Content-Type': 'application/zip' },
+  });
 }
 
 export async function desktopSetPendingChangeCount(count: number): Promise<void> {

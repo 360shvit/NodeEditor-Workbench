@@ -22,7 +22,14 @@ export async function buildOutputZip(
   changedTexts: Map<string, string>,
   scope: OutputScope,
 ): Promise<Blob> {
-  const entries = await buildOutputEntries(workspace, changedTexts, scope);
-  const zipEntries: ZipEntryInput[] = [...entries].map(([path, data]) => ({ path, data }));
-  return createZipBlob(zipEntries);
+  // Read each source lazily so the ZIP budget can stop an oversized copy before
+  // the next source file is materialized in the renderer.
+  async function* zipEntries(): AsyncGenerator<ZipEntryInput> {
+    const paths = outputPaths(workspace.sourceEntries.keys(), changedTexts.keys(), scope);
+    for (const path of paths) {
+      const changed = changedTexts.get(path);
+      yield { path, data: changed !== undefined ? changed : await readWorkspaceEntry(workspace, path) };
+    }
+  }
+  return createZipBlob(zipEntries());
 }

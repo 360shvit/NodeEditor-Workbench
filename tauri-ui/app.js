@@ -21924,6 +21924,7 @@ define("io/desktopBridge", ["require", "exports", "support/runtimeDiagnostics"],
     exports.desktopChooseOutputDirectory = desktopChooseOutputDirectory;
     exports.desktopExistingTargetFiles = desktopExistingTargetFiles;
     exports.desktopExportToDirectory = desktopExportToDirectory;
+    exports.desktopSaveZip = desktopSaveZip;
     exports.desktopSetPendingChangeCount = desktopSetPendingChangeCount;
     exports.desktopCheckForUpdate = desktopCheckForUpdate;
     exports.desktopInstallUpdate = desktopInstallUpdate;
@@ -22135,16 +22136,24 @@ define("io/desktopBridge", ["require", "exports", "support/runtimeDiagnostics"],
         });
         return payload.existing;
     }
-    async function desktopExportToDirectory(target, scope, changedTexts) {
+    async function desktopExportToDirectory(target, scope, changedTexts, allowOverwrite = false) {
         const payload = await jsonRequest('/api/output/export', {
             method: 'POST',
             body: JSON.stringify({
                 token: target.token,
                 scope,
                 changedFiles: [...changedTexts].map(([path, text]) => ({ path, text })),
+                allowOverwrite,
             }),
         });
         return payload.written;
+    }
+    async function desktopSaveZip(filename, blob) {
+        await jsonRequest(`/api/output/save-zip?name=${encodeURIComponent(filename)}`, {
+            method: 'POST',
+            body: blob,
+            headers: { 'Content-Type': 'application/zip' },
+        });
     }
     async function desktopSetPendingChangeCount(count) {
         await jsonRequest('/api/app/pending-changes', {
@@ -22886,9 +22895,9 @@ define("io/folderLoader", ["require", "exports", "core/index", "projectFiles/loa
             ? (0, desktopBridge_1.desktopExistingTargetFiles)(target, paths)
             : existingTargetFiles(target, paths);
     }
-    async function writeOutputDirectory(workspace, target, changedTexts, scope, browserEntries) {
+    async function writeOutputDirectory(workspace, target, changedTexts, scope, browserEntries, allowOverwrite = false) {
         if (isDesktopOutputDirectory(target))
-            return (0, desktopBridge_1.desktopExportToDirectory)(target, scope, changedTexts);
+            return (0, desktopBridge_1.desktopExportToDirectory)(target, scope, changedTexts, allowOverwrite);
         if (!browserEntries)
             throw new Error('Browser output entries were not prepared.');
         await writeBlobsToDirectory(target, browserEntries);
@@ -22898,12 +22907,62 @@ define("io/folderLoader", ["require", "exports", "core/index", "projectFiles/loa
         return isDesktopOutputDirectory(target) ? target.name : target.name;
     }
 });
-define("io/zip", ["require", "exports"], function (require, exports) {
+define("io/zip", ["require", "exports", "io/desktopBridge"], function (require, exports, desktopBridge_2) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
+    exports.checkedZipLayout = checkedZipLayout;
     exports.createZipBlob = createZipBlob;
     exports.downloadBlob = downloadBlob;
     const textEncoder = new TextEncoder();
+    const ZIP32_SENTINEL = 0xffffffff;
+    const ZIP32_ENTRY_SENTINEL = 0xffff;
+    // This writer materializes the archive in the WebView. Larger copies use native folder output.
+    const MAX_ZIP_BYTES = 512 * 1024 * 1024;
+    /** Checked metadata arithmetic, independent of payload allocation. */
+    function checkedZipLayout(offset, centralSize, nameBytes, size) {
+        if ([offset, centralSize, nameBytes, size].some((value) => !Number.isSafeInteger(value) || value < 0)
+            || nameBytes > 0xffff || size >= ZIP32_SENTINEL) {
+            throw new Error('ZIP32 size/offset limit exceeded. Use folder output for this project.');
+        }
+        const nextOffset = offset + 30 + nameBytes + size;
+        const nextCentralSize = centralSize + 46 + nameBytes;
+        if (nextOffset >= ZIP32_SENTINEL || nextCentralSize >= ZIP32_SENTINEL) {
+            throw new Error('ZIP32 size/offset limit exceeded. Use folder output for this project.');
+        }
+        if (nextOffset + nextCentralSize + 22 > MAX_ZIP_BYTES) {
+            throw new Error('ZIP export exceeds the 512 MiB in-memory safety limit. Use folder output for this project.');
+        }
+        return { nextOffset, nextCentralSize };
+    }
+    function utf8Size(text) {
+        let size = 0;
+        for (let index = 0; index < text.length; index += 1) {
+            const unit = text.charCodeAt(index);
+            if (unit < 0x80)
+                size += 1;
+            else if (unit < 0x800)
+                size += 2;
+            else if (unit >= 0xd800 && unit <= 0xdbff && text.charCodeAt(index + 1) >= 0xdc00 && text.charCodeAt(index + 1) <= 0xdfff) {
+                size += 4;
+                index += 1;
+            }
+            else
+                size += 3; // TextEncoder replaces unpaired surrogates with U+FFFD.
+            if (size > MAX_ZIP_BYTES)
+                throw new Error('ZIP text exceeds the 512 MiB in-memory safety limit. Use folder output.');
+        }
+        return size;
+    }
+    function zipPath(path) {
+        const normalized = path.replace(/\\/g, '/');
+        const segments = normalized.split('/');
+        if (segments.some((segment) => !segment || segment === '.' || segment === '..'
+            || /[\x00-\x1f<>:"|?*]/.test(segment) || /[. ]$/.test(segment)
+            || /^(?:con|prn|aux|nul|com[1-9¹²³]|lpt[1-9¹²³])(?:\.|$)/i.test(segment))) {
+            throw new Error(`Unsafe ZIP path: ${path}`);
+        }
+        return normalized;
+    }
     const CRC_TABLE = (() => {
         const table = new Uint32Array(256);
         for (let i = 0; i < 256; i += 1) {
@@ -22921,7 +22980,7 @@ define("io/zip", ["require", "exports"], function (require, exports) {
         return (crc ^ 0xffffffff) >>> 0;
     }
     function dosDateTime(date = new Date()) {
-        const year = Math.max(1980, date.getFullYear());
+        const year = Math.min(2107, Math.max(1980, date.getFullYear()));
         const time = (date.getHours() << 11) | (date.getMinutes() << 5) | Math.floor(date.getSeconds() / 2);
         const day = (year - 1980) << 9 | (date.getMonth() + 1) << 5 | date.getDate();
         return { time, date: day };
@@ -22934,7 +22993,7 @@ define("io/zip", ["require", "exports"], function (require, exports) {
         if (typeof data === 'string')
             return textEncoder.encode(data);
         if (data instanceof Uint8Array)
-            return data;
+            return data.slice();
         return new Uint8Array(await data.arrayBuffer());
     }
     /**
@@ -22942,16 +23001,43 @@ define("io/zip", ["require", "exports"], function (require, exports) {
      * No dependency is required and binary project assets are preserved byte-for-byte.
      */
     async function createZipBlob(entries) {
+        if (Array.isArray(entries) && entries.length >= ZIP32_ENTRY_SENTINEL) {
+            throw new Error('ZIP32 supports at most 65,534 entries without Zip64. Use folder output for this project.');
+        }
         const localParts = [];
         const centralParts = [];
+        const files = new Set();
+        const directories = new Set();
         let offset = 0;
+        let centralSize = 0;
+        let count = 0;
         const stamp = dosDateTime();
-        for (const entry of entries) {
-            const normalizedPath = entry.path.replace(/\\/g, '/').replace(/^\/+/, '');
-            if (!normalizedPath || normalizedPath.includes('../'))
-                throw new Error(`Unsafe ZIP path: ${entry.path}`);
+        for await (const entry of entries) {
+            if (++count >= ZIP32_ENTRY_SENTINEL)
+                throw new Error('ZIP32 entry-count limit exceeded. Use folder output for this project.');
+            const normalizedPath = zipPath(entry.path);
+            const identity = normalizedPath.toLowerCase();
+            if (files.has(identity) || directories.has(identity))
+                throw new Error(`Conflicting ZIP path: ${entry.path}`);
+            const segments = identity.split('/');
+            for (let index = 1; index < segments.length; index += 1) {
+                const parent = segments.slice(0, index).join('/');
+                if (files.has(parent))
+                    throw new Error(`Conflicting ZIP path: ${entry.path}`);
+                directories.add(parent);
+            }
+            files.add(identity);
+            if (normalizedPath.length > 0xffff)
+                throw new Error('ZIP32 filename is too long.');
             const name = textEncoder.encode(normalizedPath);
+            if (name.byteLength > 0xffff)
+                throw new Error(`ZIP32 filename is longer than 65,535 UTF-8 bytes: ${entry.path}`);
+            const size = typeof entry.data === 'string' ? utf8Size(entry.data)
+                : entry.data instanceof Uint8Array ? entry.data.byteLength : entry.data.size;
+            const { nextOffset, nextCentralSize } = checkedZipLayout(offset, centralSize, name.byteLength, size);
             const content = await toBytes(entry.data);
+            if (content.byteLength !== size)
+                throw new Error(`ZIP input size changed while reading: ${entry.path}`);
             const crc = crc32(content);
             const local = view(30);
             local.data.setUint32(0, 0x04034b50, true);
@@ -22985,21 +23071,25 @@ define("io/zip", ["require", "exports"], function (require, exports) {
             central.data.setUint32(38, 0, true);
             central.data.setUint32(42, offset, true);
             centralParts.push(central.bytes, name);
-            offset += local.bytes.byteLength + name.byteLength + content.byteLength;
+            offset = nextOffset;
+            centralSize = nextCentralSize;
         }
-        const centralSize = centralParts.reduce((sum, part) => sum + (part instanceof Uint8Array ? part.byteLength : 0), 0);
         const end = view(22);
         end.data.setUint32(0, 0x06054b50, true);
         end.data.setUint16(4, 0, true);
         end.data.setUint16(6, 0, true);
-        end.data.setUint16(8, entries.length, true);
-        end.data.setUint16(10, entries.length, true);
+        end.data.setUint16(8, count, true);
+        end.data.setUint16(10, count, true);
         end.data.setUint32(12, centralSize, true);
         end.data.setUint32(16, offset, true);
         end.data.setUint16(20, 0, true);
         return new Blob([...localParts, ...centralParts, end.bytes], { type: 'application/zip' });
     }
-    function downloadBlob(filename, blob) {
+    async function downloadBlob(filename, blob) {
+        if ((0, desktopBridge_2.hasDesktopBridge)()) {
+            await (0, desktopBridge_2.desktopSaveZip)(filename, blob);
+            return;
+        }
         const url = URL.createObjectURL(blob);
         const anchor = document.createElement('a');
         anchor.href = url;
@@ -23023,9 +23113,16 @@ define("io/output", ["require", "exports", "core/index", "io/folderLoader", "io/
         return entries;
     }
     async function buildOutputZip(workspace, changedTexts, scope) {
-        const entries = await buildOutputEntries(workspace, changedTexts, scope);
-        const zipEntries = [...entries].map(([path, data]) => ({ path, data }));
-        return (0, zip_1.createZipBlob)(zipEntries);
+        // Read each source lazily so the ZIP budget can stop an oversized copy before
+        // the next source file is materialized in the renderer.
+        async function* zipEntries() {
+            const paths = (0, core_3.outputPaths)(workspace.sourceEntries.keys(), changedTexts.keys(), scope);
+            for (const path of paths) {
+                const changed = changedTexts.get(path);
+                yield { path, data: changed !== undefined ? changed : await (0, folderLoader_1.readWorkspaceEntry)(workspace, path) };
+            }
+        }
+        return (0, zip_1.createZipBlob)(zipEntries());
     }
 });
 define("projects/projectPersistence", ["require", "exports"], function (require, exports) {
@@ -25354,7 +25451,7 @@ define("components/ChangePanel", ["require", "exports", "react/jsx-runtime", "re
                         return;
                     }
                     const entries = workspace.desktopBridge ? undefined : await operation.phaseAsync('entries-build', () => (0, output_1.buildOutputEntries)(workspace, changedTexts, 'full'));
-                    const written = await operation.phaseAsync('write', () => (0, folderLoader_2.writeOutputDirectory)(workspace, targetFolder, changedTexts, 'full', entries), { outputFiles: paths.length });
+                    const written = await operation.phaseAsync('write', () => (0, folderLoader_2.writeOutputDirectory)(workspace, targetFolder, changedTexts, 'full', entries, allowOverwrite), { outputFiles: paths.length });
                     (0, runtimeDiagnostics_4.recordRuntimeEvent)('changes.project-copy.completed', { traceId: operation.traceId, durationMs: performance.now() - outputStarted, data: { written } });
                     operation.end({ outcome: 'exported', written });
                     setStatus(`Exported a project copy with ${written} file(s) to ${(0, folderLoader_2.outputDirectoryLabel)(targetFolder)}. The opened source project was left unchanged.`);
@@ -25363,14 +25460,19 @@ define("components/ChangePanel", ["require", "exports", "react/jsx-runtime", "re
                 }
                 const finalName = (0, core_5.normalizeZipName)(zipName, (0, core_5.defaultZipName)(workspace.label, 'changed'));
                 const blob = await operation.phaseAsync('zip-build', () => (0, output_1.buildOutputZip)(workspace, changedTexts, 'changed'), { outputFiles: outputFileCount });
-                operation.phase('download-dispatch', () => (0, zip_2.downloadBlob)(finalName, blob), { outputFiles: outputFileCount });
+                await operation.phaseAsync('download-dispatch', () => (0, zip_2.downloadBlob)(finalName, blob), { outputFiles: outputFileCount });
                 setZipName(finalName);
                 (0, runtimeDiagnostics_4.recordRuntimeEvent)('changes.zip-export.completed', { traceId: operation.traceId, durationMs: performance.now() - outputStarted, data: { outputFiles: outputFileCount } });
                 operation.end({ outcome: 'exported', outputFiles: outputFileCount });
-                setStatus(`Exported ${outputFileCount} changed file(s) as ${finalName}. The opened source project was left unchanged.`);
+                setStatus(`Exported ${outputFileCount} changed file(s) as ${finalName}.`);
                 setReviewOpen(false);
             }
             catch (error) {
+                if (error instanceof DOMException && error.name === 'AbortError') {
+                    operation.end({ outcome: 'cancelled' });
+                    setStatus('Export cancelled. No ZIP was saved.');
+                    return;
+                }
                 operation.fail(error, { mode, changedFiles: changedTexts.size });
                 (0, runtimeDiagnostics_4.recordRuntimeError)('changes.output.failed', error, { mode, changedFiles: changedTexts.size }, operation.traceId);
                 setStatus(error instanceof Error ? error.message : String(error));
@@ -25387,7 +25489,7 @@ define("components/ChangePanel", ["require", "exports", "react/jsx-runtime", "re
         return ((0, jsx_runtime_5.jsxs)(jsx_runtime_5.Fragment, { children: [(0, jsx_runtime_5.jsxs)("footer", { className: `change-panel ${changeSet.changes.length ? '' : 'muted'}`, children: [(0, jsx_runtime_5.jsxs)("div", { className: "change-summary", children: [(0, jsx_runtime_5.jsxs)("button", { className: "change-summary-button", disabled: !project, onClick: openChangesTab, "data-tooltip": "Open staged changes", children: [(0, jsx_runtime_5.jsx)("span", { className: "change-summary-icon", children: (0, jsx_runtime_5.jsx)(LucideIcon_2.LucideIcon, { name: "git-compare-arrows", size: 17 }) }), (0, jsx_runtime_5.jsxs)("span", { children: [(0, jsx_runtime_5.jsx)("strong", { children: changeSet.changes.length ? `${changeSet.changes.length} staged change${changeSet.changes.length === 1 ? '' : 's'}` : 'No staged changes' }), (0, jsx_runtime_5.jsx)("small", { children: changeSet.changes.length ? `${changedFileIds.size} file${changedFileIds.size === 1 ? '' : 's'} affected` : 'Edits and layout proposals appear here.' })] })] }), (0, jsx_runtime_5.jsx)(RenameRulesPanel_1.RenameRulesPanel, {})] }), (0, jsx_runtime_5.jsxs)("div", { className: "change-actions", children: [status && (0, jsx_runtime_5.jsx)("small", { className: "apply-status", children: status }), (0, jsx_runtime_5.jsx)("button", { disabled: !historyCount, onClick: undoChanges, "data-tooltip": "Undo staged changes", children: "Undo" }), (0, jsx_runtime_5.jsx)("button", { disabled: !futureCount, onClick: redoChanges, "data-tooltip": "Redo staged changes", children: "Redo" }), (0, jsx_runtime_5.jsx)("button", { disabled: !changeSet.changes.length, onClick: resetChanges, children: "Discard" }), (0, jsx_runtime_5.jsx)("button", { className: "primary", disabled: !changeSet.changes.length, onClick: () => setReviewOpen(true), children: "Review & Export" })] })] }), reviewOpen && preview && validation && workspace && ((0, jsx_runtime_5.jsx)("div", { className: "modal-backdrop", onMouseDown: () => setReviewOpen(false), children: (0, jsx_runtime_5.jsxs)("section", { ref: reviewDialogRef, className: "review-modal output-review-modal", role: "dialog", "aria-modal": "true", "aria-labelledby": "change-review-title", "aria-describedby": "change-review-description", tabIndex: -1, onMouseDown: (event) => event.stopPropagation(), children: [(0, jsx_runtime_5.jsxs)("header", { children: [(0, jsx_runtime_5.jsxs)("div", { children: [(0, jsx_runtime_5.jsx)("h3", { id: "change-review-title", children: "Review changes" }), (0, jsx_runtime_5.jsx)("small", { id: "change-review-description", children: "Validate the staged refactor, then export it safely or explicitly apply it to the opened project." })] }), (0, jsx_runtime_5.jsx)("button", { ref: reviewCloseButtonRef, onClick: () => setReviewOpen(false), "aria-label": "Close change review", children: (0, jsx_runtime_5.jsx)(LucideIcon_2.LucideIcon, { name: "x", size: 15 }) })] }), (0, jsx_runtime_5.jsxs)("div", { className: "review-validation", children: [(0, jsx_runtime_5.jsxs)("span", { className: validation.safe ? 'ok' : 'bad', children: [(0, jsx_runtime_5.jsx)(LucideIcon_2.LucideIcon, { name: validation.safe ? 'circle-check' : 'circle-x', size: 14 }), " semantic preflight"] }), (0, jsx_runtime_5.jsxs)("span", { children: [validation.addedErrors.length, " new errors"] }), (0, jsx_runtime_5.jsxs)("span", { children: [validation.addedWarnings.length, " new warnings"] }), (0, jsx_runtime_5.jsxs)("span", { children: [validation.removed.length, " diagnostics resolved"] }), (0, jsx_runtime_5.jsxs)("span", { children: [preview.changedFileIds.length, " changed files"] })] }), (0, jsx_runtime_5.jsxs)("section", { className: "output-settings", children: [(0, jsx_runtime_5.jsxs)("div", { className: "output-mode-row", children: [(0, jsx_runtime_5.jsxs)("div", { children: [(0, jsx_runtime_5.jsx)("strong", { children: "What should Workbench do?" }), (0, jsx_runtime_5.jsx)("small", { children: "Exporting is the safe default. Applying to the opened project is always an explicit choice." })] }), (0, jsx_runtime_5.jsxs)("div", { className: "output-mode-grid", role: "group", "aria-label": "Output mode", children: [(0, jsx_runtime_5.jsxs)("button", { className: `output-mode-card ${mode === 'changes-zip' ? 'active' : ''}`, onClick: () => setMode('changes-zip'), children: [(0, jsx_runtime_5.jsxs)("span", { children: [(0, jsx_runtime_5.jsx)("strong", { children: "Export Changes ZIP" }), (0, jsx_runtime_5.jsx)("em", { children: "Recommended" })] }), (0, jsx_runtime_5.jsx)("small", { children: "Only changed files. Original project stays untouched." })] }), (0, jsx_runtime_5.jsxs)("button", { className: `output-mode-card ${mode === 'project-copy' ? 'active' : ''}`, onClick: () => setMode('project-copy'), children: [(0, jsx_runtime_5.jsx)("span", { children: (0, jsx_runtime_5.jsx)("strong", { children: "Export Project Copy" }) }), (0, jsx_runtime_5.jsx)("small", { children: "Complete project in another folder, including unchanged files and assets." })] }), workspace.writable && ((0, jsx_runtime_5.jsxs)("button", { className: `output-mode-card danger-choice ${mode === 'apply' ? 'active' : ''}`, onClick: () => setMode('apply'), children: [(0, jsx_runtime_5.jsx)("span", { children: (0, jsx_runtime_5.jsx)("strong", { children: "Apply to Project" }) }), (0, jsx_runtime_5.jsx)("small", { children: "Writes changed files directly into the opened project." })] }))] })] }), mode === 'changes-zip' && ((0, jsx_runtime_5.jsxs)("div", { className: "output-setting-row", children: [(0, jsx_runtime_5.jsxs)("div", { children: [(0, jsx_runtime_5.jsx)("strong", { children: "ZIP name" }), (0, jsx_runtime_5.jsx)("small", { children: "The archive keeps relative project paths so the changed files can be reviewed or copied back later." })] }), (0, jsx_runtime_5.jsx)("input", { className: "output-name-input", value: zipName, onChange: (event) => { setZipName(event.target.value); setZipNameTouched(true); }, onBlur: () => setZipName((0, core_5.normalizeZipName)(zipName, (0, core_5.defaultZipName)(workspace.label, 'changed'))) })] })), mode === 'project-copy' && ((0, jsx_runtime_5.jsxs)("div", { className: "output-setting-row", children: [(0, jsx_runtime_5.jsxs)("div", { children: [(0, jsx_runtime_5.jsx)("strong", { children: "Export folder" }), (0, jsx_runtime_5.jsx)("small", { children: "The selected folder becomes the root of a complete modified project copy. Relative paths are preserved." })] }), (0, jsx_runtime_5.jsxs)("div", { className: "output-folder-choice", children: [(0, jsx_runtime_5.jsx)("code", { children: targetFolder ? (0, folderLoader_2.outputDirectoryLabel)(targetFolder) : 'No folder selected' }), (0, jsx_runtime_5.jsx)("button", { onClick: selectTargetFolder, children: targetFolder ? 'Change…' : 'Choose…' })] })] })), (0, jsx_runtime_5.jsxs)("div", { className: "output-summary-grid", children: [(0, jsx_runtime_5.jsxs)("span", { children: [(0, jsx_runtime_5.jsx)("strong", { children: "Source" }), workspace.label] }), (0, jsx_runtime_5.jsxs)("span", { children: [(0, jsx_runtime_5.jsx)("strong", { children: "Access" }), workspace.writable ? 'Opened project · Read / Write' : 'Folder snapshot · Read only'] }), (0, jsx_runtime_5.jsxs)("span", { children: [(0, jsx_runtime_5.jsx)("strong", { children: "Result files" }), outputFileCount] }), (0, jsx_runtime_5.jsxs)("span", { children: [(0, jsx_runtime_5.jsx)("strong", { children: "Changed values" }), changeSet.changes.length] })] }), preflightBusy && (0, jsx_runtime_5.jsx)("div", { className: "output-notice", children: "Checking selected action\u2026" }), sourceConflicts.length > 0 && mode === 'apply' && ((0, jsx_runtime_5.jsxs)("div", { className: "output-notice bad", children: [(0, jsx_runtime_5.jsx)("strong", { children: "External changes detected." }), (0, jsx_runtime_5.jsxs)("span", { children: [sourceConflicts.length, " changed source file(s) no longer match the version loaded by Workbench. Apply is blocked."] }), (0, jsx_runtime_5.jsxs)("details", { children: [(0, jsx_runtime_5.jsx)("summary", { children: "Show files" }), sourceConflicts.map((path) => (0, jsx_runtime_5.jsx)("code", { children: path }, path))] })] })), targetCollisions.length > 0 && mode === 'project-copy' && ((0, jsx_runtime_5.jsxs)("div", { className: "output-notice warning", children: [(0, jsx_runtime_5.jsx)("strong", { children: "Export folder contains existing files." }), (0, jsx_runtime_5.jsxs)("span", { children: [targetCollisions.length, " project file(s) already exist in ", targetFolder ? (0, folderLoader_2.outputDirectoryLabel)(targetFolder) : 'the selected folder', "."] }), (0, jsx_runtime_5.jsxs)("label", { children: [(0, jsx_runtime_5.jsx)("input", { type: "checkbox", checked: allowOverwrite, onChange: (event) => setAllowOverwrite(event.target.checked) }), " I understand these target files will be overwritten."] }), (0, jsx_runtime_5.jsxs)("details", { children: [(0, jsx_runtime_5.jsx)("summary", { children: "Show collisions" }), targetCollisions.slice(0, 50).map((path) => (0, jsx_runtime_5.jsx)("code", { children: path }, path))] })] }))] }), (validation.added.length > 0 || validation.removed.length > 0) && ((0, jsx_runtime_5.jsxs)("details", { className: "diagnostic-diff", children: [(0, jsx_runtime_5.jsx)("summary", { children: "Diagnostic diff" }), validation.added.map((item, index) => (0, jsx_runtime_5.jsxs)("div", { className: `diagnostic-diff-row ${item.severity}`, children: ["+ ", item.message] }, `a-${index}`)), validation.removed.map((item, index) => (0, jsx_runtime_5.jsxs)("div", { className: "diagnostic-diff-row resolved", children: ["\u2212 ", item.message] }, `r-${index}`))] })), (0, jsx_runtime_5.jsxs)("section", { className: "apply-diff-review", "aria-label": "File diff review", children: [(0, jsx_runtime_5.jsxs)("div", { className: "apply-diff-heading", children: [(0, jsx_runtime_5.jsx)("strong", { children: "File diff" }), (0, jsx_runtime_5.jsx)("small", { children: "Read-only final review for Apply / Export. Edit or remove staged values in the Changes tab." })] }), diffFiles.map((file) => ((0, jsx_runtime_5.jsxs)("details", { className: "apply-diff-file", open: diffFiles.length <= 3, children: [(0, jsx_runtime_5.jsxs)("summary", { children: [(0, jsx_runtime_5.jsx)("strong", { children: file.path }), (0, jsx_runtime_5.jsxs)("small", { children: [file.lines.filter((line) => line.kind !== 'context').length, " changed line(s)"] })] }), (0, jsx_runtime_5.jsx)("div", { className: "unified-diff", children: file.lines.map((line, index) => (0, jsx_runtime_5.jsxs)("div", { className: `unified-diff-line ${line.kind}`, children: [(0, jsx_runtime_5.jsx)("span", { className: "diff-line-number", children: line.oldLine ?? '' }), (0, jsx_runtime_5.jsx)("span", { className: "diff-line-number", children: line.newLine ?? '' }), (0, jsx_runtime_5.jsxs)("code", { children: [line.kind === 'remove' ? '− ' : line.kind === 'add' ? '+ ' : '  ', line.text] })] }, `${file.path}:${index}`)) })] }, file.path)))] }), (0, jsx_runtime_5.jsxs)("div", { className: `apply-warning ${mode === 'apply' ? '' : 'export-warning'}`, children: [(0, jsx_runtime_5.jsx)("strong", { children: mode === 'apply' ? 'Apply modifies the opened project.' : mode === 'project-copy' ? 'Project Copy is non-destructive.' : 'Changes ZIP is non-destructive.' }), (0, jsx_runtime_5.jsx)("span", { children: mode === 'apply' ? 'Workbench checks for external file changes first. After a successful write the project is reloaded and staged Undo/Redo history is cleared.' : 'The opened source project and staged Undo/Redo history stay unchanged after export.' })] }), (0, jsx_runtime_5.jsxs)("footer", { children: [!validation.safe && (0, jsx_runtime_5.jsx)("span", { className: "bad", children: "Action blocked: the proposed patch introduces new errors." }), sourceConflicts.length > 0 && mode === 'apply' && (0, jsx_runtime_5.jsx)("span", { className: "bad", children: "Apply blocked by external file changes." }), (0, jsx_runtime_5.jsx)("button", { onClick: () => setReviewOpen(false), children: "Cancel" }), (0, jsx_runtime_5.jsx)("button", { className: "primary", disabled: !canExecute || busy, onClick: executeOutput, children: busy ? 'Working…' : mode === 'apply' ? `Apply ${changeSet.changes.length} Changes` : mode === 'project-copy' ? `Export Project Copy · ${outputFileCount} Files` : `Export ${outputFileCount} Changed Files as ZIP` })] })] }) }))] }));
     }
 });
-define("projects/ProjectLifecycleGuard", ["require", "exports", "react/jsx-runtime", "react", "io/desktopBridge", "store", "components/LucideIcon", "support/runtimeDiagnostics", "workbench/modalFocus"], function (require, exports, jsx_runtime_6, react_7, desktopBridge_2, store_3, LucideIcon_3, runtimeDiagnostics_5, modalFocus_2) {
+define("projects/ProjectLifecycleGuard", ["require", "exports", "react/jsx-runtime", "react", "io/desktopBridge", "store", "components/LucideIcon", "support/runtimeDiagnostics", "workbench/modalFocus"], function (require, exports, jsx_runtime_6, react_7, desktopBridge_3, store_3, LucideIcon_3, runtimeDiagnostics_5, modalFocus_2) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.ProjectLifecycleProvider = ProjectLifecycleProvider;
@@ -25423,7 +25525,7 @@ define("projects/ProjectLifecycleGuard", ["require", "exports", "react/jsx-runti
         const [busy, setBusy] = (0, react_7.useState)(false);
         const cancelButtonRef = (0, react_7.useRef)(null);
         const dialogRef = (0, react_7.useRef)(null);
-        const desktop = (0, desktopBridge_2.hasDesktopBridge)();
+        const desktop = (0, desktopBridge_3.hasDesktopBridge)();
         const guardProjectAction = (0, react_7.useCallback)(async (kind, execute) => {
             const state = store_3.useWorkbenchStore.getState();
             if (!state.project || state.changeSet.changes.length === 0) {
@@ -25438,27 +25540,27 @@ define("projects/ProjectLifecycleGuard", ["require", "exports", "react/jsx-runti
         }, []);
         const requestCloseProject = (0, react_7.useCallback)(async () => guardProjectAction('close-project', async () => {
             if (desktop)
-                await (0, desktopBridge_2.desktopCloseProject)();
+                await (0, desktopBridge_3.desktopCloseProject)();
             closeProjectState();
         }), [closeProjectState, desktop, guardProjectAction]);
         (0, react_7.useEffect)(() => {
             if (!desktop)
                 return;
-            void (0, desktopBridge_2.desktopSetPendingChangeCount)(changeCount).catch((error) => (0, runtimeDiagnostics_5.recordRuntimeError)('lifecycle.pending-change-sync-failed', error, { pendingChanges: changeCount }));
+            void (0, desktopBridge_3.desktopSetPendingChangeCount)(changeCount).catch((error) => (0, runtimeDiagnostics_5.recordRuntimeError)('lifecycle.pending-change-sync-failed', error, { pendingChanges: changeCount }));
         }, [changeCount, desktop]);
         (0, react_7.useEffect)(() => {
             if (!desktop)
                 return;
-            return (0, desktopBridge_2.subscribeDesktopAppCloseRequested)(() => {
+            return (0, desktopBridge_3.subscribeDesktopAppCloseRequested)(() => {
                 if (pending)
                     return;
                 const state = store_3.useWorkbenchStore.getState();
                 if (!state.changeSet.changes.length) {
-                    void (0, desktopBridge_2.desktopExitApplication)();
+                    void (0, desktopBridge_3.desktopExitApplication)();
                     return;
                 }
                 void guardProjectAction('exit-app', async () => {
-                    await (0, desktopBridge_2.desktopExitApplication)();
+                    await (0, desktopBridge_3.desktopExitApplication)();
                 });
             });
         }, [desktop, guardProjectAction, pending]);
@@ -25523,7 +25625,7 @@ define("projects/ProjectLifecycleGuard", ["require", "exports", "react/jsx-runti
         return value;
     }
 });
-define("components/FolderOpenButton", ["require", "exports", "react/jsx-runtime", "react", "io/desktopBridge", "io/folderLoader", "projects/projectPersistence", "store", "projects/ProjectLifecycleGuard", "components/LucideIcon", "support/runtimeDiagnostics"], function (require, exports, jsx_runtime_7, react_8, desktopBridge_3, folderLoader_3, projectPersistence_2, store_4, ProjectLifecycleGuard_1, LucideIcon_4, runtimeDiagnostics_6) {
+define("components/FolderOpenButton", ["require", "exports", "react/jsx-runtime", "react", "io/desktopBridge", "io/folderLoader", "projects/projectPersistence", "store", "projects/ProjectLifecycleGuard", "components/LucideIcon", "support/runtimeDiagnostics"], function (require, exports, jsx_runtime_7, react_8, desktopBridge_4, folderLoader_3, projectPersistence_2, store_4, ProjectLifecycleGuard_1, LucideIcon_4, runtimeDiagnostics_6) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.FolderOpenButton = FolderOpenButton;
@@ -25535,13 +25637,13 @@ define("components/FolderOpenButton", ["require", "exports", "react/jsx-runtime"
         const [loading, setLoading] = (0, react_8.useState)(false);
         const [menuOpen, setMenuOpen] = (0, react_8.useState)(false);
         const [recentRevision, setRecentRevision] = (0, react_8.useState)(0);
-        const desktop = (0, desktopBridge_3.hasDesktopBridge)();
+        const desktop = (0, desktopBridge_4.hasDesktopBridge)();
         const recentProjects = desktop ? (0, projectPersistence_2.readRecentProjects)() : [];
         void recentRevision;
         const removeRecent = async (rootPath) => {
             try {
                 if (desktop)
-                    await (0, desktopBridge_3.desktopRevokeRecentProject)(rootPath);
+                    await (0, desktopBridge_4.desktopRevokeRecentProject)(rootPath);
                 (0, projectPersistence_2.forgetRecentProject)(rootPath);
                 setRecentRevision((value) => value + 1);
             }
@@ -25614,7 +25716,7 @@ define("appIconData", ["require", "exports"], function (require, exports) {
     // Embedded copy of the committed HGW application icon for the offline-capable start screen.
     exports.APP_ICON_DATA_URI = 'data:image/png;base64,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';
 });
-define("components/ProjectStartScreen", ["require", "exports", "react/jsx-runtime", "react", "appIconData", "io/desktopBridge", "io/folderLoader", "projects/projectPersistence", "store", "components/FolderOpenButton", "components/LucideIcon", "support/runtimeDiagnostics"], function (require, exports, jsx_runtime_8, react_9, appIconData_1, desktopBridge_4, folderLoader_4, projectPersistence_3, store_5, FolderOpenButton_1, LucideIcon_5, runtimeDiagnostics_7) {
+define("components/ProjectStartScreen", ["require", "exports", "react/jsx-runtime", "react", "appIconData", "io/desktopBridge", "io/folderLoader", "projects/projectPersistence", "store", "components/FolderOpenButton", "components/LucideIcon", "support/runtimeDiagnostics"], function (require, exports, jsx_runtime_8, react_9, appIconData_1, desktopBridge_5, folderLoader_4, projectPersistence_3, store_5, FolderOpenButton_1, LucideIcon_5, runtimeDiagnostics_7) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.ProjectStartScreen = ProjectStartScreen;
@@ -25638,14 +25740,14 @@ define("components/ProjectStartScreen", ["require", "exports", "react/jsx-runtim
         const [loadingPath, setLoadingPath] = (0, react_9.useState)();
         const [error, setError] = (0, react_9.useState)();
         const [revision, setRevision] = (0, react_9.useState)(0);
-        const desktop = (0, desktopBridge_4.hasDesktopBridge)();
+        const desktop = (0, desktopBridge_5.hasDesktopBridge)();
         const recent = desktop ? (0, projectPersistence_3.readRecentProjects)() : [];
         void revision;
         const removeRecent = async (rootPath) => {
             setError(undefined);
             try {
                 if (desktop)
-                    await (0, desktopBridge_4.desktopRevokeRecentProject)(rootPath);
+                    await (0, desktopBridge_5.desktopRevokeRecentProject)(rootPath);
                 (0, projectPersistence_3.forgetRecentProject)(rootPath);
                 setRevision((value) => value + 1);
             }
@@ -25994,7 +26096,7 @@ define("components/HotkeySettings", ["require", "exports", "react/jsx-runtime", 
                     }) }), conflicts.length > 0 && (0, jsx_runtime_11.jsxs)("div", { className: "hotkey-conflict", role: "alert", children: ["Shortcut conflict: ", conflicts.map((conflict) => `${conflict.shortcut} (${conflict.commands.map(commandRegistry_2.commandLabel).join(', ')})`).join(' · ')] }), status && (0, jsx_runtime_11.jsx)("small", { className: "hotkey-status", role: "status", children: status })] }));
     }
 });
-define("components/WorkbenchSettings", ["require", "exports", "react/jsx-runtime", "react", "io/desktopBridge", "release/releaseIdentity", "support/runtimeDiagnostics", "store", "workbench/appearancePreferences", "components/LucideIcon", "components/HotkeySettings", "workbench/modalFocus"], function (require, exports, jsx_runtime_12, react_12, desktopBridge_5, releaseIdentity_1, runtimeDiagnostics_9, store_8, appearancePreferences_1, LucideIcon_8, HotkeySettings_1, modalFocus_4) {
+define("components/WorkbenchSettings", ["require", "exports", "react/jsx-runtime", "react", "io/desktopBridge", "release/releaseIdentity", "support/runtimeDiagnostics", "store", "workbench/appearancePreferences", "components/LucideIcon", "components/HotkeySettings", "workbench/modalFocus"], function (require, exports, jsx_runtime_12, react_12, desktopBridge_6, releaseIdentity_1, runtimeDiagnostics_9, store_8, appearancePreferences_1, LucideIcon_8, HotkeySettings_1, modalFocus_4) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.WorkbenchSettings = WorkbenchSettings;
@@ -26012,7 +26114,7 @@ define("components/WorkbenchSettings", ["require", "exports", "react/jsx-runtime
         const setDetailedLogging = (0, store_8.useWorkbenchStore)((state) => state.setDetailedLogging);
         const workspace = (0, store_8.useWorkbenchStore)((state) => state.workspace);
         const pendingChangeCount = (0, store_8.useWorkbenchStore)((state) => state.changeSet.changes.length);
-        const desktop = (0, desktopBridge_5.hasDesktopBridge)();
+        const desktop = (0, desktopBridge_6.hasDesktopBridge)();
         const closeButtonRef = (0, react_12.useRef)(null);
         const dialogRef = (0, react_12.useRef)(null);
         const [activePage, setActivePage] = (0, react_12.useState)('appearance');
@@ -26108,7 +26210,7 @@ define("components/WorkbenchSettings", ["require", "exports", "react/jsx-runtime
             setUpdateBusy(true);
             setUpdateStatus('Checking for updates…');
             try {
-                const result = await (0, desktopBridge_5.desktopCheckForUpdate)(updateChannel);
+                const result = await (0, desktopBridge_6.desktopCheckForUpdate)(updateChannel);
                 setUpdateCheck(result);
                 setUpdateStatus(!result.configured
                     ? (result.reason ?? 'Updater deployment is not configured for this build.')
@@ -26134,7 +26236,7 @@ define("components/WorkbenchSettings", ["require", "exports", "react/jsx-runtime
             setUpdateBusy(true);
             setUpdateStatus(`Downloading ${updateCheck.version}… the app will restart after installation.`);
             try {
-                await (0, desktopBridge_5.desktopInstallUpdate)(updateChannel, updateCheck.version);
+                await (0, desktopBridge_6.desktopInstallUpdate)(updateChannel, updateCheck.version);
             }
             catch (error) {
                 (0, runtimeDiagnostics_9.recordRuntimeError)('app.update.install-failed', error);
@@ -28117,7 +28219,7 @@ define("features/project-graph/ProjectGraphView", ["require", "exports", "react/
                                 })] }) })), (0, jsx_runtime_26.jsxs)("div", { className: "project-graph-overlay project-graph-legend", "aria-label": "Project Graph legend", children: [(0, jsx_runtime_26.jsxs)("span", { children: [(0, jsx_runtime_26.jsx)("i", { className: "legend-instance" }), "Instance"] }), (0, jsx_runtime_26.jsxs)("span", { children: [(0, jsx_runtime_26.jsx)("i", { className: "legend-world" }), "WorldStructure"] }), (0, jsx_runtime_26.jsxs)("span", { children: [(0, jsx_runtime_26.jsx)("i", { className: "legend-biome" }), "Biome"] }), (0, jsx_runtime_26.jsxs)("span", { children: [(0, jsx_runtime_26.jsx)("i", { className: "legend-density" }), "Density"] }), graphSettings.includeResources && (0, jsx_runtime_26.jsxs)("span", { children: [(0, jsx_runtime_26.jsx)("i", { className: "legend-resource" }), "Resource"] }), (0, jsx_runtime_26.jsxs)("span", { children: [(0, jsx_runtime_26.jsx)("i", { className: "legend-unresolved" }), "Unresolved"] })] }), (0, jsx_runtime_26.jsx)("div", { className: "project-graph-overlay project-graph-hint", children: "Click files to open them \u00B7 Density assets open References" })] }) }));
     }
 });
-define("features/worldgen-performance/WorldgenPerformanceTab", ["require", "exports", "react/jsx-runtime", "react", "io/desktopBridge", "components/LucideIcon", "store"], function (require, exports, jsx_runtime_27, react_24, desktopBridge_6, LucideIcon_15, store_18) {
+define("features/worldgen-performance/WorldgenPerformanceTab", ["require", "exports", "react/jsx-runtime", "react", "io/desktopBridge", "components/LucideIcon", "store"], function (require, exports, jsx_runtime_27, react_24, desktopBridge_7, LucideIcon_15, store_18) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.WorldgenPerformanceTab = WorldgenPerformanceTab;
@@ -28149,7 +28251,7 @@ define("features/worldgen-performance/WorldgenPerformanceTab", ["require", "expo
         const [checkedAt, setCheckedAt] = (0, react_24.useState)();
         const activeSelectionKeyRef = (0, react_24.useRef)();
         const inFlightSelectionKeyRef = (0, react_24.useRef)();
-        const desktop = (0, desktopBridge_6.hasDesktopBridge)();
+        const desktop = (0, desktopBridge_7.hasDesktopBridge)();
         const selectionKey = tab.selection?.token;
         activeSelectionKeyRef.current = selectionKey;
         const refresh = (0, react_24.useCallback)(async () => {
@@ -28160,7 +28262,7 @@ define("features/worldgen-performance/WorldgenPerformanceTab", ["require", "expo
             inFlightSelectionKeyRef.current = key;
             setLoading(true);
             try {
-                const next = await (0, desktopBridge_6.desktopReadWorldgenPerformance)(selection.token);
+                const next = await (0, desktopBridge_7.desktopReadWorldgenPerformance)(selection.token);
                 if (activeSelectionKeyRef.current !== key)
                     return;
                 setResult(next);
@@ -28194,7 +28296,7 @@ define("features/worldgen-performance/WorldgenPerformanceTab", ["require", "expo
             if (!desktop)
                 return;
             try {
-                const selection = await (0, desktopBridge_6.desktopChooseWorldgenLog)();
+                const selection = await (0, desktopBridge_7.desktopChooseWorldgenLog)();
                 setSelection({ ...selection, sourceKind: 'file' });
             }
             catch (nextError) {
@@ -28207,7 +28309,7 @@ define("features/worldgen-performance/WorldgenPerformanceTab", ["require", "expo
             if (!desktop)
                 return;
             try {
-                const selection = await (0, desktopBridge_6.desktopChooseWorldgenLogFolder)();
+                const selection = await (0, desktopBridge_7.desktopChooseWorldgenLogFolder)();
                 setSelection({ ...selection, sourceKind: 'folder' });
             }
             catch (nextError) {
@@ -28856,7 +28958,7 @@ define("workbench/workbenchLayoutPreferences", ["require", "exports"], function 
         };
     }
 });
-define("App", ["require", "exports", "react/jsx-runtime", "react", "commands/commandRegistry", "components/ChangePanel", "components/FolderOpenButton", "components/ProjectStartScreen", "components/QuickOpen", "components/WorkbenchRail", "components/LucideIcon", "components/WorkbenchSettings", "components/UniversalTooltip", "components/WorkbenchSidebar", "components/WorkbenchSplitter", "features/inspector/InspectorPane", "io/desktopBridge", "io/folderLoader", "store", "support/runtimeDiagnostics", "support/performanceTracing", "release/releaseIdentity", "workbench/appearancePreferences", "workbench/workbenchLayoutPreferences"], function (require, exports, jsx_runtime_33, react_29, commandRegistry_3, ChangePanel_1, FolderOpenButton_2, ProjectStartScreen_1, QuickOpen_1, WorkbenchRail_1, LucideIcon_19, WorkbenchSettings_1, UniversalTooltip_1, WorkbenchSidebar_1, WorkbenchSplitter_1, InspectorPane_1, desktopBridge_7, folderLoader_7, store_23, runtimeDiagnostics_10, performanceTracing_11, releaseIdentity_2, appearancePreferences_2, workbenchLayoutPreferences_1) {
+define("App", ["require", "exports", "react/jsx-runtime", "react", "commands/commandRegistry", "components/ChangePanel", "components/FolderOpenButton", "components/ProjectStartScreen", "components/QuickOpen", "components/WorkbenchRail", "components/LucideIcon", "components/WorkbenchSettings", "components/UniversalTooltip", "components/WorkbenchSidebar", "components/WorkbenchSplitter", "features/inspector/InspectorPane", "io/desktopBridge", "io/folderLoader", "store", "support/runtimeDiagnostics", "support/performanceTracing", "release/releaseIdentity", "workbench/appearancePreferences", "workbench/workbenchLayoutPreferences"], function (require, exports, jsx_runtime_33, react_29, commandRegistry_3, ChangePanel_1, FolderOpenButton_2, ProjectStartScreen_1, QuickOpen_1, WorkbenchRail_1, LucideIcon_19, WorkbenchSettings_1, UniversalTooltip_1, WorkbenchSidebar_1, WorkbenchSplitter_1, InspectorPane_1, desktopBridge_8, folderLoader_7, store_23, runtimeDiagnostics_10, performanceTracing_11, releaseIdentity_2, appearancePreferences_2, workbenchLayoutPreferences_1) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.default = App;
@@ -28889,7 +28991,7 @@ define("App", ["require", "exports", "react/jsx-runtime", "react", "commands/com
         const [splitRatio, setSplitRatio] = (0, react_29.useState)(() => (0, workbenchLayoutPreferences_1.readWorkbenchLayoutPreferences)().splitRatio);
         const [uiScale, setUiScale] = (0, react_29.useState)(() => (0, appearancePreferences_2.readWorkbenchAppearancePreferences)().uiScale);
         const worldgenToken = (0, store_23.useWorkbenchStore)((state) => state.tabs.find((tab) => tab.kind === 'worldgen-performance')?.selection?.token);
-        const desktop = (0, desktopBridge_7.hasDesktopBridge)();
+        const desktop = (0, desktopBridge_8.hasDesktopBridge)();
         const projectRoot = workspace?.projectRoot;
         const publishWorkbenchLayoutSupport = (0, react_29.useCallback)((persisted, nextSidebarWidth = sidebarWidth, nextSplitRatio = splitRatio, splitEnabled = splitViewEnabled) => {
             (0, runtimeDiagnostics_10.setWorkbenchLayoutSupportSnapshot)({
@@ -29067,7 +29169,7 @@ define("App", ["require", "exports", "react/jsx-runtime", "react", "commands/com
             lastWorldgenToken.current = worldgenToken;
             if (!desktop || !previous || previous === worldgenToken)
                 return;
-            void (0, desktopBridge_7.desktopRevokeWorldgenLog)(previous).catch((error) => {
+            void (0, desktopBridge_8.desktopRevokeWorldgenLog)(previous).catch((error) => {
                 (0, runtimeDiagnostics_10.recordRuntimeError)('worldgen.log.revoke-failed', error);
             });
         }, [desktop, worldgenToken]);
@@ -29084,7 +29186,7 @@ define("App", ["require", "exports", "react/jsx-runtime", "react", "commands/com
         (0, react_29.useEffect)(() => {
             if (!desktop)
                 return;
-            const unsubscribe = (0, desktopBridge_7.subscribeDesktopProjectChanges)((event) => {
+            const unsubscribe = (0, desktopBridge_8.subscribeDesktopProjectChanges)((event) => {
                 const current = store_23.useWorkbenchStore.getState().workspace;
                 if (!current?.desktopBridge || !current.projectRoot || current.projectRoot !== event.root)
                     return;

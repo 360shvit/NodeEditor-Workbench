@@ -16,7 +16,8 @@ The Rust desktop host currently enforces:
 - maximum JSON nesting depth: **512**;
 - maximum files in one Apply transaction: **10,000**;
 - semantic discovery probes: **10,000 files**, **8 MiB per file**, **128 MiB total**;
-- source-text preview: **4 MiB**.
+- source-text preview: **4 MiB**;
+- binary reads into the WebView: **256 MiB per file**; larger binary assets use native folder-copy output.
 
 Crossing a safety boundary is an explicit error; the Workbench should not silently truncate a project into a misleading semantic model.
 
@@ -59,7 +60,13 @@ Support reports do not include project contents. Project-relative path fields ar
 
 ## ZIP/output limits
 
-The internal browser-side ZIP writer uses classic ZIP32/STORE records and does **not** implement Zip64. Therefore archives at or beyond classic ZIP limits (for example more than 65,535 entries, individual stored sizes/offsets around 4 GiB, or equivalent central-directory overflow) are unsupported. The current project safety envelope is normally far below the entry-count ceiling, but very large binary project copies can still approach ZIP32 size/offset limits. Release/large-project workflows should be validated against representative project sizes.
+The embedded frontend ZIP writer uses classic ZIP32/STORE records and does **not** implement Zip64. It rejects more than **65,534 entries**, filenames longer than **65,535 UTF-8 bytes**, and sizes/offsets requiring Zip64. A separate **512 MiB serialized-archive limit** includes headers and the central directory; this is not a guarantee that process memory stays below 512 MiB because the WebView/IPC may hold additional copies. Larger copies use native folder output. Absolute, traversal, Windows-device/stream and conflicting archive paths are rejected instead of silently rewritten.
+
+Native project-copy output must be outside the source tree. Changed text is limited to **10,000 files**, **64 MiB per file** and **512 MiB total**; the complete output plan is limited to **100,000 files**. Overwriting requires the UI's explicit overwrite choice, which is carried to native authority. A destination appearing after preflight also fails if overwrite was not approved. Binary assets are copied without decoding and without the WebView binary-read limit.
+
+Each folder-output or selected-save file is staged beside its destination and committed only after the write succeeds. Existing hard-linked files are replaced rather than truncated through their shared storage. A multi-file folder copy is **not an all-or-nothing transaction**: if a later file fails, earlier completed output files remain and the error reports their count. No automatic deletion of the user's existing output folder is attempted. A source modified externally during copying is not a supported consistent snapshot; detected size changes fail the current file. Filesystem/storage failure guarantees remain bounded by Windows and the underlying device.
+
+ZIP success is reported after native save completion; cancelling the picker reports cancellation. ZIP import/extraction and the browser-only snapshot fallback are not exposed by the supported native desktop UI.
 
 ## Distribution / updater limits
 
