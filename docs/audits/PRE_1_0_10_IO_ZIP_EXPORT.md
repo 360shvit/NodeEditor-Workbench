@@ -1,6 +1,7 @@
 # Pre-1.0 Audit 10 — I/O, ZIP, Import/Export & Large-Project Safety
 
-**Status:** IN REVIEW — focused tests pass; full regression and PR CI pending.  
+**Status:** PASS — reviewed and remediated; complete Windows PR validation passed.
+
 **Baseline:** `audit/pre-1.0-full-review` at `4f6cea62110bacd01cbfd8134e5fea8d538fcb43`  
 **Release identity:** `v0.11.36-rc.3` remains an audit baseline, not a new release target.  
 **Durable gate:** `npm run test:pre1-io-zip-export`, plus `cargo test --locked --manifest-path src-tauri/Cargo.toml`.
@@ -57,7 +58,8 @@ The UI previously reported export success immediately after dispatching an ancho
 - Strict application TypeScript: PASS.
 - Final local locked Windows suite: 26/26 PASS (18 existing + 8 I/O fixtures).
 - Local registered regression matrix: 75/83 passed. Eight checks could not complete because this execution environment rejects piped Node/Git child processes with `EPERM`; these are not counted as passes. The canonical embedded-bundle check has the same local limitation. The bundle was regenerated with the script's compiler arguments and sorted source list; canonical parity and the complete matrix require the normal Windows PR CI.
-- PR CI: pending.
+- Windows PR CI on implementation commit `b8bc67d4ff4ee1792cad01279707156680c5711a`: [Validate Tauri Windows #190](https://github.com/360shvit/NodeEditor-Workbench/actions/runs/35525558733) PASS. This includes 83/83 registered regression suites, 250 packaged-bundle soak cycles, 26/26 locked native tests, strict application TypeScript, release/embedded-bundle parity, transitive third-party metadata/distribution/notices checks and zero unused source carry.
+- [Dependency Approval](https://github.com/360shvit/NodeEditor-Workbench/actions/runs/35525557672): PASS. Both dependency locks remain unchanged.
 
 ## Limits and follow-up ownership
 
@@ -70,4 +72,6 @@ The UI previously reported export success immediately after dispatching an ancho
 
 ## Exit decision
 
-Pending full validation of the candidate. Track 11 follows after Track 10 evidence is complete.
+Track 10 is complete. ZIP overflow/path ambiguity, stale-size read bounds, unsafe output replacement and premature ZIP success are remediated with durable behavioral regression coverage. No unresolved blocker remains within this track's reviewed scope; the accepted limits and manual acceptance ownership above still apply.
+
+**Next:** Track 11 — performance, scalability & resource behavior.
