@@ -1,6 +1,6 @@
 # Pre-1.0 Audit 11 — Performance, Scalability & Resource Behavior
 
-**Status:** IN REVIEW — remediation and local focused checks complete; normal Windows PR CI pending.
+**Status:** PASS — remediation, representative profiles and normal Windows PR CI complete. Installed-client acceptance limits remain explicit below.
 
 **Baseline:** `3618c62b97f581ca4bac4eb2068d4dac588dc7a6` on `audit/pre-1.0-full-review`.
 
@@ -38,7 +38,7 @@ Whole-file reverse scanning remains available; no total-log cutoff is introduced
 
 Production scan work uses Tauri's blocking executor, with exactly one native scan permit. Selection replacement, revocation and approved application exit signal cancellation. Read/seek boundaries check that signal; cancellation does not free the permit until the old worker exits. Concurrent requests receive an explicit retry error instead of accumulating workers. Tests cover token isolation, permit lifetime, cancellation before I/O and after the first chunk, every marker split across a chunk boundary, multi-chunk malformed lines, candidate line count and a 32 MiB no-report scan reaching BOF exactly once.
 
-References: [Tauri blocking executor](https://docs.rs/tauri/2.11.5/tauri/async_runtime/fn.spawn_blocking.html), [Tokio blocking-work cancellation and concurrency guidance](https://docs.rs/tokio/latest/tokio/task/fn.spawn_blocking.html). Running blocking work requires cooperative cancellation; aborting its task handle alone does not stop it.
+References: [Tauri blocking executor](https://docs.rs/tauri/latest/tauri/async_runtime/fn.spawn_blocking.html), [Tokio blocking-work cancellation and concurrency guidance](https://docs.rs/tokio/latest/tokio/task/fn.spawn_blocking.html). Running blocking work requires cooperative cancellation; aborting its task handle alone does not stop it.
 
 ## Measured representative profiles
 
@@ -66,7 +66,8 @@ Stable regression budgets use work counts, retained object counts, maximum read 
 - Locked Windows native suite: 30/30 PASS (26 existing + four performance/resource fixtures).
 - Existing graph semantic, native-authority, Apply/recovery and performance contracts remain active.
 - Local full matrix exposed two intentional graph-source pin changes, now corrected and individually rechecked. Eight other checks hit the reproduced local restriction on piped Node/Git child processes (`EPERM`); they are not counted as passing. PR CI must prove the complete matrix and canonical embedded parity.
-- Normal Windows PR CI: pending.
+- [Normal Windows PR validation](https://github.com/360shvit/NodeEditor-Workbench/actions/runs/35631977715) on implementation commit `f1b5cb9fccb29dc95fc594977894cc21d5554b4a`: PASS. Evidence includes 84/84 registered regression suites, 250 packaged-bundle soak cycles, 30/30 locked native tests, strict TypeScript, release/embedded parity, third-party metadata/distribution/notices checks and zero unused source carry.
+- [Dependency Approval](https://github.com/360shvit/NodeEditor-Workbench/actions/runs/35631974708): PASS on the same implementation commit.
 
 ## Accepted limits and ownership
 
@@ -79,4 +80,6 @@ Stable regression budgets use work counts, retained object counts, maximum read 
 
 ## Exit decision
 
-Pending full validation of the candidate. Track 12 — diagnostics, logging & privacy — follows after normal Windows PR CI confirms the implementation.
+Track 11 is complete within its reviewed scope. The reproduced multiplicative lookup/read work and unbounded diagnostic retention are remediated and protected by repeatable behavioral gates. The profiling and installed-client limits above remain explicit acceptance work, not claimed passes.
+
+**Next:** Track 12 — diagnostics, logging & privacy.
