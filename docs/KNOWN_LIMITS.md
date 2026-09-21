@@ -29,6 +29,8 @@ Crossing a safety boundary is an explicit error; the Workbench should not silent
 - folder mode selects one source: lexicographically newest regular top-level `.log` filename;
 - single-file picker accepts `.log` and `.txt`; folder auto-selection only considers `.log`;
 - reverse scanning uses **1 MiB chunks**; one malformed report candidate is capped at **8 MiB** while whole-file scanning remains unlimited;
+- report candidates are additionally capped at **65,536 lines**; repeated markers on a malformed line do not trigger repeated full-line parsing;
+- one native WorldGen scan runs at a time; changing/revoking the selection or exiting signals cooperative cancellation at read/seek boundaries. A replacement request can require retrying Refresh now while the previous worker finishes;
 - there is **no artificial total-byte/line cutoff**, so a very large log with no performance report can require substantial disk I/O;
 - the performance block is considered complete only when `Missed/Total Ratio:` has been reached;
 - `Material (Sum)` is derived; other displayed report values are not recomputed/reconciled.
@@ -51,6 +53,7 @@ Recent-project/session data is sanitized on read and may fall back to defaults w
 
 - in-memory runtime events: **500**;
 - metric samples per metric: **96**;
+- retained metric names: **256**, up to **120 characters** each; recently used names survive eviction, and the summary reports the eviction count;
 - trace summaries: **20**;
 - slow-operation list: **20**;
 - persistent Workbench log: **2 MiB per file**, **4 retained files**;

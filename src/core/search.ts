@@ -107,21 +107,28 @@ function fieldPathKey(field: ProjectField): string {
 }
 
 function nodeKey(node: Pick<ProjectNode, 'fileId' | 'id' | 'location'>): string {
-  return `${node.fileId}|${node.location}|${node.id}`;
+  return JSON.stringify([node.fileId, node.location, node.id]);
 }
 
 interface SearchStatusIndex {
   changed: Map<string, Set<string>>;
   unresolved: Map<string, Set<string>>;
+  values: Map<string, Map<string, JsonPrimitive>>;
 }
 
 function buildStatusIndex(project: ProjectModel, changeSet: ChangeSet | undefined, needsEffectiveDiagnostics: boolean): SearchStatusIndex {
   const changed = new Map<string, Set<string>>();
+  const values = new Map<string, Map<string, JsonPrimitive>>();
   for (const change of changeSet?.changes ?? []) {
-    const key = `${change.fileId}|${change.location}|${change.nodeId}`;
+    const key = nodeKey({ fileId: change.fileId, location: change.location, id: change.nodeId });
     const paths = changed.get(key) ?? new Set<string>();
-    paths.add(jsonPathKey(change.jsonPath));
+    const path = jsonPathKey(change.jsonPath);
+    paths.add(path);
     changed.set(key, paths);
+    const nodeValues = values.get(key) ?? new Map<string, JsonPrimitive>();
+    // Preserve the first matching staged change, including an explicit null value.
+    if (!nodeValues.has(path)) nodeValues.set(path, change.newValue);
+    values.set(key, nodeValues);
   }
 
   const diagnosticProject = needsEffectiveDiagnostics && changeSet?.changes.length
@@ -131,7 +138,7 @@ function buildStatusIndex(project: ProjectModel, changeSet: ChangeSet | undefine
   for (const diagnostic of diagnosticProject.diagnostics) {
     if (diagnostic.code !== 'unresolved-import') continue;
     for (const occurrence of diagnostic.related ?? []) {
-      const key = `${occurrence.fileId}|${occurrence.location}|${occurrence.nodeId}`;
+      const key = nodeKey({ fileId: occurrence.fileId, location: occurrence.location, id: occurrence.nodeId });
       const paths = unresolved.get(key) ?? new Set<string>();
       paths.add(jsonPathKey(occurrence.jsonPath));
       unresolved.set(key, paths);
@@ -142,14 +149,12 @@ function buildStatusIndex(project: ProjectModel, changeSet: ChangeSet | undefine
       if (node) unresolved.set(nodeKey(node), unresolved.get(nodeKey(node)) ?? new Set<string>());
     }
   }
-  return { changed, unresolved };
+  return { changed, unresolved, values };
 }
 
-function effectiveValue(changeSet: ChangeSet | undefined, node: ProjectNode, field: ProjectField): JsonPrimitive {
-  if (!changeSet) return field.value;
-  const path = fieldPathKey(field);
-  const change = changeSet.changes.find((item) => item.fileId === node.fileId && item.nodeId === node.id && item.location === node.location && jsonPathKey(item.jsonPath) === path);
-  return change?.newValue ?? field.value;
+function effectiveValue(values: Map<string, JsonPrimitive> | undefined, field: ProjectField): JsonPrimitive {
+  const value = values?.get(fieldPathKey(field));
+  return value === undefined ? field.value : value;
 }
 
 function semanticIs(parsed: ParsedSearchQuery): Array<'import' | 'export'> {
@@ -161,7 +166,6 @@ function nodeMatchesQuery(
   node: ProjectNode,
   parsed: ParsedSearchQuery,
   status: SearchStatusIndex,
-  changeSet?: ChangeSet,
 ): SearchNodeMatch | undefined {
   const file = project.fileMap.get(node.fileId);
   if (!file) return undefined;
@@ -173,6 +177,7 @@ function nodeMatchesQuery(
     includes(node.nodeKind, value) || includes(node.type, value) || includes(node.id, value))) return undefined;
 
   const key = nodeKey(node);
+  const values = status.values.get(key);
   const semanticPredicates = semanticIs(parsed);
   for (const predicate of parsed.is) {
     if (predicate === 'live' && node.location !== 'live') return undefined;
@@ -203,7 +208,7 @@ function nodeMatchesQuery(
 
   // Multiple value: filters are ANDed, while each filter may match any currently selected field.
   for (const valueFilter of parsed.values) {
-    const matches = selectedFields.filter((field) => includes(effectiveValue(changeSet, node, field), valueFilter));
+    const matches = selectedFields.filter((field) => includes(effectiveValue(values, field), valueFilter));
     if (!matches.length) return undefined;
     matches.forEach((field) => matchedFieldPaths.add(fieldPathKey(field)));
   }
@@ -215,7 +220,7 @@ function nodeMatchesQuery(
   } else {
     for (const term of parsed.terms) {
       const metadataMatch = !fieldScoped && [node.nodeKind, node.type, node.id].some((value) => includes(value, term));
-      const termFieldMatches = selectedFields.filter((field) => includes(field.key, term) || includes(effectiveValue(changeSet, node, field), term));
+      const termFieldMatches = selectedFields.filter((field) => includes(field.key, term) || includes(effectiveValue(values, field), term));
       if (!metadataMatch && termFieldMatches.length === 0) return undefined;
       if (metadataMatch) matchedNodeMetadata = true;
       termFieldMatches.forEach((field) => matchedFieldPaths.add(fieldPathKey(field)));
@@ -245,7 +250,7 @@ export function searchProjectNodes(project: ProjectModel, query: string, changeS
   let total = 0;
   for (const file of project.files) {
     for (const node of file.nodes) {
-      const match = nodeMatchesQuery(project, node, parsed, status, changeSet);
+      const match = nodeMatchesQuery(project, node, parsed, status);
       if (!match) continue;
       total += 1;
       if (matches.length < limit) matches.push(match);
@@ -257,7 +262,7 @@ export function searchProjectNodes(project: ProjectModel, query: string, changeS
 /** Legacy quick-result search kept for direct navigation and compatibility with v0.2/v0.3 core callers. */
 export function searchProject(project: ProjectModel, query: string, limit = 80): ProjectSearchResult[] {
   const needle = query.trim().toLowerCase();
-  if (!needle) return [];
+  if (!needle || limit <= 0) return [];
   const results: ProjectSearchResult[] = [];
   const push = (result: ProjectSearchResult) => {
     if (results.length < limit) results.push(result);
@@ -266,6 +271,7 @@ export function searchProject(project: ProjectModel, query: string, limit = 80):
   for (const file of project.files) {
     if (includes(file.path, needle) || includes(file.name, needle)) {
       push({ id: `file:${file.id}`, kind: 'file', title: file.name, subtitle: `${file.workspace.label} · ${file.path}`, fileId: file.id });
+      if (results.length >= limit) return results;
     }
   }
 
@@ -282,6 +288,7 @@ export function searchProject(project: ProjectModel, query: string, limit = 80):
       location: first?.location,
       symbol: record.key,
     });
+    if (results.length >= limit) return results;
   }
 
   const resources = new Map<string, { kind: 'environment' | 'prefab'; name: string; path: string; referenceCount: number }>();

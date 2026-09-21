@@ -99,7 +99,8 @@
     "test:pre1-native-authority-boundary": "node scripts/test-pre1-native-authority-boundary.mjs",
     "test:pre1-security-threat-model": "node scripts/test-pre1-security-threat-model.mjs",
     "test:pre1-apply-transaction-recovery": "node scripts/test-pre1-apply-transaction-recovery.mjs",
-    "test:pre1-io-zip-export": "node scripts/test-pre1-io-zip-export.mjs"
+    "test:pre1-io-zip-export": "node scripts/test-pre1-io-zip-export.mjs",
+    "test:pre1-performance-resources": "npm run typecheck:core && node scripts/test-pre1-performance-resources.mjs"
   },
   "dependencies": {
     "react": "18.3.1",

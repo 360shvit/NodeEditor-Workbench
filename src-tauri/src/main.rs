@@ -17,6 +17,8 @@ use tauri::{ipc::InvokeBody, ipc::Request, ipc::Response, AppHandle, Emitter, Ma
 use tauri_plugin_dialog::DialogExt;
 use tauri_plugin_window_state::StateFlags;
 use tauri_plugin_updater::{Update, UpdaterExt};
+mod worldgen_scan_control;
+use worldgen_scan_control::{CancellableReader, WorldgenScanControl};
 
 const MAX_PROJECT_ENTRIES: usize = 100_000;
 const MAX_JSON_FILES: usize = 50_000;
@@ -43,6 +45,7 @@ const PERSISTENT_LOG_MAX_ENTRY_BYTES: usize = 16 * 1024;
 const PERSISTENT_LOG_MAX_BATCH_BYTES: usize = 1024 * 1024;
 const WORLDGEN_LOG_SCAN_CHUNK_BYTES: u64 = 1024 * 1024;
 const WORLDGEN_REPORT_CANDIDATE_MAX_BYTES: u64 = 8 * 1024 * 1024;
+const WORLDGEN_REPORT_CANDIDATE_MAX_LINES: usize = 65_536;
 const WORLDGEN_PERFORMANCE_MARKER: &str = "[HytaleGenerator] Performance Report";
 const UPDATER_PUBLIC_KEY: &str = include_str!("../updater.pubkey");
 const UPDATER_REPOSITORY: &str = match option_env!("HGW_GITHUB_REPOSITORY") {
@@ -103,6 +106,7 @@ struct DesktopState {
     output_roots: Mutex<HashMap<String, PathBuf>>,
     save_targets: Mutex<HashMap<String, RegisteredSaveTarget>>,
     worldgen_logs: Mutex<HashMap<String, WorldgenLogSource>>,
+    worldgen_scan: Arc<WorldgenScanControl>,
     recent_grants: Mutex<HashSet<PathBuf>>,
     next_token: AtomicU64,
     watcher: Mutex<Option<RecommendedWatcher>>,
@@ -681,7 +685,7 @@ fn parse_worldgen_report(lines: &[&str], marker_index: usize) -> Option<Worldgen
     })
 }
 
-fn worldgen_line_start(file: &mut File, position: u64) -> Result<u64, String> {
+fn worldgen_line_start(file: &mut (impl Read + Seek), position: u64) -> Result<u64, String> {
     const SEARCH_BYTES: usize = 4096;
     let mut cursor = position;
     let mut buffer = vec![0u8; SEARCH_BYTES];
@@ -698,8 +702,7 @@ fn worldgen_line_start(file: &mut File, position: u64) -> Result<u64, String> {
     Ok(0)
 }
 
-fn read_worldgen_report_at(file: &mut File, marker_position: u64) -> Result<Option<WorldgenPerformanceReport>, String> {
-    let line_start = worldgen_line_start(file, marker_position)?;
+fn read_worldgen_report_at(file: &mut (impl Read + Seek), line_start: u64) -> Result<Option<WorldgenPerformanceReport>, String> {
     file.seek(SeekFrom::Start(line_start)).map_err(|error| io_error("Cannot seek selected WorldGen log", error))?;
     // The whole log remains unbounded and is still searched back to BOF. Only one
     // malformed report candidate is bounded so a missing terminator cannot materialize
@@ -710,6 +713,7 @@ fn read_worldgen_report_at(file: &mut File, marker_position: u64) -> Result<Opti
     let mut found_marker = false;
     let mut candidate_bytes = 0u64;
     loop {
+        if lines.len() >= WORLDGEN_REPORT_CANDIDATE_MAX_LINES { return Ok(None); }
         let mut line = String::new();
         let read = reader.read_line(&mut line).map_err(|error| io_error("Cannot read selected WorldGen log", error))?;
         if read == 0 { break; }
@@ -725,7 +729,7 @@ fn read_worldgen_report_at(file: &mut File, marker_position: u64) -> Result<Opti
             lines.push(line);
             continue;
         }
-        if payload.starts_with('[') && !payload.contains(WORLDGEN_PERFORMANCE_MARKER) {
+        if payload.starts_with('[') || payload.contains(WORLDGEN_PERFORMANCE_MARKER) {
             break;
         }
         let complete = payload.trim().starts_with("Missed/Total Ratio:");
@@ -737,15 +741,21 @@ fn read_worldgen_report_at(file: &mut File, marker_position: u64) -> Result<Opti
     Ok(parse_worldgen_report(&refs, 0))
 }
 
+#[cfg(test)]
 fn read_worldgen_performance_log(path: &Path) -> Result<(u64, usize, bool, Option<WorldgenPerformanceReport>), String> {
     let mut file = File::open(path).map_err(|error| io_error("Cannot open selected WorldGen log", error))?;
     let file_len = file.metadata().map_err(|error| io_error("Cannot inspect selected WorldGen log", error))?.len();
+    read_worldgen_performance_reader(&mut file, file_len)
+}
+
+fn read_worldgen_performance_reader(file: &mut (impl Read + Seek), file_len: u64) -> Result<(u64, usize, bool, Option<WorldgenPerformanceReport>), String> {
     let marker = WORLDGEN_PERFORMANCE_MARKER.as_bytes();
     let overlap_len = marker.len().saturating_sub(1);
     let mut cursor = file_len;
     let mut later_prefix = Vec::new();
     let mut bytes_scanned = 0u64;
     let mut newline_count = 0usize;
+    let mut candidate_ceiling = file_len;
 
     while cursor > 0 {
         let start = cursor.saturating_sub(WORLDGEN_LOG_SCAN_CHUNK_BYTES);
@@ -759,18 +769,22 @@ fn read_worldgen_performance_log(path: &Path) -> Result<(u64, usize, bool, Optio
         let mut search = Vec::with_capacity(chunk.len() + later_prefix.len());
         search.extend_from_slice(&chunk);
         search.extend_from_slice(&later_prefix);
-        let mut search_end = search.len();
+        let mut search_end = search.len().min(candidate_ceiling.saturating_sub(start) as usize);
         while search_end >= marker.len() {
             let Some(index) = search[..search_end].windows(marker.len()).rposition(|window| window == marker) else { break; };
             if index < chunk.len() {
                 let marker_position = start + index as u64;
-                if let Some(report) = read_worldgen_report_at(&mut file, marker_position)? {
+                let line_start = worldgen_line_start(file, marker_position)?;
+                // A malformed line can contain thousands of marker strings. Parse
+                // that line once, including when it spans multiple scan chunks.
+                candidate_ceiling = line_start;
+                if let Some(report) = read_worldgen_report_at(file, line_start)? {
                     let lines_scanned = newline_count.saturating_add(usize::from(bytes_scanned > 0));
                     return Ok((bytes_scanned, lines_scanned, false, Some(report)));
                 }
             }
             if index == 0 { break; }
-            search_end = index;
+            search_end = index.min(candidate_ceiling.saturating_sub(start) as usize);
         }
 
         later_prefix = chunk[..chunk.len().min(overlap_len)].to_vec();
@@ -2335,6 +2349,7 @@ async fn install_update(
 fn exit_application(app: AppHandle, state: State<'_, DesktopState>) -> Result<ExitingResult, String> {
     let _transaction_guard = state.apply_transaction_lock.lock()
         .map_err(|_| "Apply transaction lock is poisoned.".to_string())?;
+    state.worldgen_scan.cancel(None)?;
     app.exit(0);
     Ok(ExitingResult { exiting: true })
 }
@@ -2689,6 +2704,7 @@ async fn select_worldgen_log(app: AppHandle, state: State<'_, DesktopState>) -> 
     let path = fs::canonicalize(&raw).map_err(|error| io_error("Cannot canonicalize selected WorldGen log", error))?;
     let token = format!("worldgen-log-{}", state.next_token.fetch_add(1, Ordering::Relaxed));
     let mut logs = state.worldgen_logs.lock().map_err(|_| "WorldGen-log state lock is poisoned.".to_string())?;
+    state.worldgen_scan.cancel(None)?;
     logs.clear();
     logs.insert(token.clone(), WorldgenLogSource::File(path.clone()));
     Ok(Some(WorldgenLogSelection { token, name: path_label(&path), source_kind: "file".to_string() }))
@@ -2708,6 +2724,7 @@ async fn select_worldgen_log_folder(app: AppHandle, state: State<'_, DesktopStat
     let path = fs::canonicalize(&raw).map_err(|error| io_error("Cannot canonicalize selected WorldGen log folder", error))?;
     let token = format!("worldgen-folder-{}", state.next_token.fetch_add(1, Ordering::Relaxed));
     let mut logs = state.worldgen_logs.lock().map_err(|_| "WorldGen-log state lock is poisoned.".to_string())?;
+    state.worldgen_scan.cancel(None)?;
     logs.clear();
     logs.insert(token.clone(), WorldgenLogSource::Folder(path.clone()));
     Ok(Some(WorldgenLogSelection { token, name: path_label(&path), source_kind: "folder".to_string() }))
@@ -2715,27 +2732,39 @@ async fn select_worldgen_log_folder(app: AppHandle, state: State<'_, DesktopStat
 
 #[tauri::command]
 fn revoke_worldgen_log(payload: WorldgenLogPayload, state: State<'_, DesktopState>) -> Result<(), String> {
-    state.worldgen_logs.lock().map_err(|_| "WorldGen-log state lock is poisoned.".to_string())?.remove(&payload.token);
+    let mut logs = state.worldgen_logs.lock().map_err(|_| "WorldGen-log state lock is poisoned.".to_string())?;
+    logs.remove(&payload.token);
+    state.worldgen_scan.cancel(Some(&payload.token))?;
     Ok(())
 }
 
 #[tauri::command]
 async fn read_worldgen_performance(payload: WorldgenLogPayload, state: State<'_, DesktopState>) -> Result<WorldgenPerformanceResult, String> {
-    let source = state.worldgen_logs.lock().map_err(|_| "WorldGen-log state lock is poisoned.".to_string())?
-        .get(&payload.token).cloned().ok_or_else(|| "The selected WorldGen log source is no longer registered. Choose it again.".to_string())?;
-    let path = match source {
-        WorldgenLogSource::File(path) => path,
-        WorldgenLogSource::Folder(folder) => {
-            revalidate_authorized_directory(&folder, &folder, "Selected WorldGen log folder")?;
-            select_worldgen_log_from_folder(&folder)?
-        }
+    let (source, scan) = {
+        let logs = state.worldgen_logs.lock().map_err(|_| "WorldGen-log state lock is poisoned.".to_string())?;
+        let source = logs.get(&payload.token).cloned().ok_or_else(|| "The selected WorldGen log source is no longer registered. Choose it again.".to_string())?;
+        (source, state.worldgen_scan.begin(&payload.token)?)
     };
-    let metadata = fs::symlink_metadata(&path).map_err(|error| io_error("Cannot inspect selected WorldGen log", error))?;
-    if metadata.file_type().is_symlink() || metadata_is_reparse_point(&metadata) || !metadata.is_file() {
-        return Err("The selected WorldGen log is no longer a regular local file. Choose it again.".to_string());
-    }
-    let (bytes_scanned, lines_scanned, truncated, report) = read_worldgen_performance_log(&path)?;
-    Ok(WorldgenPerformanceResult { name: path_label(&path), bytes_scanned, lines_scanned, truncated, report })
+    tauri::async_runtime::spawn_blocking(move || {
+        if scan.cancelled.load(Ordering::Relaxed) { return Err("WorldGen scan cancelled.".to_string()); }
+        let path = match source {
+            WorldgenLogSource::File(path) => path,
+            WorldgenLogSource::Folder(folder) => {
+                revalidate_authorized_directory(&folder, &folder, "Selected WorldGen log folder")?;
+                select_worldgen_log_from_folder(&folder)?
+            }
+        };
+        let metadata = fs::symlink_metadata(&path).map_err(|error| io_error("Cannot inspect selected WorldGen log", error))?;
+        if metadata.file_type().is_symlink() || metadata_is_reparse_point(&metadata) || !metadata.is_file() {
+            return Err("The selected WorldGen log is no longer a regular local file. Choose it again.".to_string());
+        }
+        let file = File::open(&path).map_err(|error| io_error("Cannot open selected WorldGen log", error))?;
+        let file_len = file.metadata().map_err(|error| io_error("Cannot inspect selected WorldGen log", error))?.len();
+        let mut reader = CancellableReader { inner: file, cancelled: scan.cancelled.clone() };
+        let (bytes_scanned, lines_scanned, truncated, report) = read_worldgen_performance_reader(&mut reader, file_len)?;
+        drop(scan);
+        Ok(WorldgenPerformanceResult { name: path_label(&path), bytes_scanned, lines_scanned, truncated, report })
+    }).await.map_err(|error| format!("WorldGen scan worker failed: {error}"))?
 }
 
 #[tauri::command]
@@ -3075,6 +3104,9 @@ fn clear_persistent_logs(app: AppHandle, state: State<'_, DesktopState>) -> Resu
 
 #[cfg(all(test, windows))]
 mod io_safety_tests;
+
+#[cfg(all(test, windows))]
+mod performance_safety_tests;
 
 #[cfg(all(test, windows))]
 mod windows_scan_safety_tests {

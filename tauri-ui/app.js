@@ -2115,15 +2115,22 @@ define("core/search", ["require", "exports", "core/refactor", "core/semanticRefe
         return (0, jsonPath_js_8.jsonPathKey)(field.jsonPath);
     }
     function nodeKey(node) {
-        return `${node.fileId}|${node.location}|${node.id}`;
+        return JSON.stringify([node.fileId, node.location, node.id]);
     }
     function buildStatusIndex(project, changeSet, needsEffectiveDiagnostics) {
         const changed = new Map();
+        const values = new Map();
         for (const change of changeSet?.changes ?? []) {
-            const key = `${change.fileId}|${change.location}|${change.nodeId}`;
+            const key = nodeKey({ fileId: change.fileId, location: change.location, id: change.nodeId });
             const paths = changed.get(key) ?? new Set();
-            paths.add((0, jsonPath_js_8.jsonPathKey)(change.jsonPath));
+            const path = (0, jsonPath_js_8.jsonPathKey)(change.jsonPath);
+            paths.add(path);
             changed.set(key, paths);
+            const nodeValues = values.get(key) ?? new Map();
+            // Preserve the first matching staged change, including an explicit null value.
+            if (!nodeValues.has(path))
+                nodeValues.set(path, change.newValue);
+            values.set(key, nodeValues);
         }
         const diagnosticProject = needsEffectiveDiagnostics && changeSet?.changes.length
             ? (0, refactor_js_1.applyChangeSet)(project, changeSet).project
@@ -2133,7 +2140,7 @@ define("core/search", ["require", "exports", "core/refactor", "core/semanticRefe
             if (diagnostic.code !== 'unresolved-import')
                 continue;
             for (const occurrence of diagnostic.related ?? []) {
-                const key = `${occurrence.fileId}|${occurrence.location}|${occurrence.nodeId}`;
+                const key = nodeKey({ fileId: occurrence.fileId, location: occurrence.location, id: occurrence.nodeId });
                 const paths = unresolved.get(key) ?? new Set();
                 paths.add((0, jsonPath_js_8.jsonPathKey)(occurrence.jsonPath));
                 unresolved.set(key, paths);
@@ -2145,19 +2152,16 @@ define("core/search", ["require", "exports", "core/refactor", "core/semanticRefe
                     unresolved.set(nodeKey(node), unresolved.get(nodeKey(node)) ?? new Set());
             }
         }
-        return { changed, unresolved };
+        return { changed, unresolved, values };
     }
-    function effectiveValue(changeSet, node, field) {
-        if (!changeSet)
-            return field.value;
-        const path = fieldPathKey(field);
-        const change = changeSet.changes.find((item) => item.fileId === node.fileId && item.nodeId === node.id && item.location === node.location && (0, jsonPath_js_8.jsonPathKey)(item.jsonPath) === path);
-        return change?.newValue ?? field.value;
+    function effectiveValue(values, field) {
+        const value = values?.get(fieldPathKey(field));
+        return value === undefined ? field.value : value;
     }
     function semanticIs(parsed) {
         return parsed.is.filter((value) => value === 'import' || value === 'export');
     }
-    function nodeMatchesQuery(project, node, parsed, status, changeSet) {
+    function nodeMatchesQuery(project, node, parsed, status) {
         const file = project.fileMap.get(node.fileId);
         if (!file)
             return undefined;
@@ -2168,6 +2172,7 @@ define("core/search", ["require", "exports", "core/refactor", "core/semanticRefe
         if (parsed.nodeTypes.length && !parsed.nodeTypes.some((value) => includes(node.nodeKind, value) || includes(node.type, value) || includes(node.id, value)))
             return undefined;
         const key = nodeKey(node);
+        const values = status.values.get(key);
         const semanticPredicates = semanticIs(parsed);
         for (const predicate of parsed.is) {
             if (predicate === 'live' && node.location !== 'live')
@@ -2206,7 +2211,7 @@ define("core/search", ["require", "exports", "core/refactor", "core/semanticRefe
             matchedFieldPaths.add(path);
         // Multiple value: filters are ANDed, while each filter may match any currently selected field.
         for (const valueFilter of parsed.values) {
-            const matches = selectedFields.filter((field) => includes(effectiveValue(changeSet, node, field), valueFilter));
+            const matches = selectedFields.filter((field) => includes(effectiveValue(values, field), valueFilter));
             if (!matches.length)
                 return undefined;
             matches.forEach((field) => matchedFieldPaths.add(fieldPathKey(field)));
@@ -2221,7 +2226,7 @@ define("core/search", ["require", "exports", "core/refactor", "core/semanticRefe
         else {
             for (const term of parsed.terms) {
                 const metadataMatch = !fieldScoped && [node.nodeKind, node.type, node.id].some((value) => includes(value, term));
-                const termFieldMatches = selectedFields.filter((field) => includes(field.key, term) || includes(effectiveValue(changeSet, node, field), term));
+                const termFieldMatches = selectedFields.filter((field) => includes(field.key, term) || includes(effectiveValue(values, field), term));
                 if (!metadataMatch && termFieldMatches.length === 0)
                     return undefined;
                 if (metadataMatch)
@@ -2251,7 +2256,7 @@ define("core/search", ["require", "exports", "core/refactor", "core/semanticRefe
         let total = 0;
         for (const file of project.files) {
             for (const node of file.nodes) {
-                const match = nodeMatchesQuery(project, node, parsed, status, changeSet);
+                const match = nodeMatchesQuery(project, node, parsed, status);
                 if (!match)
                     continue;
                 total += 1;
@@ -2264,7 +2269,7 @@ define("core/search", ["require", "exports", "core/refactor", "core/semanticRefe
     /** Legacy quick-result search kept for direct navigation and compatibility with v0.2/v0.3 core callers. */
     function searchProject(project, query, limit = 80) {
         const needle = query.trim().toLowerCase();
-        if (!needle)
+        if (!needle || limit <= 0)
             return [];
         const results = [];
         const push = (result) => {
@@ -2274,6 +2279,8 @@ define("core/search", ["require", "exports", "core/refactor", "core/semanticRefe
         for (const file of project.files) {
             if (includes(file.path, needle) || includes(file.name, needle)) {
                 push({ id: `file:${file.id}`, kind: 'file', title: file.name, subtitle: `${file.workspace.label} · ${file.path}`, fileId: file.id });
+                if (results.length >= limit)
+                    return results;
             }
         }
         for (const record of project.symbolIndex.values()) {
@@ -2290,6 +2297,8 @@ define("core/search", ["require", "exports", "core/refactor", "core/semanticRefe
                 location: first?.location,
                 symbol: record.key,
             });
+            if (results.length >= limit)
+                return results;
         }
         const resources = new Map();
         for (const reference of project.semanticReferences) {
@@ -21115,13 +21124,29 @@ define("core/projectGraph", ["require", "exports", "core/semanticReferences", "c
         const selectedFile = project.fileMap.get(root.fileId);
         if (!selectedFile)
             return empty(['Selected flow root is unavailable.']);
+        // Per-build indexes avoid scanning every relationship for each expanded node.
+        // Their lifetime ends with this build, so changed project data cannot reuse stale entries.
+        const referencesByFile = new Map();
+        const densityDependencies = new Map();
+        for (const reference of project.semanticReferences) {
+            const fileId = reference.source.fileId;
+            const fromFile = referencesByFile.get(fileId) ?? [];
+            fromFile.push(reference);
+            referencesByFile.set(fileId, fromFile);
+            const owner = reference.source.ownerSymbol;
+            if (reference.relation === 'symbol-import' && owner?.symbolType === 'Density' && reference.target.symbolType === 'Density') {
+                const dependencies = densityDependencies.get(owner.name) ?? [];
+                dependencies.push(reference);
+                densityDependencies.set(owner.name, dependencies);
+            }
+        }
         let worldStructure;
         let worldNodeId;
         let worldDepth = 0;
         if (root.kind === 'instance') {
             const instanceId = `instance:${selectedFile.id}`;
             nodes.set(instanceId, { id: instanceId, kind: 'instance', label: root.label, subtitle: selectedFile.path, fileId: selectedFile.id, depth: 0 });
-            const reference = (0, semanticReferences_js_3.semanticReferencesFromFile)(project.semanticReferences, selectedFile.id, 'instance-worldstructure')[0];
+            const reference = (0, semanticReferences_js_3.semanticReferencesFromFile)(referencesByFile.get(selectedFile.id) ?? [], selectedFile.id, 'instance-worldstructure')[0];
             worldDepth = 1;
             if (!reference) {
                 notes.push('The selected Instance has no semantic Instance → WorldStructure reference.');
@@ -21197,7 +21222,7 @@ define("core/projectGraph", ["require", "exports", "core/semanticReferences", "c
             return id;
         };
         const worldFlowDepth = worldDepth + 1;
-        const worldDensityReferences = (0, semanticReferences_js_3.semanticReferencesFromFile)(project.semanticReferences, worldStructure.id, 'worldstructure-density');
+        const worldDensityReferences = (0, semanticReferences_js_3.semanticReferencesFromFile)(referencesByFile.get(worldStructure.id) ?? [], worldStructure.id, 'worldstructure-density');
         if (worldDensityReferences.length) {
             const densityFieldId = `world-density:${worldStructure.id}`;
             const worldLabel = (0, semanticReferences_js_3.semanticRootName)(worldStructure) ?? (0, semanticReferences_js_3.semanticFileStem)(worldStructure);
@@ -21211,7 +21236,7 @@ define("core/projectGraph", ["require", "exports", "core/semanticReferences", "c
             }
         }
         const linkedBiomeIds = new Set();
-        const biomeReferences = (0, semanticReferences_js_3.semanticReferencesFromFile)(project.semanticReferences, worldStructure.id, 'worldstructure-biome');
+        const biomeReferences = (0, semanticReferences_js_3.semanticReferencesFromFile)(referencesByFile.get(worldStructure.id) ?? [], worldStructure.id, 'worldstructure-biome');
         for (const reference of biomeReferences) {
             const biome = firstResolvedFile(project, reference);
             let biomeId;
@@ -21235,7 +21260,7 @@ define("core/projectGraph", ["require", "exports", "core/semanticReferences", "c
                 const biomeLabel = (0, semanticReferences_js_3.semanticRootName)(biome) ?? (0, semanticReferences_js_3.semanticFileStem)(biome);
                 nodes.set(biomeId, { id: biomeId, kind: 'biome', label: biomeLabel, subtitle: biome.path, fileId: biome.id, depth: worldFlowDepth });
                 if (includeResources) {
-                    const environmentReferences = (0, semanticReferences_js_3.semanticReferencesFromFile)(project.semanticReferences, biome.id, 'biome-environment');
+                    const environmentReferences = (0, semanticReferences_js_3.semanticReferencesFromFile)(referencesByFile.get(biome.id) ?? [], biome.id, 'biome-environment');
                     for (const environmentReference of environmentReferences) {
                         const resourceKey = environmentReference.target.resourcePath ?? environmentReference.target.name;
                         const resourceId = `environment:${resourceKey.toLowerCase()}`;
@@ -21255,7 +21280,7 @@ define("core/projectGraph", ["require", "exports", "core/semanticReferences", "c
                             notes.push(resourceNote);
                     }
                 }
-                const densityReferences = (0, semanticReferences_js_3.semanticReferencesFromFile)(project.semanticReferences, biome.id, 'biome-density');
+                const densityReferences = (0, semanticReferences_js_3.semanticReferencesFromFile)(referencesByFile.get(biome.id) ?? [], biome.id, 'biome-density');
                 if (densityReferences.length) {
                     const densityId = `biome-density:${biome.id}`;
                     nodes.set(densityId, { id: densityId, kind: 'biome-density', label: `${biomeLabel} Density`, subtitle: 'Biome Terrain.Density', fileId: biome.id, depth: worldFlowDepth + 1 });
@@ -21279,7 +21304,7 @@ define("core/projectGraph", ["require", "exports", "core/semanticReferences", "c
             if (depth >= densityExpansionStart + Math.max(0, densityDepthLimit))
                 continue;
             const sourceKey = { symbolType: 'Density', name: symbol };
-            const dependencies = (0, semanticReferences_js_3.semanticSymbolDependencies)(project.semanticReferences, sourceKey, 'Density');
+            const dependencies = (0, semanticReferences_js_3.semanticSymbolDependencies)(densityDependencies.get(symbol) ?? [], sourceKey, 'Density');
             const sourceId = `density:${symbol.toLowerCase()}`;
             for (const reference of dependencies) {
                 if (reference.target.name.toLowerCase() === symbol.toLowerCase())
@@ -21387,6 +21412,7 @@ define("support/runtimeDiagnostics", ["require", "exports", "support/releaseIden
     const MAX_DATA_KEYS = 40;
     const MAX_TRACE_SUMMARIES = 20;
     const MAX_METRIC_SAMPLES = 96;
+    const MAX_METRIC_NAMES = 256;
     const MAX_SLOW_OPERATIONS = 20;
     const DETAILED_LOGGING_KEY = 'hytale-workbench.detailed-logging.v1';
     const PERSISTENT_LOG_QUEUE_LIMIT = 1000;
@@ -21410,6 +21436,7 @@ define("support/runtimeDiagnostics", ["require", "exports", "support/releaseIden
     ];
     let nextEventId = 1;
     let nextTraceId = 1;
+    let evictedMetricNames = 0;
     let events = [];
     let projectSnapshot;
     let workbenchLayoutSupport;
@@ -21667,9 +21694,17 @@ define("support/runtimeDiagnostics", ["require", "exports", "support/releaseIden
     function recordRuntimeMetric(name, durationMs, thresholds) {
         if (!Number.isFinite(durationMs) || durationMs < 0)
             return;
+        name = name.slice(0, 120);
         const value = safeNumber(durationMs);
         const classification = performanceClassification(name, value, thresholds);
         const current = metrics.get(name);
+        // Keep recent operation families bounded even if callers produce dynamic names.
+        if (current)
+            metrics.delete(name);
+        else if (metrics.size >= MAX_METRIC_NAMES) {
+            metrics.delete(metrics.keys().next().value);
+            evictedMetricNames += 1;
+        }
         const samples = [...(current?.samples ?? []), value].slice(-MAX_METRIC_SAMPLES);
         metrics.set(name, current ? {
             count: current.count + 1,
@@ -21775,6 +21810,7 @@ define("support/runtimeDiagnostics", ["require", "exports", "support/releaseIden
             errorCount: snapshot.filter((event) => event.level === 'error').length,
             warningCount: snapshot.filter((event) => event.level === 'warn').length,
             metricCount: metrics.size,
+            evictedMetricNames,
             slowOperationCount: runtimeSlowOperations().length,
             traceCount: runtimeTraceSummaries().length,
             detailedLogging: readDetailedLogging(),
@@ -21933,7 +21969,6 @@ define("io/desktopBridge", ["require", "exports", "support/runtimeDiagnostics"],
     function hasDesktopBridge() {
         return window.__HYTALE_DESKTOP_BRIDGE__ === true;
     }
-    const tracedRequestDurations = new Map();
     function subscribeDesktopProjectChanges(listener) {
         if (!hasDesktopBridge())
             return () => { };
@@ -21956,7 +21991,7 @@ define("io/desktopBridge", ["require", "exports", "support/runtimeDiagnostics"],
         window.addEventListener('hgw:app-close-requested', handler);
         return () => window.removeEventListener('hgw:app-close-requested', handler);
     }
-    async function jsonRequest(path, init, traceId) {
+    async function jsonRequest(path, init, traceId, onDuration) {
         const started = performance.now();
         const response = await fetch(path, {
             ...init,
@@ -21966,14 +22001,14 @@ define("io/desktopBridge", ["require", "exports", "support/runtimeDiagnostics"],
             },
         });
         const durationMs = performance.now() - started;
-        (0, runtimeDiagnostics_1.recordRuntimeMetric)(`desktop.request:${path}`, durationMs);
-        if (traceId)
-            tracedRequestDurations.set(traceId, durationMs);
+        onDuration?.(durationMs);
+        const endpoint = path.split(/[?#]/, 1)[0];
+        (0, runtimeDiagnostics_1.recordRuntimeMetric)(`desktop.request:${endpoint}`, durationMs);
         (0, runtimeDiagnostics_1.recordRuntimeEvent)('desktop.request.completed', {
             detailed: !traceId,
             traceId,
             durationMs,
-            data: { endpoint: path, status: response.status },
+            data: { endpoint, status: response.status },
         });
         if (response.status === 204)
             throw new DOMException('The user aborted a request.', 'AbortError');
@@ -21987,12 +22022,12 @@ define("io/desktopBridge", ["require", "exports", "support/runtimeDiagnostics"],
             catch {
                 // Keep the HTTP status when the launcher did not return JSON.
             }
-            (0, runtimeDiagnostics_1.recordRuntimeEvent)('desktop.request.failed', { level: 'error', traceId, data: { endpoint: path, status: response.status, statusText: response.statusText } });
+            (0, runtimeDiagnostics_1.recordRuntimeEvent)('desktop.request.failed', { level: 'error', traceId, data: { endpoint, status: response.status, statusText: response.statusText } });
             throw new Error(message);
         }
         return response.json();
     }
-    function ingestNativeProjectTrace(scan, fallbackTraceId) {
+    function ingestNativeProjectTrace(scan, fallbackTraceId, requestMs) {
         const nativeTrace = scan.nativeTrace;
         if (!nativeTrace)
             return;
@@ -22005,7 +22040,6 @@ define("io/desktopBridge", ["require", "exports", "support/runtimeDiagnostics"],
             });
         }
         if (traceId) {
-            const requestMs = tracedRequestDurations.get(traceId);
             const nativeTotalMs = nativeTrace.phases.find((phase) => phase.name === 'desktop.project.native-open.total')?.durationMs;
             if (requestMs !== undefined && nativeTotalMs !== undefined) {
                 (0, runtimeDiagnostics_1.recordRuntimeEvent)('desktop.project.bridge-overhead', {
@@ -22014,24 +22048,25 @@ define("io/desktopBridge", ["require", "exports", "support/runtimeDiagnostics"],
                     data: { requestMs, nativeTotalMs },
                 });
             }
-            tracedRequestDurations.delete(traceId);
         }
     }
     async function desktopOpenProject(traceId) {
+        let requestMs;
         const scan = await jsonRequest('/api/project/open', {
             method: 'POST',
             body: JSON.stringify({ traceId }),
-        }, traceId);
-        ingestNativeProjectTrace(scan, traceId);
+        }, traceId, (durationMs) => { requestMs = durationMs; });
+        ingestNativeProjectTrace(scan, traceId, requestMs);
         return scan;
     }
     async function desktopOpenProjectAt(root, traceId) {
         try {
+            let requestMs;
             const scan = await jsonRequest('/api/project/open-recent', {
                 method: 'POST',
                 body: JSON.stringify({ root, traceId }),
-            }, traceId);
-            ingestNativeProjectTrace(scan, traceId);
+            }, traceId, (durationMs) => { requestMs = durationMs; });
+            ingestNativeProjectTrace(scan, traceId, requestMs);
             return scan;
         }
         catch (error) {

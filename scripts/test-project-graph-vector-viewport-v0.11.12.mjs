@@ -67,8 +67,9 @@ assert.match(graphView, /GESTURE_DURATION_THRESHOLDS = \{ noteworthyMs: 5000, sl
 assert.doesNotMatch(graphView, /recordPerformanceDuration\('graph\.camera\.zoom', performance\.now\(\) - zoomStarted/);
 assert.doesNotMatch(graphView, /recordPerformanceDuration\('graph\.camera\.pan', performance\.now\(\) - panStarted/);
 
-// Semantic graph, project state, sidebar and native security/window-state boundaries remain the proven v0.11.11 versions.
-assert.equal(hashFile('src/core/projectGraph.ts'), '002bf3e91f9b1ada8db13ee9a8ec84152bcde42c0f9a59e6b6506a245eed1997');
+// Track 11 intentionally indexes graph relationships per build. Keep the exact
+// reviewed source pin; behavioral parity/linear-work budgets live in test:pre1-performance-resources.
+assert.equal(hashFile('src/core/projectGraph.ts'), '45f87406dc59afdc90c6c301fba355e9f341bd34b6cc2a6b3a5829f6d2757e49');
 assert.equal(hashFile('src/projects/projectPersistence.ts'), '7e6df70a194355682a7eab6bea8c1a9f05a38d3c2119bf6fc32fe17476ecb31f');
 assert.match(graphSidebar, /Open as new graph/);
 assert.match(graphSidebar, /openProjectGraphAsNew/);

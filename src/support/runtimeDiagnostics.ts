@@ -123,6 +123,7 @@ const MAX_EVENTS = 500;
 const MAX_DATA_KEYS = 40;
 const MAX_TRACE_SUMMARIES = 20;
 const MAX_METRIC_SAMPLES = 96;
+const MAX_METRIC_NAMES = 256;
 const MAX_SLOW_OPERATIONS = 20;
 const DETAILED_LOGGING_KEY = 'hytale-workbench.detailed-logging.v1';
 const PERSISTENT_LOG_QUEUE_LIMIT = 1000;
@@ -147,6 +148,7 @@ const DEFAULT_PERSISTENT_EVENT_PREFIXES = [
 
 let nextEventId = 1;
 let nextTraceId = 1;
+let evictedMetricNames = 0;
 let events: RuntimeEvent[] = [];
 let projectSnapshot: ProjectSupportSnapshot | undefined;
 let workbenchLayoutSupport: WorkbenchLayoutSupportSnapshot | undefined;
@@ -410,9 +412,16 @@ function percentile(samples: number[], percent: number): number {
 
 export function recordRuntimeMetric(name: string, durationMs: number, thresholds?: PerformanceThresholds): void {
   if (!Number.isFinite(durationMs) || durationMs < 0) return;
+  name = name.slice(0, 120);
   const value = safeNumber(durationMs);
   const classification = performanceClassification(name, value, thresholds);
   const current = metrics.get(name);
+  // Keep recent operation families bounded even if callers produce dynamic names.
+  if (current) metrics.delete(name);
+  else if (metrics.size >= MAX_METRIC_NAMES) {
+    metrics.delete(metrics.keys().next().value!);
+    evictedMetricNames += 1;
+  }
   const samples = [...(current?.samples ?? []), value].slice(-MAX_METRIC_SAMPLES);
   metrics.set(name, current ? {
     count: current.count + 1,
@@ -533,6 +542,7 @@ export function runtimeDiagnosticSummary() {
     errorCount: snapshot.filter((event) => event.level === 'error').length,
     warningCount: snapshot.filter((event) => event.level === 'warn').length,
     metricCount: metrics.size,
+    evictedMetricNames,
     slowOperationCount: runtimeSlowOperations().length,
     traceCount: runtimeTraceSummaries().length,
     detailedLogging: readDetailedLogging(),

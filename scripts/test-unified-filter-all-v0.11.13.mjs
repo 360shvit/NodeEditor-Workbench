@@ -67,7 +67,8 @@ assert.match(persistence, /filters: cleanInspectorFilters\(session\.filters\)/);
 // v0.11.14 must not disturb graph/native/security/write authority while changing filters.
 assert.match(read('src/features/project-graph/ProjectGraphView.tsx'), /project-graph-camera/);
 assert.match(read('src/features/project-graph/ProjectGraphSidebar.tsx'), /Open as new graph/);
-assert.equal(hashFile('src/core/projectGraph.ts'), '002bf3e91f9b1ada8db13ee9a8ec84152bcde42c0f9a59e6b6506a245eed1997');
+// Track 11's reviewed per-build index; semantic fixtures and work budgets remain mandatory.
+assert.equal(hashFile('src/core/projectGraph.ts'), '45f87406dc59afdc90c6c301fba355e9f341bd34b6cc2a6b3a5829f6d2757e49');
 assert.equal(hashFile('src/projects/projectPersistence.ts'), '7e6df70a194355682a7eab6bea8c1a9f05a38d3c2119bf6fc32fe17476ecb31f');
 const nativeMain = read('src-tauri/src/main.rs');
 assert.match(nativeMain, /metadata_is_reparse_point/);
