@@ -52,6 +52,9 @@ Recent-project/session data is sanitized on read and may fall back to defaults w
 ## Diagnostics limits
 
 - in-memory runtime events: **500**;
+- each renderer event: **4,000 UTF-16 JSON units** (at most **12,000 UTF-8 bytes**); oversized metadata is replaced by `diagnosticDataOmitted`;
+- diagnostic metadata: reviewed fields only, at most **4 object levels**, **40 keys per object**, **80 visited fields/items** and **30 paths per array**;
+- persistent queue: **1,000 events**, plus at most **50 in flight**; oldest queued events are dropped under backpressure;
 - metric samples per metric: **96**;
 - retained metric names: **256**, up to **120 characters** each; recently used names survive eviction, and the summary reports the eviction count;
 - trace summaries: **20**;
@@ -59,7 +62,9 @@ Recent-project/session data is sanitized on read and may fall back to defaults w
 - persistent Workbench log: **2 MiB per file**, **4 retained files**;
 - persistent batch: up to **100 entries / 1 MiB**, individual entry up to **16 KiB**.
 
-Support reports do not include project contents. Project-relative path fields are opt-in in the report UI; persistent log paths are scrubbed.
+Support reports do not include project contents. Raw exception messages/stacks, component stacks, search text, arbitrary symbol types and shortcut text are omitted because they can contain user data. Error categories, operation identifiers, counters and reviewed enum metadata remain available. Absolute/unsafe path fields are redacted even when project-relative paths are enabled. Project-relative path fields are opt-in in the report UI; persistent log paths are always removed/redacted, including at the native sink.
+
+Diagnostics are local and have no automatic upload. Report copy/save requires an explicit action; review the resulting JSON before sharing. Reports contain the current memory ring, not historical disk logs. Detailed logging widens event selection without bypassing privacy filters. Clear logs removes the four managed disk files and queued events; it waits for an in-flight append and suppresses writes during clearing. Current in-memory events remain until restart. Previously written logs are not retroactively sanitized; use Clear logs to remove that disk history. Log files are bounded, unencrypted diagnostic data under the current user's OS profile, not a protected secret store. Filesystem failure can leave partial JSONL output or a partially completed rotation/clear; the sink then reports unavailable instead of repeatedly retrying.
 
 ## ZIP/output limits
 

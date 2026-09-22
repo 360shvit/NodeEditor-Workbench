@@ -23,7 +23,7 @@ assert.match(runtime, /projectContentsIncluded: false/);
 assert.match(runtime, /automaticUpload: false/);
 assert.match(runtime, /includeProjectPaths/);
 assert.match(runtime, /<project-path-redacted>/);
-assert.match(runtime, /scrubAbsolutePaths/);
+assert.match(read('src/support/diagnosticPrivacy.ts'), /scrubAbsolutePaths/);
 assert.match(runtime, /runtime\.unhandled-rejection/);
 assert.match(runtime, /runtime\.window-error/);
 assert.doesNotMatch(runtime, /fetch\(/, 'support module must not upload reports');

@@ -21358,6 +21358,112 @@ define("core/index", ["require", "exports", "core/types", "core/jsonPath", "core
     __exportStar(index_js_3, exports);
     __exportStar(projectGraph_js_1, exports);
 });
+define("support/diagnosticPrivacy", ["require", "exports"], function (require, exports) {
+    "use strict";
+    Object.defineProperty(exports, "__esModule", { value: true });
+    exports.safeDiagnosticName = safeDiagnosticName;
+    exports.scrubAbsolutePaths = scrubAbsolutePaths;
+    exports.safeDiagnosticData = safeDiagnosticData;
+    exports.diagnosticErrorName = diagnosticErrorName;
+    // Diagnostics accept metadata, never arbitrary project values or error text.
+    // Keep these fields aligned with the reviewed instrumentation call sites.
+    const scalarFields = new Set(`collisions stagedChanges limit includeProjectPaths canonicalizationChecks fastPathCandidates fastPathUsed inputCount symbolCount projectDiagnostics nodeCount fileCount patchCount resultFiles blocked inventoryFiles semanticInputs projectFiles nodes symbols semanticReferences environmentReferences prefabReferences workspaces discoveryRoots restoredTabs restoredNavigationEntries changedPathCount invalidatedChanges invalidatedHistory pendingChanges changeCount changedFiles conflicts outputFiles written recent enabled desktop persisted sidebarWidth splitRatio splitViewEnabled minSidebarWidth maxSidebarWidth minSplitRatio maxSplitRatio uiScale percent size position maximized assigned descriptorCount rootCount eligibleFiles selectionMode visibleRows expandedFolders queryLength semanticFiles resourceFiles zoom rootIndex densityDepth includeResources edgeCount directories visitedEntries symlinkEntries reparsePointEntries workspaceMarkers candidateFiles semanticBytes probeBytes requestMs nativeTotalMs status durationMs line column count diagnosticDataOmitted`.split(' '));
+    const pathFields = new Set(['path', 'paths', 'filePath', 'filePaths', 'changedPaths']);
+    const containers = new Set(['metadata', 'counts', 'timings']);
+    const stringFields = {
+        source: ['pointer', 'keyboard', 'settings', 'reset', 'restore', '<app-source>'],
+        appliedBy: ['native', 'css', 'css-fallback'],
+        host: ['desktop', 'browser'], sourceKind: ['directory', 'snapshot'],
+        mode: ['apply', 'project-copy', 'zip-export'],
+        kind: ['switch-project', 'close-project', 'exit-app'],
+        outcome: ['blocked-conflict', 'blocked-late-conflict', 'blocked-collision', 'applied', 'exported', 'cancelled'],
+        status: ['failed', 'completed'], classification: ['normal', 'noteworthy', 'slow', 'very-slow'],
+        strategy: ['normalize', 'author-normalize', 'dag-rebuild'],
+        reason: ['workspace-authority-changed', 'project-model-miss', 'pan', 'zoom', 'fit', 'reset', 'restore', 'root-change'],
+        scopeKind: ['builtin', 'all', 'project', 'workspace', 'folder', 'file', 'selection'],
+        rootKind: ['none', 'worldstructure', 'biome', 'density', 'WorldStructure', 'Biome', 'Density'],
+        retainedPane: ['primary', 'secondary'], trackedWindow: ['main'],
+        channel: ['stable', 'preview'], resourceKind: ['environment', 'prefab'],
+        command: ['quickOpen', 'showExplorer', 'showSearch', 'openDiagnostics', 'openChanges', 'openLayout', 'openWorldgenPerformance', 'openProjectGraph', 'navigateBack', 'navigateForward', 'reopenClosedTab'],
+        errorName: ['Error', 'TypeError', 'SyntaxError', 'RangeError', 'ReferenceError', 'URIError', 'EvalError', 'AbortError', 'UnknownError'],
+    };
+    function safeDiagnosticName(value) {
+        // Internal operation names may include a fixed local bridge route, never queries.
+        if (/^[A-Za-z0-9_.-]+$/.test(value) || /^desktop\.request:\/api\/[a-z-]+(?:\/[a-z-]+)*$/.test(value))
+            return value.slice(0, 120);
+        return 'diagnostic.redacted-name';
+    }
+    function scrubAbsolutePaths(value) {
+        // A path field is either an explicitly relative path or entirely redacted.
+        // Do not try to guess where a space-containing absolute path ends.
+        const normalized = value.replaceAll('\\', '/').trim();
+        if (normalized.includes(':') || normalized.startsWith('/') || normalized.split('/').includes('..') || /[\x00-\x1f\x7f]/.test(value))
+            return '<local-path>';
+        return value.slice(0, 600);
+    }
+    function safeDiagnosticData(data) {
+        const seen = new WeakSet();
+        let remaining = 80;
+        function visit(input, depth) {
+            if (depth >= 4 || seen.has(input))
+                return {};
+            seen.add(input);
+            const output = {};
+            let keys = 0;
+            for (const key in input) {
+                if (!Object.hasOwn(input, key))
+                    continue;
+                if (++keys > 40 || --remaining < 0)
+                    break;
+                const descriptor = Object.getOwnPropertyDescriptor(input, key);
+                if (!descriptor || !('value' in descriptor))
+                    continue; // Never execute getters while logging.
+                const raw = descriptor.value;
+                if (pathFields.has(key)) {
+                    if (typeof raw === 'string')
+                        output[key] = scrubAbsolutePaths(raw);
+                    else if (Array.isArray(raw)) {
+                        const paths = [];
+                        for (let i = 0; i < Math.min(raw.length, 30) && remaining > 0; i++, remaining--) {
+                            const item = Object.getOwnPropertyDescriptor(raw, String(i));
+                            if (item && 'value' in item && typeof item.value === 'string')
+                                paths.push(scrubAbsolutePaths(item.value));
+                        }
+                        output[key] = paths;
+                    }
+                }
+                else if (scalarFields.has(key) && (typeof raw === 'boolean' || raw === null || (typeof raw === 'number' && Number.isFinite(raw))))
+                    output[key] = raw;
+                else if (typeof raw === 'string' && Object.hasOwn(stringFields, key) && stringFields[key].includes(raw))
+                    output[key] = raw;
+                else if (key === 'operation' && typeof raw === 'string')
+                    output[key] = safeDiagnosticName(raw);
+                else if (key === 'endpoint' && typeof raw === 'string' && /^\/api\/[a-z-]+(?:\/[a-z-]+)*$/.test(raw))
+                    output[key] = raw.slice(0, 120);
+                else if ((key === 'version' || key === 'expectedVersion') && typeof raw === 'string' && /^\d{1,5}\.\d{1,5}\.\d{1,5}(?:-[a-z0-9.-]{1,30})?$/.test(raw))
+                    output[key] = raw;
+                else if (containers.has(key) && raw && typeof raw === 'object' && !Array.isArray(raw))
+                    output[key] = visit(raw, depth + 1);
+            }
+            return output;
+        }
+        // Unexpected proxies must not turn error handling into another uncaught error.
+        try {
+            return data ? visit(data, 0) : undefined;
+        }
+        catch {
+            return { diagnosticDataOmitted: true };
+        }
+    }
+    function diagnosticErrorName(error) {
+        try {
+            if (error instanceof Error && stringFields.errorName.includes(error.name))
+                return error.name;
+        }
+        catch { /* An untrusted thrown object may have throwing accessors. */ }
+        return 'UnknownError';
+    }
+});
 define("support/releaseIdentity.generated", ["require", "exports"], function (require, exports) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
@@ -21379,7 +21485,7 @@ define("support/releaseIdentity.generated", ["require", "exports"], function (re
     exports.UPDATER_DEFAULT_CHANNEL = 'stable';
     exports.RELEASE_REVISION_INTERNAL_ONLY = true;
 });
-define("support/runtimeDiagnostics", ["require", "exports", "support/releaseIdentity.generated"], function (require, exports, releaseIdentity_generated_js_1) {
+define("support/runtimeDiagnostics", ["require", "exports", "support/diagnosticPrivacy", "support/releaseIdentity.generated"], function (require, exports, diagnosticPrivacy_js_1, releaseIdentity_generated_js_1) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.readDetailedLogging = readDetailedLogging;
@@ -21409,7 +21515,8 @@ define("support/runtimeDiagnostics", ["require", "exports", "support/releaseIden
     exports.installGlobalRuntimeDiagnostics = installGlobalRuntimeDiagnostics;
     const REPORT_SCHEMA_VERSION = 8;
     const MAX_EVENTS = 500;
-    const MAX_DATA_KEYS = 40;
+    // Event JSON is at most 4,000 UTF-16 units (at most 12,000 UTF-8 bytes).
+    const MAX_EVENT_JSON_CHARACTERS = 4000;
     const MAX_TRACE_SUMMARIES = 20;
     const MAX_METRIC_SAMPLES = 96;
     const MAX_METRIC_NAMES = 256;
@@ -21445,6 +21552,8 @@ define("support/runtimeDiagnostics", ["require", "exports", "support/releaseIden
     let persistentLogQueue = [];
     let persistentLogFlushTimer;
     let persistentLogFlushPromise;
+    let persistentLogClearPromise;
+    let persistentLogClearing = false;
     let persistentLogDisabledForSession = false;
     let persistentLogDroppedEvents = 0;
     let persistentLogLastError;
@@ -21491,45 +21600,14 @@ define("support/runtimeDiagnostics", ["require", "exports", "support/releaseIden
     function safeNumber(value) {
         return Number.isFinite(value) ? Math.round(value * 100) / 100 : 0;
     }
-    function scrubAbsolutePaths(value) {
-        return value
-            .replace(/file:\/{2,3}[^\s)\]}]+/gi, '<local-app-path>')
-            .replace(/\b[A-Za-z]:\\[^\r\n\t"']+/g, '<local-path>')
-            .replace(/\/(?:Users|home|mnt|private|var|tmp)\/[^\r\n\t"']+/g, '<local-path>');
-    }
-    function safeScalar(value) {
-        if (value === null || typeof value === 'boolean' || typeof value === 'number')
-            return value;
-        if (typeof value === 'string')
-            return scrubAbsolutePaths(value).slice(0, 600);
-        return undefined;
-    }
-    function safeData(data) {
-        if (!data)
-            return undefined;
-        const result = {};
-        for (const [key, raw] of Object.entries(data).slice(0, MAX_DATA_KEYS)) {
-            const scalar = safeScalar(raw);
-            if (scalar !== undefined) {
-                result[key] = scalar;
-                continue;
-            }
-            if (Array.isArray(raw)) {
-                result[key] = raw.slice(0, 30).map((item) => safeScalar(item)).filter((item) => item !== undefined);
-                continue;
-            }
-            if (raw && typeof raw === 'object') {
-                result[key] = safeData(raw);
-            }
-        }
-        return result;
-    }
     function persistentLogBridge() {
         if (typeof window === 'undefined' || window.__HYTALE_DESKTOP_BRIDGE__ !== true)
             return undefined;
         return window.__HYTALE_PERSISTENT_LOG__;
     }
     function shouldPersistRuntimeEvent(entry) {
+        if (persistentLogClearing)
+            return false;
         if (!persistentLogBridge() || persistentLogDisabledForSession)
             return false;
         if (entry.level === 'warn' || entry.level === 'error')
@@ -21587,7 +21665,7 @@ define("support/runtimeDiagnostics", ["require", "exports", "support/releaseIden
             persistentLogDisabledForSession = true;
             persistentLogDroppedEvents += persistentLogQueue.length;
             persistentLogQueue = [];
-            persistentLogLastError = scrubAbsolutePaths(error instanceof Error ? error.message : String(error)).slice(0, 800);
+            persistentLogLastError = 'Persistent log operation failed (' + (0, diagnosticPrivacy_js_1.diagnosticErrorName)(error) + ').';
             recordRuntimeEvent('support.persistent-log.init-failed', { level: 'warn', message: persistentLogLastError, skipPersistent: true });
         }
     }
@@ -21599,21 +21677,21 @@ define("support/runtimeDiagnostics", ["require", "exports", "support/releaseIden
         if (persistentLogFlushPromise)
             return persistentLogFlushPromise;
         const bridge = persistentLogBridge();
-        if (!bridge || persistentLogDisabledForSession || persistentLogQueue.length === 0)
+        if (!bridge || persistentLogDisabledForSession || persistentLogClearing || persistentLogQueue.length === 0)
             return;
         persistentLogFlushPromise = (async () => {
             try {
                 while (persistentLogQueue.length > 0 && !persistentLogDisabledForSession) {
                     const batch = persistentLogQueue.splice(0, PERSISTENT_LOG_BATCH_SIZE);
                     try {
-                        persistentLogNativeStatus = await bridge.append(batch);
+                        persistentLogNativeStatus = await Promise.resolve().then(() => bridge.append(batch));
                         persistentLogLastError = undefined;
                     }
                     catch (error) {
                         persistentLogDroppedEvents += batch.length + persistentLogQueue.length;
                         persistentLogQueue = [];
                         persistentLogDisabledForSession = true;
-                        persistentLogLastError = scrubAbsolutePaths(error instanceof Error ? error.message : String(error)).slice(0, 800);
+                        persistentLogLastError = 'Persistent log operation failed (' + (0, diagnosticPrivacy_js_1.diagnosticErrorName)(error) + ').';
                         recordRuntimeEvent('support.persistent-log.write-failed', { level: 'warn', message: persistentLogLastError, skipPersistent: true });
                     }
                 }
@@ -21627,6 +21705,8 @@ define("support/runtimeDiagnostics", ["require", "exports", "support/releaseIden
         return persistentLogFlushPromise;
     }
     async function clearPersistentRuntimeLogs() {
+        if (persistentLogClearPromise)
+            return persistentLogClearPromise;
         const bridge = persistentLogBridge();
         if (!bridge)
             throw new Error('Persistent application logs are available only in the desktop host.');
@@ -21634,14 +21714,24 @@ define("support/runtimeDiagnostics", ["require", "exports", "support/releaseIden
             clearTimeout(persistentLogFlushTimer);
             persistentLogFlushTimer = undefined;
         }
+        persistentLogClearing = true;
         persistentLogQueue = [];
-        if (persistentLogFlushPromise)
-            await persistentLogFlushPromise;
-        persistentLogNativeStatus = await bridge.clear();
-        persistentLogDisabledForSession = false;
-        persistentLogDroppedEvents = 0;
-        persistentLogLastError = undefined;
-        recordRuntimeEvent('support.persistent-log.cleared', { skipPersistent: true });
+        persistentLogClearPromise = (async () => {
+            try {
+                if (persistentLogFlushPromise)
+                    await persistentLogFlushPromise;
+                persistentLogNativeStatus = await Promise.resolve().then(() => bridge.clear());
+                persistentLogDisabledForSession = false;
+                persistentLogDroppedEvents = 0;
+                persistentLogLastError = undefined;
+                recordRuntimeEvent('support.persistent-log.cleared', { skipPersistent: true });
+            }
+            finally {
+                persistentLogClearing = false;
+                persistentLogClearPromise = undefined;
+            }
+        })();
+        return persistentLogClearPromise;
     }
     function recordRuntimeEvent(event, options = {}) {
         if (options.detailed && !readDetailedLogging())
@@ -21650,18 +21740,20 @@ define("support/runtimeDiagnostics", ["require", "exports", "support/releaseIden
             id: nextEventId++,
             timestamp: new Date().toISOString(),
             level: options.level ?? 'info',
-            event: event.slice(0, 120),
-            traceId: options.traceId?.slice(0, 120),
-            message: options.message ? scrubAbsolutePaths(options.message).slice(0, 800) : undefined,
+            event: (0, diagnosticPrivacy_js_1.safeDiagnosticName)(event),
+            traceId: options.traceId ? (0, diagnosticPrivacy_js_1.safeDiagnosticName)(options.traceId) : undefined,
+            message: options.message ? '<details-redacted>' : undefined,
             durationMs: options.durationMs === undefined ? undefined : safeNumber(options.durationMs),
-            data: safeData(options.data),
+            data: (0, diagnosticPrivacy_js_1.safeDiagnosticData)(options.data),
         };
+        if (JSON.stringify(entry).length > MAX_EVENT_JSON_CHARACTERS)
+            entry.data = { diagnosticDataOmitted: true };
         events = [...events.slice(-(MAX_EVENTS - 1)), entry];
         if (entry.durationMs !== undefined && !options.skipMetric)
             recordRuntimeMetric(event, entry.durationMs, options.thresholds);
         if (!options.skipPersistent)
             enqueuePersistentRuntimeEvent(entry);
-        return entry;
+        return cloneEvent(entry);
     }
     function performanceThresholdsFor(name) {
         const lower = name.toLowerCase();
@@ -21694,7 +21786,7 @@ define("support/runtimeDiagnostics", ["require", "exports", "support/releaseIden
     function recordRuntimeMetric(name, durationMs, thresholds) {
         if (!Number.isFinite(durationMs) || durationMs < 0)
             return;
-        name = name.slice(0, 120);
+        name = (0, diagnosticPrivacy_js_1.safeDiagnosticName)(name);
         const value = safeNumber(durationMs);
         const classification = performanceClassification(name, value, thresholds);
         const current = metrics.get(name);
@@ -21729,22 +21821,11 @@ define("support/runtimeDiagnostics", ["require", "exports", "support/releaseIden
             });
         }
     }
-    function errorPayload(error) {
-        if (error instanceof Error) {
-            return {
-                errorName: error.name,
-                errorMessage: scrubAbsolutePaths(error.message),
-                errorStack: error.stack ? scrubAbsolutePaths(error.stack).slice(0, 8_000) : undefined,
-            };
-        }
-        return { errorMessage: scrubAbsolutePaths(String(error)) };
-    }
     function recordRuntimeError(event, error, data, traceId) {
         return recordRuntimeEvent(event, {
             level: 'error',
             traceId,
-            message: error instanceof Error ? error.message : String(error),
-            data: { ...errorPayload(error), ...(data ?? {}) },
+            data: { ...(0, diagnosticPrivacy_js_1.safeDiagnosticData)(data), errorName: (0, diagnosticPrivacy_js_1.diagnosticErrorName)(error) },
         });
     }
     function setWorkbenchLayoutSupportSnapshot(snapshot) {
@@ -21756,8 +21837,11 @@ define("support/runtimeDiagnostics", ["require", "exports", "support/releaseIden
     function projectSupportSnapshot() {
         return projectSnapshot ? { ...projectSnapshot, projectDiagnostics: { ...projectSnapshot.projectDiagnostics } } : undefined;
     }
+    function cloneEvent(entry) {
+        return JSON.parse(JSON.stringify(entry));
+    }
     function runtimeEvents() {
-        return events.map((entry) => ({ ...entry, data: entry.data ? { ...entry.data } : undefined }));
+        return events.map(cloneEvent);
     }
     function runtimeMetrics() {
         return [...metrics.entries()].map(([name, value]) => ({
@@ -26279,7 +26363,7 @@ define("components/WorkbenchSettings", ["require", "exports", "react/jsx-runtime
                 setUpdateBusy(false);
             }
         };
-        return ((0, jsx_runtime_12.jsx)("div", { className: "modal-backdrop", onMouseDown: closeSettings, children: (0, jsx_runtime_12.jsxs)("section", { ref: dialogRef, className: "settings-modal settings-modal-v2", role: "dialog", "aria-modal": "true", "aria-labelledby": "workbench-settings-title", tabIndex: -1, onMouseDown: (event) => event.stopPropagation(), children: [(0, jsx_runtime_12.jsxs)("header", { children: [(0, jsx_runtime_12.jsxs)("div", { children: [(0, jsx_runtime_12.jsx)("h3", { id: "workbench-settings-title", children: "Settings" }), (0, jsx_runtime_12.jsx)("small", { children: "Workbench preferences are global and do not modify the current Hytale project." })] }), (0, jsx_runtime_12.jsx)("button", { ref: closeButtonRef, onClick: closeSettings, disabled: updateBusy, "aria-label": updateBusy ? "Close settings (disabled while update is installing)" : "Close settings", children: (0, jsx_runtime_12.jsx)(LucideIcon_8.LucideIcon, { name: "x", size: 16 }) })] }), (0, jsx_runtime_12.jsxs)("div", { className: "settings-shell", children: [(0, jsx_runtime_12.jsx)("nav", { className: "settings-navigation", "aria-label": "Settings categories", children: SETTINGS_PAGES.map((page) => ((0, jsx_runtime_12.jsxs)("button", { className: activePage === page.id ? 'active' : '', onClick: () => setActivePage(page.id), "aria-current": activePage === page.id ? 'page' : undefined, children: [(0, jsx_runtime_12.jsx)("strong", { children: page.label }), (0, jsx_runtime_12.jsx)("small", { children: page.detail })] }, page.id))) }), (0, jsx_runtime_12.jsxs)("div", { className: "settings-body settings-page-body", children: [activePage === 'appearance' && ((0, jsx_runtime_12.jsxs)("div", { className: "settings-page", children: [(0, jsx_runtime_12.jsxs)("div", { className: "settings-page-heading", children: [(0, jsx_runtime_12.jsx)("span", { className: "settings-page-kicker", children: "Appearance" }), (0, jsx_runtime_12.jsx)("h4", { children: "Make the Workbench comfortable to read" }), (0, jsx_runtime_12.jsx)("p", { children: "UI scale changes the entire application surface. Windows display scaling and Project Graph camera zoom remain independent." })] }), (0, jsx_runtime_12.jsxs)("section", { className: "settings-section settings-section-spacious", children: [(0, jsx_runtime_12.jsxs)("div", { className: "settings-row settings-row-stack", children: [(0, jsx_runtime_12.jsxs)("div", { children: [(0, jsx_runtime_12.jsx)("strong", { children: "UI scale" }), (0, jsx_runtime_12.jsx)("small", { children: "Choose a fixed, tested scale. 100% is the default. Larger ranges remain intentionally unavailable until the next reflow-hardening milestone." })] }), (0, jsx_runtime_12.jsx)("div", { className: "ui-scale-picker", role: "group", "aria-label": "UI scale", children: appearancePreferences_1.WORKBENCH_UI_SCALE_STEPS.map((scale) => ((0, jsx_runtime_12.jsx)("button", { className: uiScale === scale ? 'active' : '', "aria-pressed": uiScale === scale, onClick: () => onUiScaleChange(scale), children: (0, appearancePreferences_1.formatWorkbenchUiScale)(scale) }, scale))) })] }), (0, jsx_runtime_12.jsxs)("div", { className: "settings-row", children: [(0, jsx_runtime_12.jsxs)("div", { children: [(0, jsx_runtime_12.jsx)("strong", { children: "Current scale" }), (0, jsx_runtime_12.jsx)("small", { children: "Keyboard: Ctrl/Cmd + Plus, Ctrl/Cmd + Minus, and Ctrl/Cmd + 0." })] }), (0, jsx_runtime_12.jsxs)("div", { className: "settings-value-actions", children: [(0, jsx_runtime_12.jsx)("span", { className: "settings-value-badge", children: (0, appearancePreferences_1.formatWorkbenchUiScale)(uiScale) }), (0, jsx_runtime_12.jsx)("button", { className: "settings-layout-reset", onClick: onResetUiScale, disabled: uiScale === 1, children: "Reset" })] })] }), (0, jsx_runtime_12.jsxs)("div", { className: "settings-inline-note", children: [(0, jsx_runtime_12.jsx)(LucideIcon_8.LucideIcon, { name: "circle-check", size: 16 }), (0, jsx_runtime_12.jsxs)("span", { children: [(0, jsx_runtime_12.jsx)("strong", { children: "Separate from Windows DPI." }), " The desktop host scales its WebView only; project data and Project Graph camera state are unchanged."] })] })] })] })), activePage === 'workbench' && ((0, jsx_runtime_12.jsxs)("div", { className: "settings-page", children: [(0, jsx_runtime_12.jsxs)("div", { className: "settings-page-heading", children: [(0, jsx_runtime_12.jsx)("span", { className: "settings-page-kicker", children: "Workbench" }), (0, jsx_runtime_12.jsx)("h4", { children: "Layout and pane preferences" }), (0, jsx_runtime_12.jsx)("p", { children: "These preferences belong to the application, not to a ProjectSession." })] }), (0, jsx_runtime_12.jsxs)("section", { className: "settings-section settings-section-spacious", children: [(0, jsx_runtime_12.jsxs)("div", { className: "settings-row", children: [(0, jsx_runtime_12.jsxs)("div", { children: [(0, jsx_runtime_12.jsx)("strong", { children: "Workbench layout" }), (0, jsx_runtime_12.jsxs)("small", { children: ["Sidebar: ", Math.round(sidebarWidth), " px \u00B7 split ratio: ", Math.round(splitRatio * 100), "/", 100 - Math.round(splitRatio * 100), ". Resize either divider directly; Reset restores the layout defaults."] })] }), (0, jsx_runtime_12.jsx)("button", { className: "settings-layout-reset", onClick: onResetLayout, children: "Reset" })] }), (0, jsx_runtime_12.jsxs)("div", { className: "settings-inline-note neutral", children: [(0, jsx_runtime_12.jsx)(LucideIcon_8.LucideIcon, { name: "columns-2", size: 16 }), (0, jsx_runtime_12.jsx)("span", { children: "Split mode itself remains transient. Pane-local tab references and globally unique document instances keep their existing v0.11.21 contract." })] })] })] })), activePage === 'keyboard' && ((0, jsx_runtime_12.jsxs)("div", { className: "settings-page", children: [(0, jsx_runtime_12.jsxs)("div", { className: "settings-page-heading", children: [(0, jsx_runtime_12.jsx)("span", { className: "settings-page-kicker", children: "Keyboard" }), (0, jsx_runtime_12.jsx)("h4", { children: "Global Workbench shortcuts" }), (0, jsx_runtime_12.jsx)("p", { children: "Record, unassign, or restore command shortcuts. Widget-local keyboard behavior remains local." })] }), (0, jsx_runtime_12.jsx)(HotkeySettings_1.HotkeySettings, {})] })), activePage === 'diagnostics' && ((0, jsx_runtime_12.jsxs)("div", { className: "settings-page", children: [(0, jsx_runtime_12.jsxs)("div", { className: "settings-page-heading", children: [(0, jsx_runtime_12.jsx)("span", { className: "settings-page-kicker", children: "Diagnostics" }), (0, jsx_runtime_12.jsx)("h4", { children: "Logging, support and developer details" }), (0, jsx_runtime_12.jsx)("p", { children: "Diagnostics stay local unless you explicitly copy or save a report." })] }), (0, jsx_runtime_12.jsxs)("section", { className: "settings-section", children: [(0, jsx_runtime_12.jsx)("div", { className: "settings-section-title", children: "Logging" }), (0, jsx_runtime_12.jsxs)("div", { className: "settings-row", children: [(0, jsx_runtime_12.jsxs)("div", { children: [(0, jsx_runtime_12.jsx)("strong", { children: "Detailed logging" }), (0, jsx_runtime_12.jsx)("small", { children: "Records additional structured diagnostic events in memory and, on desktop, into the bounded persistent log. Logs stay local and are never uploaded automatically." })] }), (0, jsx_runtime_12.jsx)("button", { className: `settings-toggle ${detailedLogging ? 'active' : ''}`, onClick: () => setDetailedLogging(!detailedLogging), "aria-pressed": detailedLogging, children: detailedLogging ? 'On' : 'Off' })] }), (0, jsx_runtime_12.jsxs)("div", { className: "settings-row", children: [(0, jsx_runtime_12.jsxs)("div", { children: [(0, jsx_runtime_12.jsx)("strong", { children: "Persistent application log" }), (0, jsx_runtime_12.jsx)("small", { children: desktop ? `JSONL in the native app-log directory · ${persistentLog.retainedFiles} files max · ${Math.round(persistentLog.maxFileBytes / (1024 * 1024))} MiB each. Warnings, errors and lifecycle events are kept by default; Detailed logging adds the full structured event stream. Project paths are always redacted.` : 'Available in the Tauri desktop host. Browser/dev sessions keep the existing in-memory diagnostics only.' }), persistentLog.lastError && (0, jsx_runtime_12.jsxs)("small", { className: "settings-warning", children: ["File sink unavailable for this session: ", persistentLog.lastError] }), persistentLogStatus && (0, jsx_runtime_12.jsx)("small", { className: "support-report-status", role: "status", children: persistentLogStatus })] }), (0, jsx_runtime_12.jsx)("button", { className: "settings-layout-reset", onClick: () => void clearPersistentLogs(), disabled: !desktop, children: "Clear logs" })] }), (0, jsx_runtime_12.jsxs)("div", { className: "settings-row", children: [(0, jsx_runtime_12.jsxs)("div", { children: [(0, jsx_runtime_12.jsx)("strong", { children: "Developer mode" }), (0, jsx_runtime_12.jsx)("small", { children: "Shows runtime and diagnostic details inside the release app. This does not start Node, hot reload, or a localhost development server." })] }), (0, jsx_runtime_12.jsx)("button", { className: `settings-toggle ${developerMode ? 'active' : ''}`, onClick: () => setDeveloperMode(!developerMode), "aria-pressed": developerMode, children: developerMode ? 'On' : 'Off' })] })] }), (0, jsx_runtime_12.jsxs)("section", { className: "settings-section support-report-section", children: [(0, jsx_runtime_12.jsx)("div", { className: "settings-section-title", children: "Support report" }), (0, jsx_runtime_12.jsxs)("div", { className: "support-report-intro", children: [(0, jsx_runtime_12.jsxs)("div", { children: [(0, jsx_runtime_12.jsx)("strong", { children: "Create diagnostic report" }), (0, jsx_runtime_12.jsx)("small", { children: "Creates a local JSON report that can be attached to a bug report. Workbench does not add project file contents and does not upload the report." })] }), (0, jsx_runtime_12.jsxs)("div", { className: "support-report-counters", "aria-label": "Current diagnostic session summary", children: [(0, jsx_runtime_12.jsxs)("span", { children: [(0, jsx_runtime_12.jsx)("strong", { children: summary.eventCount }), " events"] }), (0, jsx_runtime_12.jsxs)("span", { children: [(0, jsx_runtime_12.jsx)("strong", { children: summary.errorCount }), " errors"] }), (0, jsx_runtime_12.jsxs)("span", { children: [(0, jsx_runtime_12.jsx)("strong", { children: summary.warningCount }), " warnings"] }), (0, jsx_runtime_12.jsxs)("span", { children: [(0, jsx_runtime_12.jsx)("strong", { children: summary.metricCount }), " metrics"] }), (0, jsx_runtime_12.jsxs)("span", { children: [(0, jsx_runtime_12.jsx)("strong", { children: summary.slowOperationCount }), " slow ops"] }), (0, jsx_runtime_12.jsxs)("span", { children: [(0, jsx_runtime_12.jsx)("strong", { children: summary.traceCount }), " traces"] })] })] }), (0, jsx_runtime_12.jsxs)("label", { className: "support-report-option", children: [(0, jsx_runtime_12.jsx)("input", { type: "checkbox", checked: includeLogs, onChange: (event) => setIncludeLogs(event.target.checked) }), (0, jsx_runtime_12.jsxs)("span", { children: [(0, jsx_runtime_12.jsx)("strong", { children: "Include recent application logs" }), (0, jsx_runtime_12.jsx)("small", { children: "Structured Workbench events only; the in-memory log is capped." })] })] }), (0, jsx_runtime_12.jsxs)("label", { className: "support-report-option", children: [(0, jsx_runtime_12.jsx)("input", { type: "checkbox", checked: includePerformance, onChange: (event) => setIncludePerformance(event.target.checked) }), (0, jsx_runtime_12.jsxs)("span", { children: [(0, jsx_runtime_12.jsx)("strong", { children: "Include performance metrics" }), (0, jsx_runtime_12.jsx)("small", { children: "Unified timing summaries with p50/p95/p99, slow-operation ranking and correlated operation traces." })] })] }), (0, jsx_runtime_12.jsxs)("label", { className: "support-report-option privacy-sensitive", children: [(0, jsx_runtime_12.jsx)("input", { type: "checkbox", checked: includeProjectPaths, onChange: (event) => setIncludeProjectPaths(event.target.checked) }), (0, jsx_runtime_12.jsxs)("span", { children: [(0, jsx_runtime_12.jsx)("strong", { children: "Include project-relative paths" }), (0, jsx_runtime_12.jsx)("small", { children: "Off by default. Enable only when filenames and relative paths are useful for reproducing the issue." })] })] }), (0, jsx_runtime_12.jsxs)("div", { className: "support-report-privacy", children: [(0, jsx_runtime_12.jsx)(LucideIcon_8.LucideIcon, { name: "circle-check", size: 16 }), (0, jsx_runtime_12.jsxs)("span", { children: [(0, jsx_runtime_12.jsx)("strong", { children: "Private by default." }), " No automatic upload, no project file contents, and project-path fields are redacted unless you opt in. Review the JSON before sharing it."] })] }), (0, jsx_runtime_12.jsxs)("div", { className: "support-report-actions", children: [(0, jsx_runtime_12.jsxs)("button", { onClick: () => void copyReport(), children: [(0, jsx_runtime_12.jsx)(LucideIcon_8.LucideIcon, { name: "file-text", size: 14 }), " Copy report"] }), (0, jsx_runtime_12.jsxs)("button", { className: "primary", onClick: saveReport, children: [(0, jsx_runtime_12.jsx)(LucideIcon_8.LucideIcon, { name: "corner-down-left", size: 14 }), " Save diagnostic JSON"] })] }), reportStatus && (0, jsx_runtime_12.jsx)("small", { className: "support-report-status", role: "status", children: reportStatus })] })] })), activePage === 'about' && ((0, jsx_runtime_12.jsxs)("div", { className: "settings-page", children: [(0, jsx_runtime_12.jsxs)("div", { className: "settings-page-heading", children: [(0, jsx_runtime_12.jsx)("span", { className: "settings-page-kicker", children: "About" }), (0, jsx_runtime_12.jsx)("h4", { children: "Hytale Generator Workbench" }), (0, jsx_runtime_12.jsx)("p", { children: "Runtime identity and current distribution state." })] }), (0, jsx_runtime_12.jsx)("section", { className: "settings-section runtime-settings", children: (0, jsx_runtime_12.jsxs)("div", { className: "settings-runtime-grid settings-runtime-grid-v2", children: [(0, jsx_runtime_12.jsxs)("span", { children: [(0, jsx_runtime_12.jsx)("strong", { children: "Version" }), releaseIdentity_1.RELEASE_DISPLAY_VERSION] }), (0, jsx_runtime_12.jsxs)("span", { children: [(0, jsx_runtime_12.jsx)("strong", { children: "Host" }), desktop ? 'Tauri Desktop' : 'Browser / Dev'] }), (0, jsx_runtime_12.jsxs)("span", { children: [(0, jsx_runtime_12.jsx)("strong", { children: "Frontend" }), desktop ? 'Embedded' : 'Web / Dev'] }), (0, jsx_runtime_12.jsxs)("span", { children: [(0, jsx_runtime_12.jsx)("strong", { children: "Filesystem" }), desktop ? 'Native Rust authority' : 'Browser APIs'] }), (0, jsx_runtime_12.jsxs)("span", { children: [(0, jsx_runtime_12.jsx)("strong", { children: "TCP server" }), desktop ? 'None' : 'Depends on host'] }), (0, jsx_runtime_12.jsxs)("span", { children: [(0, jsx_runtime_12.jsx)("strong", { children: "Project source" }), workspace ? (workspace.sourceKind === 'directory' ? 'Opened folder' : 'Folder snapshot') : 'None'] }), (0, jsx_runtime_12.jsxs)("span", { children: [(0, jsx_runtime_12.jsx)("strong", { children: "Write access" }), workspace?.writable ? 'Read / Write' : workspace ? 'Read only' : '—'] }), (0, jsx_runtime_12.jsxs)("span", { children: [(0, jsx_runtime_12.jsx)("strong", { children: "Distribution" }), "Windows NSIS Setup"] }), (0, jsx_runtime_12.jsxs)("span", { children: [(0, jsx_runtime_12.jsx)("strong", { children: "Automatic updates" }), releaseIdentity_1.UPDATER_ENABLED ? 'Installed builds / user-controlled' : releaseIdentity_1.UPDATER_PREPARED ? 'Prepared / disabled' : 'Not configured'] })] }) }), (0, jsx_runtime_12.jsxs)("section", { className: "settings-section updater-settings", children: [(0, jsx_runtime_12.jsx)("div", { className: "settings-section-title", children: "Updates" }), (0, jsx_runtime_12.jsxs)("div", { className: "settings-row updater-channel-row", children: [(0, jsx_runtime_12.jsxs)("div", { children: [(0, jsx_runtime_12.jsx)("strong", { children: "Update channel" }), (0, jsx_runtime_12.jsx)("small", { children: "Stable receives release builds only. Preview may also receive prerelease builds." })] }), (0, jsx_runtime_12.jsxs)("select", { value: updateChannel, onChange: (event) => chooseUpdateChannel(event.target.value), disabled: !desktop || updateBusy, children: [(0, jsx_runtime_12.jsx)("option", { value: "stable", children: "Stable" }), (0, jsx_runtime_12.jsx)("option", { value: "preview", children: "Preview" })] })] }), (0, jsx_runtime_12.jsxs)("div", { className: "settings-row", children: [(0, jsx_runtime_12.jsxs)("div", { children: [(0, jsx_runtime_12.jsx)("strong", { children: "Check and install" }), (0, jsx_runtime_12.jsx)("small", { children: "Checks run only when you request them. The signed package is downloaded first, then native authority rechecks staged project changes immediately before installation/restart." }), updateCheck?.available && updateCheck.notes && (0, jsx_runtime_12.jsx)("small", { className: "updater-release-notes", children: updateCheck.notes }), updateStatus && (0, jsx_runtime_12.jsx)("small", { className: "support-report-status", role: "status", children: updateStatus })] }), (0, jsx_runtime_12.jsxs)("div", { className: "updater-actions", children: [(0, jsx_runtime_12.jsx)("button", { className: "settings-layout-reset", onClick: () => void checkForUpdates(), disabled: !desktop || !releaseIdentity_1.UPDATER_ENABLED || updateBusy, children: "Check" }), updateCheck?.available && updateCheck.version && ((0, jsx_runtime_12.jsx)("button", { className: "primary", onClick: () => void installCheckedUpdate(), disabled: updateBusy || pendingChangeCount > 0, children: "Install & restart" }))] })] }), pendingChangeCount > 0 && (0, jsx_runtime_12.jsxs)("div", { className: "settings-inline-note neutral", children: [(0, jsx_runtime_12.jsx)(LucideIcon_8.LucideIcon, { name: "info", size: 16 }), (0, jsx_runtime_12.jsxs)("span", { children: [pendingChangeCount, " staged project change(s) currently block update installation."] })] })] }), (0, jsx_runtime_12.jsx)("div", { className: "settings-about-note", children: "Installed NSIS builds can use signed updates after deployment is bootstrapped. The native host refuses automatic update configuration for raw/development builds. Existing pre-updater installations require one manual upgrade to the first updater-enabled release." })] }))] })] }), (0, jsx_runtime_12.jsx)("footer", { children: (0, jsx_runtime_12.jsx)("button", { className: "primary", onClick: closeSettings, disabled: updateBusy, children: updateBusy ? "Update in progress…" : "Done" }) })] }) }));
+        return ((0, jsx_runtime_12.jsx)("div", { className: "modal-backdrop", onMouseDown: closeSettings, children: (0, jsx_runtime_12.jsxs)("section", { ref: dialogRef, className: "settings-modal settings-modal-v2", role: "dialog", "aria-modal": "true", "aria-labelledby": "workbench-settings-title", tabIndex: -1, onMouseDown: (event) => event.stopPropagation(), children: [(0, jsx_runtime_12.jsxs)("header", { children: [(0, jsx_runtime_12.jsxs)("div", { children: [(0, jsx_runtime_12.jsx)("h3", { id: "workbench-settings-title", children: "Settings" }), (0, jsx_runtime_12.jsx)("small", { children: "Workbench preferences are global and do not modify the current Hytale project." })] }), (0, jsx_runtime_12.jsx)("button", { ref: closeButtonRef, onClick: closeSettings, disabled: updateBusy, "aria-label": updateBusy ? "Close settings (disabled while update is installing)" : "Close settings", children: (0, jsx_runtime_12.jsx)(LucideIcon_8.LucideIcon, { name: "x", size: 16 }) })] }), (0, jsx_runtime_12.jsxs)("div", { className: "settings-shell", children: [(0, jsx_runtime_12.jsx)("nav", { className: "settings-navigation", "aria-label": "Settings categories", children: SETTINGS_PAGES.map((page) => ((0, jsx_runtime_12.jsxs)("button", { className: activePage === page.id ? 'active' : '', onClick: () => setActivePage(page.id), "aria-current": activePage === page.id ? 'page' : undefined, children: [(0, jsx_runtime_12.jsx)("strong", { children: page.label }), (0, jsx_runtime_12.jsx)("small", { children: page.detail })] }, page.id))) }), (0, jsx_runtime_12.jsxs)("div", { className: "settings-body settings-page-body", children: [activePage === 'appearance' && ((0, jsx_runtime_12.jsxs)("div", { className: "settings-page", children: [(0, jsx_runtime_12.jsxs)("div", { className: "settings-page-heading", children: [(0, jsx_runtime_12.jsx)("span", { className: "settings-page-kicker", children: "Appearance" }), (0, jsx_runtime_12.jsx)("h4", { children: "Make the Workbench comfortable to read" }), (0, jsx_runtime_12.jsx)("p", { children: "UI scale changes the entire application surface. Windows display scaling and Project Graph camera zoom remain independent." })] }), (0, jsx_runtime_12.jsxs)("section", { className: "settings-section settings-section-spacious", children: [(0, jsx_runtime_12.jsxs)("div", { className: "settings-row settings-row-stack", children: [(0, jsx_runtime_12.jsxs)("div", { children: [(0, jsx_runtime_12.jsx)("strong", { children: "UI scale" }), (0, jsx_runtime_12.jsx)("small", { children: "Choose a fixed, tested scale. 100% is the default. Larger ranges remain intentionally unavailable until the next reflow-hardening milestone." })] }), (0, jsx_runtime_12.jsx)("div", { className: "ui-scale-picker", role: "group", "aria-label": "UI scale", children: appearancePreferences_1.WORKBENCH_UI_SCALE_STEPS.map((scale) => ((0, jsx_runtime_12.jsx)("button", { className: uiScale === scale ? 'active' : '', "aria-pressed": uiScale === scale, onClick: () => onUiScaleChange(scale), children: (0, appearancePreferences_1.formatWorkbenchUiScale)(scale) }, scale))) })] }), (0, jsx_runtime_12.jsxs)("div", { className: "settings-row", children: [(0, jsx_runtime_12.jsxs)("div", { children: [(0, jsx_runtime_12.jsx)("strong", { children: "Current scale" }), (0, jsx_runtime_12.jsx)("small", { children: "Keyboard: Ctrl/Cmd + Plus, Ctrl/Cmd + Minus, and Ctrl/Cmd + 0." })] }), (0, jsx_runtime_12.jsxs)("div", { className: "settings-value-actions", children: [(0, jsx_runtime_12.jsx)("span", { className: "settings-value-badge", children: (0, appearancePreferences_1.formatWorkbenchUiScale)(uiScale) }), (0, jsx_runtime_12.jsx)("button", { className: "settings-layout-reset", onClick: onResetUiScale, disabled: uiScale === 1, children: "Reset" })] })] }), (0, jsx_runtime_12.jsxs)("div", { className: "settings-inline-note", children: [(0, jsx_runtime_12.jsx)(LucideIcon_8.LucideIcon, { name: "circle-check", size: 16 }), (0, jsx_runtime_12.jsxs)("span", { children: [(0, jsx_runtime_12.jsx)("strong", { children: "Separate from Windows DPI." }), " The desktop host scales its WebView only; project data and Project Graph camera state are unchanged."] })] })] })] })), activePage === 'workbench' && ((0, jsx_runtime_12.jsxs)("div", { className: "settings-page", children: [(0, jsx_runtime_12.jsxs)("div", { className: "settings-page-heading", children: [(0, jsx_runtime_12.jsx)("span", { className: "settings-page-kicker", children: "Workbench" }), (0, jsx_runtime_12.jsx)("h4", { children: "Layout and pane preferences" }), (0, jsx_runtime_12.jsx)("p", { children: "These preferences belong to the application, not to a ProjectSession." })] }), (0, jsx_runtime_12.jsxs)("section", { className: "settings-section settings-section-spacious", children: [(0, jsx_runtime_12.jsxs)("div", { className: "settings-row", children: [(0, jsx_runtime_12.jsxs)("div", { children: [(0, jsx_runtime_12.jsx)("strong", { children: "Workbench layout" }), (0, jsx_runtime_12.jsxs)("small", { children: ["Sidebar: ", Math.round(sidebarWidth), " px \u00B7 split ratio: ", Math.round(splitRatio * 100), "/", 100 - Math.round(splitRatio * 100), ". Resize either divider directly; Reset restores the layout defaults."] })] }), (0, jsx_runtime_12.jsx)("button", { className: "settings-layout-reset", onClick: onResetLayout, children: "Reset" })] }), (0, jsx_runtime_12.jsxs)("div", { className: "settings-inline-note neutral", children: [(0, jsx_runtime_12.jsx)(LucideIcon_8.LucideIcon, { name: "columns-2", size: 16 }), (0, jsx_runtime_12.jsx)("span", { children: "Split mode itself remains transient. Pane-local tab references and globally unique document instances keep their existing v0.11.21 contract." })] })] })] })), activePage === 'keyboard' && ((0, jsx_runtime_12.jsxs)("div", { className: "settings-page", children: [(0, jsx_runtime_12.jsxs)("div", { className: "settings-page-heading", children: [(0, jsx_runtime_12.jsx)("span", { className: "settings-page-kicker", children: "Keyboard" }), (0, jsx_runtime_12.jsx)("h4", { children: "Global Workbench shortcuts" }), (0, jsx_runtime_12.jsx)("p", { children: "Record, unassign, or restore command shortcuts. Widget-local keyboard behavior remains local." })] }), (0, jsx_runtime_12.jsx)(HotkeySettings_1.HotkeySettings, {})] })), activePage === 'diagnostics' && ((0, jsx_runtime_12.jsxs)("div", { className: "settings-page", children: [(0, jsx_runtime_12.jsxs)("div", { className: "settings-page-heading", children: [(0, jsx_runtime_12.jsx)("span", { className: "settings-page-kicker", children: "Diagnostics" }), (0, jsx_runtime_12.jsx)("h4", { children: "Logging, support and developer details" }), (0, jsx_runtime_12.jsx)("p", { children: "Diagnostics stay local unless you explicitly copy or save a report." })] }), (0, jsx_runtime_12.jsxs)("section", { className: "settings-section", children: [(0, jsx_runtime_12.jsx)("div", { className: "settings-section-title", children: "Logging" }), (0, jsx_runtime_12.jsxs)("div", { className: "settings-row", children: [(0, jsx_runtime_12.jsxs)("div", { children: [(0, jsx_runtime_12.jsx)("strong", { children: "Detailed logging" }), (0, jsx_runtime_12.jsx)("small", { children: "Records additional structured diagnostic events in memory and, on desktop, into the bounded persistent log. Logs stay local and are never uploaded automatically." })] }), (0, jsx_runtime_12.jsx)("button", { className: `settings-toggle ${detailedLogging ? 'active' : ''}`, onClick: () => setDetailedLogging(!detailedLogging), "aria-pressed": detailedLogging, children: detailedLogging ? 'On' : 'Off' })] }), (0, jsx_runtime_12.jsxs)("div", { className: "settings-row", children: [(0, jsx_runtime_12.jsxs)("div", { children: [(0, jsx_runtime_12.jsx)("strong", { children: "Persistent application log" }), (0, jsx_runtime_12.jsx)("small", { children: desktop ? `JSONL in the native app-log directory · ${persistentLog.retainedFiles} files max · ${Math.round(persistentLog.maxFileBytes / (1024 * 1024))} MiB each. Warnings, errors and lifecycle events are kept by default; Detailed logging adds the full structured event stream. Project paths are always redacted. Raw error text and stacks are omitted.` : 'Available in the Tauri desktop host. Browser/dev sessions keep the existing in-memory diagnostics only.' }), (0, jsx_runtime_12.jsx)("small", { children: "Clear logs removes disk history. Current session events stay in memory until restart." }), persistentLog.lastError && (0, jsx_runtime_12.jsxs)("small", { className: "settings-warning", children: ["File sink unavailable for this session: ", persistentLog.lastError] }), persistentLogStatus && (0, jsx_runtime_12.jsx)("small", { className: "support-report-status", role: "status", children: persistentLogStatus })] }), (0, jsx_runtime_12.jsx)("button", { className: "settings-layout-reset", onClick: () => void clearPersistentLogs(), disabled: !desktop, children: "Clear logs" })] }), (0, jsx_runtime_12.jsxs)("div", { className: "settings-row", children: [(0, jsx_runtime_12.jsxs)("div", { children: [(0, jsx_runtime_12.jsx)("strong", { children: "Developer mode" }), (0, jsx_runtime_12.jsx)("small", { children: "Shows runtime and diagnostic details inside the release app. This does not start Node, hot reload, or a localhost development server." })] }), (0, jsx_runtime_12.jsx)("button", { className: `settings-toggle ${developerMode ? 'active' : ''}`, onClick: () => setDeveloperMode(!developerMode), "aria-pressed": developerMode, children: developerMode ? 'On' : 'Off' })] })] }), (0, jsx_runtime_12.jsxs)("section", { className: "settings-section support-report-section", children: [(0, jsx_runtime_12.jsx)("div", { className: "settings-section-title", children: "Support report" }), (0, jsx_runtime_12.jsxs)("div", { className: "support-report-intro", children: [(0, jsx_runtime_12.jsxs)("div", { children: [(0, jsx_runtime_12.jsx)("strong", { children: "Create diagnostic report" }), (0, jsx_runtime_12.jsx)("small", { children: "Creates a local JSON report that can be attached to a bug report. Reports contain operation metadata and error categories, with raw error text and stacks omitted. Workbench does not add project file contents and does not upload the report." })] }), (0, jsx_runtime_12.jsxs)("div", { className: "support-report-counters", "aria-label": "Current diagnostic session summary", children: [(0, jsx_runtime_12.jsxs)("span", { children: [(0, jsx_runtime_12.jsx)("strong", { children: summary.eventCount }), " events"] }), (0, jsx_runtime_12.jsxs)("span", { children: [(0, jsx_runtime_12.jsx)("strong", { children: summary.errorCount }), " errors"] }), (0, jsx_runtime_12.jsxs)("span", { children: [(0, jsx_runtime_12.jsx)("strong", { children: summary.warningCount }), " warnings"] }), (0, jsx_runtime_12.jsxs)("span", { children: [(0, jsx_runtime_12.jsx)("strong", { children: summary.metricCount }), " metrics"] }), (0, jsx_runtime_12.jsxs)("span", { children: [(0, jsx_runtime_12.jsx)("strong", { children: summary.slowOperationCount }), " slow ops"] }), (0, jsx_runtime_12.jsxs)("span", { children: [(0, jsx_runtime_12.jsx)("strong", { children: summary.traceCount }), " traces"] })] })] }), (0, jsx_runtime_12.jsxs)("label", { className: "support-report-option", children: [(0, jsx_runtime_12.jsx)("input", { type: "checkbox", checked: includeLogs, onChange: (event) => setIncludeLogs(event.target.checked) }), (0, jsx_runtime_12.jsxs)("span", { children: [(0, jsx_runtime_12.jsx)("strong", { children: "Include recent application logs" }), (0, jsx_runtime_12.jsx)("small", { children: "Structured Workbench events only; the in-memory log is capped." })] })] }), (0, jsx_runtime_12.jsxs)("label", { className: "support-report-option", children: [(0, jsx_runtime_12.jsx)("input", { type: "checkbox", checked: includePerformance, onChange: (event) => setIncludePerformance(event.target.checked) }), (0, jsx_runtime_12.jsxs)("span", { children: [(0, jsx_runtime_12.jsx)("strong", { children: "Include performance metrics" }), (0, jsx_runtime_12.jsx)("small", { children: "Unified timing summaries with p50/p95/p99, slow-operation ranking and correlated operation traces." })] })] }), (0, jsx_runtime_12.jsxs)("label", { className: "support-report-option privacy-sensitive", children: [(0, jsx_runtime_12.jsx)("input", { type: "checkbox", checked: includeProjectPaths, onChange: (event) => setIncludeProjectPaths(event.target.checked) }), (0, jsx_runtime_12.jsxs)("span", { children: [(0, jsx_runtime_12.jsx)("strong", { children: "Include project-relative paths" }), (0, jsx_runtime_12.jsx)("small", { children: "Off by default. Enable only when filenames and relative paths are useful for reproducing the issue." })] })] }), (0, jsx_runtime_12.jsxs)("div", { className: "support-report-privacy", children: [(0, jsx_runtime_12.jsx)(LucideIcon_8.LucideIcon, { name: "circle-check", size: 16 }), (0, jsx_runtime_12.jsxs)("span", { children: [(0, jsx_runtime_12.jsx)("strong", { children: "Private by default." }), " No automatic upload, no project file contents, and project-path fields are redacted unless you opt in. Review the JSON before sharing it."] })] }), (0, jsx_runtime_12.jsxs)("div", { className: "support-report-actions", children: [(0, jsx_runtime_12.jsxs)("button", { onClick: () => void copyReport(), children: [(0, jsx_runtime_12.jsx)(LucideIcon_8.LucideIcon, { name: "file-text", size: 14 }), " Copy report"] }), (0, jsx_runtime_12.jsxs)("button", { className: "primary", onClick: saveReport, children: [(0, jsx_runtime_12.jsx)(LucideIcon_8.LucideIcon, { name: "corner-down-left", size: 14 }), " Save diagnostic JSON"] })] }), reportStatus && (0, jsx_runtime_12.jsx)("small", { className: "support-report-status", role: "status", children: reportStatus })] })] })), activePage === 'about' && ((0, jsx_runtime_12.jsxs)("div", { className: "settings-page", children: [(0, jsx_runtime_12.jsxs)("div", { className: "settings-page-heading", children: [(0, jsx_runtime_12.jsx)("span", { className: "settings-page-kicker", children: "About" }), (0, jsx_runtime_12.jsx)("h4", { children: "Hytale Generator Workbench" }), (0, jsx_runtime_12.jsx)("p", { children: "Runtime identity and current distribution state." })] }), (0, jsx_runtime_12.jsx)("section", { className: "settings-section runtime-settings", children: (0, jsx_runtime_12.jsxs)("div", { className: "settings-runtime-grid settings-runtime-grid-v2", children: [(0, jsx_runtime_12.jsxs)("span", { children: [(0, jsx_runtime_12.jsx)("strong", { children: "Version" }), releaseIdentity_1.RELEASE_DISPLAY_VERSION] }), (0, jsx_runtime_12.jsxs)("span", { children: [(0, jsx_runtime_12.jsx)("strong", { children: "Host" }), desktop ? 'Tauri Desktop' : 'Browser / Dev'] }), (0, jsx_runtime_12.jsxs)("span", { children: [(0, jsx_runtime_12.jsx)("strong", { children: "Frontend" }), desktop ? 'Embedded' : 'Web / Dev'] }), (0, jsx_runtime_12.jsxs)("span", { children: [(0, jsx_runtime_12.jsx)("strong", { children: "Filesystem" }), desktop ? 'Native Rust authority' : 'Browser APIs'] }), (0, jsx_runtime_12.jsxs)("span", { children: [(0, jsx_runtime_12.jsx)("strong", { children: "TCP server" }), desktop ? 'None' : 'Depends on host'] }), (0, jsx_runtime_12.jsxs)("span", { children: [(0, jsx_runtime_12.jsx)("strong", { children: "Project source" }), workspace ? (workspace.sourceKind === 'directory' ? 'Opened folder' : 'Folder snapshot') : 'None'] }), (0, jsx_runtime_12.jsxs)("span", { children: [(0, jsx_runtime_12.jsx)("strong", { children: "Write access" }), workspace?.writable ? 'Read / Write' : workspace ? 'Read only' : '—'] }), (0, jsx_runtime_12.jsxs)("span", { children: [(0, jsx_runtime_12.jsx)("strong", { children: "Distribution" }), "Windows NSIS Setup"] }), (0, jsx_runtime_12.jsxs)("span", { children: [(0, jsx_runtime_12.jsx)("strong", { children: "Automatic updates" }), releaseIdentity_1.UPDATER_ENABLED ? 'Installed builds / user-controlled' : releaseIdentity_1.UPDATER_PREPARED ? 'Prepared / disabled' : 'Not configured'] })] }) }), (0, jsx_runtime_12.jsxs)("section", { className: "settings-section updater-settings", children: [(0, jsx_runtime_12.jsx)("div", { className: "settings-section-title", children: "Updates" }), (0, jsx_runtime_12.jsxs)("div", { className: "settings-row updater-channel-row", children: [(0, jsx_runtime_12.jsxs)("div", { children: [(0, jsx_runtime_12.jsx)("strong", { children: "Update channel" }), (0, jsx_runtime_12.jsx)("small", { children: "Stable receives release builds only. Preview may also receive prerelease builds." })] }), (0, jsx_runtime_12.jsxs)("select", { value: updateChannel, onChange: (event) => chooseUpdateChannel(event.target.value), disabled: !desktop || updateBusy, children: [(0, jsx_runtime_12.jsx)("option", { value: "stable", children: "Stable" }), (0, jsx_runtime_12.jsx)("option", { value: "preview", children: "Preview" })] })] }), (0, jsx_runtime_12.jsxs)("div", { className: "settings-row", children: [(0, jsx_runtime_12.jsxs)("div", { children: [(0, jsx_runtime_12.jsx)("strong", { children: "Check and install" }), (0, jsx_runtime_12.jsx)("small", { children: "Checks run only when you request them. The signed package is downloaded first, then native authority rechecks staged project changes immediately before installation/restart." }), updateCheck?.available && updateCheck.notes && (0, jsx_runtime_12.jsx)("small", { className: "updater-release-notes", children: updateCheck.notes }), updateStatus && (0, jsx_runtime_12.jsx)("small", { className: "support-report-status", role: "status", children: updateStatus })] }), (0, jsx_runtime_12.jsxs)("div", { className: "updater-actions", children: [(0, jsx_runtime_12.jsx)("button", { className: "settings-layout-reset", onClick: () => void checkForUpdates(), disabled: !desktop || !releaseIdentity_1.UPDATER_ENABLED || updateBusy, children: "Check" }), updateCheck?.available && updateCheck.version && ((0, jsx_runtime_12.jsx)("button", { className: "primary", onClick: () => void installCheckedUpdate(), disabled: updateBusy || pendingChangeCount > 0, children: "Install & restart" }))] })] }), pendingChangeCount > 0 && (0, jsx_runtime_12.jsxs)("div", { className: "settings-inline-note neutral", children: [(0, jsx_runtime_12.jsx)(LucideIcon_8.LucideIcon, { name: "info", size: 16 }), (0, jsx_runtime_12.jsxs)("span", { children: [pendingChangeCount, " staged project change(s) currently block update installation."] })] })] }), (0, jsx_runtime_12.jsx)("div", { className: "settings-about-note", children: "Installed NSIS builds can use signed updates after deployment is bootstrapped. The native host refuses automatic update configuration for raw/development builds. Existing pre-updater installations require one manual upgrade to the first updater-enabled release." })] }))] })] }), (0, jsx_runtime_12.jsx)("footer", { children: (0, jsx_runtime_12.jsx)("button", { className: "primary", onClick: closeSettings, disabled: updateBusy, children: updateBusy ? "Update in progress…" : "Done" }) })] }) }));
     }
 });
 define("components/UniversalTooltip", ["require", "exports", "react/jsx-runtime", "react"], function (require, exports, jsx_runtime_13, react_13) {

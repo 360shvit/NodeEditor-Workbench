@@ -1,3 +1,4 @@
+import { diagnosticErrorName, safeDiagnosticData, safeDiagnosticName } from './diagnosticPrivacy.js';
 import { RELEASE_CANONICAL_RUN_REQUIRED, RELEASE_DISPLAY_VERSION, RELEASE_FEATURE_FREEZE, RELEASE_MILESTONE, RELEASE_VALIDATION_PROFILE } from './releaseIdentity.generated.js';
 declare global {
   interface Window {
@@ -120,7 +121,8 @@ export interface DiagnosticReportOptions {
 
 const REPORT_SCHEMA_VERSION = 8;
 const MAX_EVENTS = 500;
-const MAX_DATA_KEYS = 40;
+// Event JSON is at most 4,000 UTF-16 units (at most 12,000 UTF-8 bytes).
+const MAX_EVENT_JSON_CHARACTERS = 4000;
 const MAX_TRACE_SUMMARIES = 20;
 const MAX_METRIC_SAMPLES = 96;
 const MAX_METRIC_NAMES = 256;
@@ -160,6 +162,8 @@ const metrics = new Map<string, {
 let persistentLogQueue: RuntimeEvent[] = [];
 let persistentLogFlushTimer: ReturnType<typeof setTimeout> | undefined;
 let persistentLogFlushPromise: Promise<void> | undefined;
+let persistentLogClearPromise: Promise<void> | undefined;
+let persistentLogClearing = false;
 let persistentLogDisabledForSession = false;
 let persistentLogDroppedEvents = 0;
 let persistentLogLastError: string | undefined;
@@ -207,45 +211,13 @@ function safeNumber(value: number): number {
   return Number.isFinite(value) ? Math.round(value * 100) / 100 : 0;
 }
 
-function scrubAbsolutePaths(value: string): string {
-  return value
-    .replace(/file:\/{2,3}[^\s)\]}]+/gi, '<local-app-path>')
-    .replace(/\b[A-Za-z]:\\[^\r\n\t"']+/g, '<local-path>')
-    .replace(/\/(?:Users|home|mnt|private|var|tmp)\/[^\r\n\t"']+/g, '<local-path>');
-}
-
-function safeScalar(value: unknown): unknown {
-  if (value === null || typeof value === 'boolean' || typeof value === 'number') return value;
-  if (typeof value === 'string') return scrubAbsolutePaths(value).slice(0, 600);
-  return undefined;
-}
-
-function safeData(data: Record<string, unknown> | undefined): Record<string, unknown> | undefined {
-  if (!data) return undefined;
-  const result: Record<string, unknown> = {};
-  for (const [key, raw] of Object.entries(data).slice(0, MAX_DATA_KEYS)) {
-    const scalar = safeScalar(raw);
-    if (scalar !== undefined) {
-      result[key] = scalar;
-      continue;
-    }
-    if (Array.isArray(raw)) {
-      result[key] = raw.slice(0, 30).map((item) => safeScalar(item)).filter((item) => item !== undefined);
-      continue;
-    }
-    if (raw && typeof raw === 'object') {
-      result[key] = safeData(raw as Record<string, unknown>);
-    }
-  }
-  return result;
-}
-
 function persistentLogBridge() {
   if (typeof window === 'undefined' || window.__HYTALE_DESKTOP_BRIDGE__ !== true) return undefined;
   return window.__HYTALE_PERSISTENT_LOG__;
 }
 
 function shouldPersistRuntimeEvent(entry: RuntimeEvent): boolean {
+  if (persistentLogClearing) return false;
   if (!persistentLogBridge() || persistentLogDisabledForSession) return false;
   if (entry.level === 'warn' || entry.level === 'error') return true;
   if (readDetailedLogging()) return true;
@@ -300,7 +272,7 @@ export async function initializePersistentRuntimeLogging(): Promise<void> {
     persistentLogDisabledForSession = true;
     persistentLogDroppedEvents += persistentLogQueue.length;
     persistentLogQueue = [];
-    persistentLogLastError = scrubAbsolutePaths(error instanceof Error ? error.message : String(error)).slice(0, 800);
+    persistentLogLastError = 'Persistent log operation failed (' + diagnosticErrorName(error) + ').';
     recordRuntimeEvent('support.persistent-log.init-failed', { level: 'warn', message: persistentLogLastError, skipPersistent: true });
   }
 }
@@ -312,19 +284,19 @@ export async function flushPersistentRuntimeLog(): Promise<void> {
   }
   if (persistentLogFlushPromise) return persistentLogFlushPromise;
   const bridge = persistentLogBridge();
-  if (!bridge || persistentLogDisabledForSession || persistentLogQueue.length === 0) return;
+  if (!bridge || persistentLogDisabledForSession || persistentLogClearing || persistentLogQueue.length === 0) return;
   persistentLogFlushPromise = (async () => {
     try {
       while (persistentLogQueue.length > 0 && !persistentLogDisabledForSession) {
         const batch = persistentLogQueue.splice(0, PERSISTENT_LOG_BATCH_SIZE);
         try {
-          persistentLogNativeStatus = await bridge.append(batch);
+          persistentLogNativeStatus = await Promise.resolve().then(() => bridge.append(batch));
           persistentLogLastError = undefined;
         } catch (error) {
           persistentLogDroppedEvents += batch.length + persistentLogQueue.length;
           persistentLogQueue = [];
           persistentLogDisabledForSession = true;
-          persistentLogLastError = scrubAbsolutePaths(error instanceof Error ? error.message : String(error)).slice(0, 800);
+          persistentLogLastError = 'Persistent log operation failed (' + diagnosticErrorName(error) + ').';
           recordRuntimeEvent('support.persistent-log.write-failed', { level: 'warn', message: persistentLogLastError, skipPersistent: true });
         }
       }
@@ -337,19 +309,29 @@ export async function flushPersistentRuntimeLog(): Promise<void> {
 }
 
 export async function clearPersistentRuntimeLogs(): Promise<void> {
+  if (persistentLogClearPromise) return persistentLogClearPromise;
   const bridge = persistentLogBridge();
   if (!bridge) throw new Error('Persistent application logs are available only in the desktop host.');
   if (persistentLogFlushTimer !== undefined) {
     clearTimeout(persistentLogFlushTimer);
     persistentLogFlushTimer = undefined;
   }
+  persistentLogClearing = true;
   persistentLogQueue = [];
-  if (persistentLogFlushPromise) await persistentLogFlushPromise;
-  persistentLogNativeStatus = await bridge.clear();
-  persistentLogDisabledForSession = false;
-  persistentLogDroppedEvents = 0;
-  persistentLogLastError = undefined;
-  recordRuntimeEvent('support.persistent-log.cleared', { skipPersistent: true });
+  persistentLogClearPromise = (async () => {
+    try {
+      if (persistentLogFlushPromise) await persistentLogFlushPromise;
+      persistentLogNativeStatus = await Promise.resolve().then(() => bridge.clear());
+      persistentLogDisabledForSession = false;
+      persistentLogDroppedEvents = 0;
+      persistentLogLastError = undefined;
+      recordRuntimeEvent('support.persistent-log.cleared', { skipPersistent: true });
+    } finally {
+      persistentLogClearing = false;
+      persistentLogClearPromise = undefined;
+    }
+  })();
+  return persistentLogClearPromise;
 }
 
 export function recordRuntimeEvent(
@@ -371,16 +353,17 @@ export function recordRuntimeEvent(
     id: nextEventId++,
     timestamp: new Date().toISOString(),
     level: options.level ?? 'info',
-    event: event.slice(0, 120),
-    traceId: options.traceId?.slice(0, 120),
-    message: options.message ? scrubAbsolutePaths(options.message).slice(0, 800) : undefined,
+    event: safeDiagnosticName(event),
+    traceId: options.traceId ? safeDiagnosticName(options.traceId) : undefined,
+    message: options.message ? '<details-redacted>' : undefined,
     durationMs: options.durationMs === undefined ? undefined : safeNumber(options.durationMs),
-    data: safeData(options.data),
+    data: safeDiagnosticData(options.data),
   };
+  if (JSON.stringify(entry).length > MAX_EVENT_JSON_CHARACTERS) entry.data = { diagnosticDataOmitted: true };
   events = [...events.slice(-(MAX_EVENTS - 1)), entry];
   if (entry.durationMs !== undefined && !options.skipMetric) recordRuntimeMetric(event, entry.durationMs, options.thresholds);
   if (!options.skipPersistent) enqueuePersistentRuntimeEvent(entry);
-  return entry;
+  return cloneEvent(entry);
 }
 
 export function performanceThresholdsFor(name: string): PerformanceThresholds {
@@ -412,7 +395,7 @@ function percentile(samples: number[], percent: number): number {
 
 export function recordRuntimeMetric(name: string, durationMs: number, thresholds?: PerformanceThresholds): void {
   if (!Number.isFinite(durationMs) || durationMs < 0) return;
-  name = name.slice(0, 120);
+  name = safeDiagnosticName(name);
   const value = safeNumber(durationMs);
   const classification = performanceClassification(name, value, thresholds);
   const current = metrics.get(name);
@@ -447,17 +430,6 @@ export function recordRuntimeMetric(name: string, durationMs: number, thresholds
   }
 }
 
-function errorPayload(error: unknown): Record<string, unknown> {
-  if (error instanceof Error) {
-    return {
-      errorName: error.name,
-      errorMessage: scrubAbsolutePaths(error.message),
-      errorStack: error.stack ? scrubAbsolutePaths(error.stack).slice(0, 8_000) : undefined,
-    };
-  }
-  return { errorMessage: scrubAbsolutePaths(String(error)) };
-}
-
 export function recordRuntimeError(
   event: string,
   error: unknown,
@@ -467,8 +439,7 @@ export function recordRuntimeError(
   return recordRuntimeEvent(event, {
     level: 'error',
     traceId,
-    message: error instanceof Error ? error.message : String(error),
-    data: { ...errorPayload(error), ...(data ?? {}) },
+    data: { ...safeDiagnosticData(data), errorName: diagnosticErrorName(error) },
   });
 }
 
@@ -485,8 +456,12 @@ export function projectSupportSnapshot(): ProjectSupportSnapshot | undefined {
   return projectSnapshot ? { ...projectSnapshot, projectDiagnostics: { ...projectSnapshot.projectDiagnostics } } : undefined;
 }
 
+function cloneEvent(entry: RuntimeEvent): RuntimeEvent {
+  return JSON.parse(JSON.stringify(entry)) as RuntimeEvent;
+}
+
 export function runtimeEvents(): RuntimeEvent[] {
-  return events.map((entry) => ({ ...entry, data: entry.data ? { ...entry.data } : undefined }));
+  return events.map(cloneEvent);
 }
 
 export function runtimeMetrics(): RuntimeMetric[] {

@@ -17,6 +17,7 @@ use tauri::{ipc::InvokeBody, ipc::Request, ipc::Response, AppHandle, Emitter, Ma
 use tauri_plugin_dialog::DialogExt;
 use tauri_plugin_window_state::StateFlags;
 use tauri_plugin_updater::{Update, UpdaterExt};
+mod diagnostic_privacy;
 mod worldgen_scan_control;
 use worldgen_scan_control::{CancellableReader, WorldgenScanControl};
 
@@ -891,12 +892,17 @@ fn app_data_file(app: &AppHandle, name: &str) -> Result<PathBuf, String> {
 
 fn persistent_log_directory(app: &AppHandle) -> Result<PathBuf, String> {
     let directory = app.path().app_log_dir().map_err(|error| io_error("Cannot resolve app-log directory", error))?;
-    fs::create_dir_all(&directory).map_err(|error| io_error("Cannot create app-log directory", error))?;
-    let metadata = fs::symlink_metadata(&directory).map_err(|error| io_error("Cannot inspect app-log directory", error))?;
-    if metadata.file_type().is_symlink() || !metadata.is_dir() {
+    prepare_persistent_log_directory(&directory)?;
+    Ok(directory)
+}
+
+fn prepare_persistent_log_directory(directory: &Path) -> Result<(), String> {
+    fs::create_dir_all(directory).map_err(|error| io_error("Cannot create app-log directory", error))?;
+    let metadata = fs::symlink_metadata(directory).map_err(|error| io_error("Cannot inspect app-log directory", error))?;
+    if metadata.file_type().is_symlink() || metadata_is_reparse_point(&metadata) || !metadata.is_dir() {
         return Err("Refusing unsafe app-log directory.".to_string());
     }
-    Ok(directory)
+    Ok(())
 }
 
 fn persistent_log_path(directory: &Path, generation: usize) -> PathBuf {
@@ -908,15 +914,20 @@ fn persistent_log_path(directory: &Path, generation: usize) -> PathBuf {
 }
 
 fn inspect_persistent_log_file(path: &Path) -> Result<u64, String> {
-    if !path.exists() { return Ok(0); }
-    let metadata = fs::symlink_metadata(path).map_err(|error| io_error("Cannot inspect persistent log", error))?;
-    if metadata.file_type().is_symlink() || !metadata.is_file() {
+    let metadata = match fs::symlink_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(0),
+        Err(error) => return Err(io_error("Cannot inspect persistent log", error)),
+    };
+    if metadata.file_type().is_symlink() || metadata_is_reparse_point(&metadata) || !metadata.is_file() {
         return Err("Refusing unsafe persistent log target.".to_string());
     }
     Ok(metadata.len())
 }
 
 fn rotate_persistent_logs(directory: &Path) -> Result<(), String> {
+    // Validate every managed target before deleting or moving any generation.
+    for generation in 0..PERSISTENT_LOG_RETAINED_FILES { inspect_persistent_log_file(&persistent_log_path(directory, generation))?; }
     let last = persistent_log_path(directory, PERSISTENT_LOG_RETAINED_FILES.saturating_sub(1));
     if last.exists() {
         inspect_persistent_log_file(&last)?;
@@ -3053,15 +3064,18 @@ fn persistent_log_status(app: AppHandle, state: State<'_, DesktopState>) -> Resu
 
 #[tauri::command]
 fn append_persistent_log_batch(payload: PersistentLogBatchPayload, app: AppHandle, state: State<'_, DesktopState>) -> Result<PersistentLogStatus, String> {
-    if payload.entries.is_empty() { return persistent_log_status_for(&app); }
-    if payload.entries.len() > PERSISTENT_LOG_MAX_BATCH_ENTRIES {
-        return Err("Persistent-log batch is too large.".to_string());
-    }
     let _guard = state.persistent_log_lock.lock().map_err(|_| "Persistent-log state lock is poisoned.".to_string())?;
     let directory = persistent_log_directory(&app)?;
-    let mut encoded = Vec::with_capacity(payload.entries.len());
+    append_persistent_entries(&directory, payload.entries)?;
+    persistent_log_status_for(&app)
+}
+
+fn append_persistent_entries(directory: &Path, entries: Vec<serde_json::Value>) -> Result<(), String> {
+    if entries.len() > PERSISTENT_LOG_MAX_BATCH_ENTRIES { return Err("Persistent-log batch is too large.".to_string()); }
+    if entries.is_empty() { return Ok(()); }
+    let mut encoded = Vec::with_capacity(entries.len());
     let mut batch_bytes = 0usize;
-    for entry in payload.entries {
+    for entry in entries {
         let bytes = serde_json::to_vec(&entry).map_err(|error| io_error("Cannot serialize persistent-log entry", error))?;
         if bytes.len() > PERSISTENT_LOG_MAX_ENTRY_BYTES {
             return Err("Persistent-log entry exceeds the size limit.".to_string());
@@ -3070,8 +3084,10 @@ fn append_persistent_log_batch(payload: PersistentLogBatchPayload, app: AppHandl
         if batch_bytes > PERSISTENT_LOG_MAX_BATCH_BYTES {
             return Err("Persistent-log batch exceeds the byte limit.".to_string());
         }
-        encoded.push(bytes);
+        let entry = diagnostic_privacy::persistent_entry(&entry)?;
+        encoded.push(serde_json::to_vec(&entry).map_err(|error| io_error("Cannot serialize private persistent-log entry", error))?);
     }
+    for generation in 0..PERSISTENT_LOG_RETAINED_FILES { inspect_persistent_log_file(&persistent_log_path(directory, generation))?; }
     let current = persistent_log_path(&directory, 0);
     let current_bytes = inspect_persistent_log_file(&current)?;
     if current_bytes > 0 && current_bytes.saturating_add(batch_bytes as u64) > PERSISTENT_LOG_MAX_FILE_BYTES {
@@ -3086,21 +3102,30 @@ fn append_persistent_log_batch(payload: PersistentLogBatchPayload, app: AppHandl
         file.write_all(b"\n").map_err(|error| io_error("Cannot append persistent log newline", error))?;
     }
     file.flush().map_err(|error| io_error("Cannot flush persistent log", error))?;
-    persistent_log_status_for(&app)
+    Ok(())
 }
 
 #[tauri::command]
 fn clear_persistent_logs(app: AppHandle, state: State<'_, DesktopState>) -> Result<PersistentLogStatus, String> {
     let _guard = state.persistent_log_lock.lock().map_err(|_| "Persistent-log state lock is poisoned.".to_string())?;
     let directory = persistent_log_directory(&app)?;
+    clear_persistent_log_directory(&directory)?;
+    persistent_log_status_for(&app)
+}
+
+fn clear_persistent_log_directory(directory: &Path) -> Result<(), String> {
+    for generation in 0..PERSISTENT_LOG_RETAINED_FILES { inspect_persistent_log_file(&persistent_log_path(directory, generation))?; }
     for generation in 0..PERSISTENT_LOG_RETAINED_FILES {
         let path = persistent_log_path(&directory, generation);
         if !path.exists() { continue; }
         inspect_persistent_log_file(&path)?;
         fs::remove_file(&path).map_err(|error| io_error("Cannot clear persistent log", error))?;
     }
-    persistent_log_status_for(&app)
+    Ok(())
 }
+
+#[cfg(all(test, windows))]
+mod diagnostic_privacy_tests;
 
 #[cfg(all(test, windows))]
 mod io_safety_tests;

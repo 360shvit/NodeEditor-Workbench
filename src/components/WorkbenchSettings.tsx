@@ -306,7 +306,8 @@ export function WorkbenchSettings({
                   <div className="settings-row">
                     <div>
                       <strong>Persistent application log</strong>
-                      <small>{desktop ? `JSONL in the native app-log directory · ${persistentLog.retainedFiles} files max · ${Math.round(persistentLog.maxFileBytes / (1024 * 1024))} MiB each. Warnings, errors and lifecycle events are kept by default; Detailed logging adds the full structured event stream. Project paths are always redacted.` : 'Available in the Tauri desktop host. Browser/dev sessions keep the existing in-memory diagnostics only.'}</small>
+                      <small>{desktop ? `JSONL in the native app-log directory · ${persistentLog.retainedFiles} files max · ${Math.round(persistentLog.maxFileBytes / (1024 * 1024))} MiB each. Warnings, errors and lifecycle events are kept by default; Detailed logging adds the full structured event stream. Project paths are always redacted. Raw error text and stacks are omitted.` : 'Available in the Tauri desktop host. Browser/dev sessions keep the existing in-memory diagnostics only.'}</small>
+                      <small>Clear logs removes disk history. Current session events stay in memory until restart.</small>
                       {persistentLog.lastError && <small className="settings-warning">File sink unavailable for this session: {persistentLog.lastError}</small>}
                       {persistentLogStatus && <small className="support-report-status" role="status">{persistentLogStatus}</small>}
                     </div>
@@ -326,7 +327,7 @@ export function WorkbenchSettings({
                   <div className="support-report-intro">
                     <div>
                       <strong>Create diagnostic report</strong>
-                      <small>Creates a local JSON report that can be attached to a bug report. Workbench does not add project file contents and does not upload the report.</small>
+                      <small>Creates a local JSON report that can be attached to a bug report. Reports contain operation metadata and error categories, with raw error text and stacks omitted. Workbench does not add project file contents and does not upload the report.</small>
                     </div>
                     <div className="support-report-counters" aria-label="Current diagnostic session summary">
                       <span><strong>{summary.eventCount}</strong> events</span>
