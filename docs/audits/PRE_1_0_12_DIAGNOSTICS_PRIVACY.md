@@ -1,6 +1,6 @@
 # Pre-1.0 Audit 12 — Diagnostics, logging & privacy
 
-**Status:** IN REVIEW — remediation and local gates complete; normal Windows PR CI pending.
+**Status:** PASS — reviewed findings remediated; normal Windows PR CI passed.
 **Reviewed baseline:** PR #25 after Track 11, `9d297418e61e10541a448cdeebcf3b8b9013ab6d`.
 **Scope:** runtime events/metrics/traces, support report options, error handling at diagnostic ingress, desktop persistent JSONL logging, queue/rotation/clear behavior and outbound data flow.
 
@@ -51,7 +51,7 @@ Native target inspection now includes Windows reparse points and dangling-link i
 - Four locked native Windows fixtures in `diagnostic_privacy_tests.rs` cover direct-payload sanitization and valid JSONL, entry/count/batch rejection before any write, seven rotations with no more than four files of at most 2 MiB, idempotent clear, and Windows junction refusal with sentinel preservation.
 - Local strict application TypeScript, Track 11 resource budgets and unified performance tracing passed. Local locked native suite passed **34/34** tests.
 - Local full matrix exposed one historical source-location assertion after the privacy helper moved; it now checks the new helper and its boolean behavior is covered at runtime. Eight existing suites encounter this host's `spawnSync ... EPERM` restriction; they are **not claimed as local passes**. No subprocess or release gate is weakened.
-- Windows PR CI: **pending**. Normal CI must run all **85 registered self-contained suites**, the **250-cycle embedded soak**, all **34 locked native tests**, release/embedded parity, strict TypeScript, third-party gates and unused-carry audit before this track becomes PASS.
+- [Windows validation](https://github.com/360shvit/NodeEditor-Workbench/actions/runs/35741713170) and [Dependency Approval](https://github.com/360shvit/NodeEditor-Workbench/actions/runs/35741710189) passed on implementation commit `65478459b74dd352d5059b1995c3381645189746`: **85/85 registered self-contained suites**, **250 embedded soak cycles**, **34/34 locked native tests**, release/embedded parity, strict TypeScript, third-party metadata/distribution/notices and **zero unused source carry**.
 
 ## Accepted limits / remaining acceptance work
 
@@ -63,3 +63,5 @@ Native target inspection now includes Windows reparse points and dangling-link i
 - Real installed-client UI/clipboard/save interaction and low-memory behavior remain Track 18 manual acceptance, not claimed by these synthetic/runtime tests.
 
 No dependency, lockfile, license, signing/updater configuration, release identity, workflow, runner or Action pin changed. No tag or release is created.
+
+Track 12 is complete within the reviewed scope and the explicit limits above. **Next:** Track 13 — error handling & resilience.
