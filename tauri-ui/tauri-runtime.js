@@ -23,6 +23,15 @@
     status: () => invoke('persistent_log_status'),
     clear: () => invoke('clear_persistent_logs'),
   };
+  window.__HYTALE_SAVE_DIAGNOSTIC_REPORT__ = async (suggestedName, blob) => {
+    if (!(blob instanceof Blob) || !suggestedName.toLowerCase().endsWith('.json')) throw new Error('Invalid diagnostic report save request.');
+    const target = await invoke('select_support_report_target', { payload: { suggestedName } });
+    if (!target?.token) return false;
+    await invoke('write_registered_binary', new Uint8Array(await blob.arrayBuffer()), {
+      headers: { 'X-Hytale-Save-Token': target.token },
+    });
+    return true;
+  };
 
   if (tauri.event?.listen) {
     void tauri.event.listen('project-files-changed', (event) => {
@@ -41,7 +50,14 @@
     headers: { 'Content-Type': 'application/json; charset=utf-8' },
   });
 
-  const errorResponse = (error) => jsonResponse({ error: error instanceof Error ? error.message : String(error) }, 500);
+  const errorResponse = (error) => {
+    let message = 'The native operation failed. Try again.';
+    try {
+      const detail = typeof error === 'string' ? error : error instanceof Error ? error.message : undefined;
+      if (typeof detail === 'string' && detail.trim()) message = detail;
+    } catch { /* A malformed rejection must not break the error response itself. */ }
+    return jsonResponse({ error: message }, 500);
+  };
 
   const requestBody = (init) => {
     if (!init?.body) return {};
@@ -135,7 +151,7 @@
       }
       return jsonResponse({ error: `Unknown desktop endpoint: ${url.pathname}` }, 404);
     } catch (error) {
-      if (url.pathname !== '/api/output/save-zip' && String(error).toLowerCase().includes('cancel')) return new Response(null, { status: 204 });
+      // Only explicit null picker results above indicate user cancellation.
       console.error('[Workbench Tauri bridge]', error);
       return errorResponse(error);
     }

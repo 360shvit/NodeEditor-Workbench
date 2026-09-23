@@ -3,6 +3,7 @@ import { RELEASE_CANONICAL_RUN_REQUIRED, RELEASE_DISPLAY_VERSION, RELEASE_FEATUR
 declare global {
   interface Window {
     __HYTALE_DESKTOP_BRIDGE__?: boolean;
+    __HYTALE_SAVE_DIAGNOSTIC_REPORT__?: (suggestedName: string, blob: Blob) => Promise<boolean>;
     __HYTALE_PERSISTENT_LOG__?: {
       append: (entries: RuntimeEvent[]) => Promise<PersistentLogNativeStatus>;
       status: () => Promise<PersistentLogNativeStatus>;
@@ -609,16 +610,26 @@ export async function copyDiagnosticReport(options: DiagnosticReportOptions): Pr
   recordRuntimeEvent('support.report.copied', { data: { includeProjectPaths: options.includeProjectPaths } });
 }
 
-export function downloadDiagnosticReport(options: DiagnosticReportOptions): void {
+export async function downloadDiagnosticReport(options: DiagnosticReportOptions): Promise<'saved' | 'cancelled' | 'download-started'> {
   const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
   const blob = new Blob([diagnosticReportJson(options)], { type: 'application/json;charset=utf-8' });
+  const filename = `Hytale-Generator-Workbench-Diagnostic-${timestamp}.json`;
+  if (typeof window !== 'undefined' && window.__HYTALE_DESKTOP_BRIDGE__) {
+    if (!window.__HYTALE_SAVE_DIAGNOSTIC_REPORT__) throw new Error('Native diagnostic report saving is unavailable.');
+    const saved = await window.__HYTALE_SAVE_DIAGNOSTIC_REPORT__(filename, blob);
+    if (!saved) return 'cancelled';
+    recordRuntimeEvent('support.report.exported', { data: { includeProjectPaths: options.includeProjectPaths } });
+    return 'saved';
+  }
   const href = URL.createObjectURL(blob);
-  const anchor = document.createElement('a');
-  anchor.href = href;
-  anchor.download = `Hytale-Generator-Workbench-Diagnostic-${timestamp}.json`;
-  anchor.click();
-  setTimeout(() => URL.revokeObjectURL(href), 1000);
-  recordRuntimeEvent('support.report.exported', { data: { includeProjectPaths: options.includeProjectPaths } });
+  try {
+    const anchor = document.createElement('a');
+    anchor.href = href;
+    anchor.download = filename;
+    anchor.click();
+  } finally { setTimeout(() => URL.revokeObjectURL(href), 1000); }
+  recordRuntimeEvent('support.report.download-started', { data: { includeProjectPaths: options.includeProjectPaths } });
+  return 'download-started';
 }
 
 export function installGlobalRuntimeDiagnostics(): void {

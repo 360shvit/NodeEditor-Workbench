@@ -49,6 +49,12 @@ ProjectSession persistence is convenience state, not project-content storage. St
 
 Recent-project/session data is sanitized on read and may fall back to defaults when old/corrupt values are invalid.
 
+## Error recovery limits
+
+A fatal UI exception does not undo earlier writes or stop an in-progress native write. Reload requires confirmation because it discards staged edits and Undo/Redo; there is no crash-session restoration. Interrupted Apply remains subject to journal recovery. Recoverable layout, project-close and update-check failures show an error and permit retry; a failed native close does not clear frontend project state.
+
+Diagnostic save reports success only after native write completion and distinguishes cancellation from failure. It is best effort when the native host or OS dialog is unavailable; there is no timeout that can safely claim a native write was cancelled. Local error displays may contain paths or project-derived messages, while diagnostic storage excludes raw exception text. A failed WorldGen refresh can retain the last successful report alongside the error.
+
 ## Diagnostics limits
 
 - in-memory runtime events: **500**;

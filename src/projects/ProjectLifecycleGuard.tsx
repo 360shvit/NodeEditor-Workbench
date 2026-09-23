@@ -9,6 +9,7 @@ import {
 import { useWorkbenchStore } from '../store';
 import { LucideIcon } from '../components/LucideIcon';
 import { recordRuntimeError, recordRuntimeEvent } from '../support/runtimeDiagnostics';
+import { userFacingError } from '../support/userFacingError';
 import { useModalFocusTrap } from '../workbench/modalFocus';
 
 type GuardedProjectActionKind = 'switch-project' | 'close-project' | 'exit-app';
@@ -56,6 +57,7 @@ export function ProjectLifecycleProvider({ children }: { children: ReactNode }) 
   const closeProjectState = useWorkbenchStore((state) => state.closeProject);
   const [pending, setPending] = useState<PendingProjectAction>();
   const [busy, setBusy] = useState(false);
+  const [lifecycleError, setLifecycleError] = useState<string>();
   const cancelButtonRef = useRef<HTMLButtonElement>(null);
   const dialogRef = useRef<HTMLElement>(null);
   const desktop = hasDesktopBridge();
@@ -73,10 +75,19 @@ export function ProjectLifecycleProvider({ children }: { children: ReactNode }) 
     });
   }, []);
 
-  const requestCloseProject = useCallback(async () => guardProjectAction('close-project', async () => {
-    if (desktop) await desktopCloseProject();
-    closeProjectState();
-  }), [closeProjectState, desktop, guardProjectAction]);
+  const requestCloseProject = useCallback(async () => {
+    setLifecycleError(undefined);
+    try {
+      return await guardProjectAction('close-project', async () => {
+        if (desktop) await desktopCloseProject();
+        closeProjectState();
+      });
+    } catch (error) {
+      recordRuntimeError('lifecycle.action.failed', error, { kind: 'close-project' });
+      setLifecycleError(userFacingError(error));
+      return false;
+    }
+  }, [closeProjectState, desktop, guardProjectAction]);
 
   useEffect(() => {
     if (!desktop) return;
@@ -87,13 +98,12 @@ export function ProjectLifecycleProvider({ children }: { children: ReactNode }) 
     if (!desktop) return;
     return subscribeDesktopAppCloseRequested(() => {
       if (pending) return;
-      const state = useWorkbenchStore.getState();
-      if (!state.changeSet.changes.length) {
-        void desktopExitApplication();
-        return;
-      }
+      setLifecycleError(undefined);
       void guardProjectAction('exit-app', async () => {
         await desktopExitApplication();
+      }).catch((error) => {
+        recordRuntimeError('lifecycle.action.failed', error, { kind: 'exit-app' });
+        setLifecycleError(userFacingError(error));
       });
     });
   }, [desktop, guardProjectAction, pending]);
@@ -154,6 +164,10 @@ export function ProjectLifecycleProvider({ children }: { children: ReactNode }) 
   return (
     <ProjectLifecycleContext.Provider value={contextValue}>
       {children}
+      {lifecycleError && <div className="source-parse-error" role="alert">
+        <span>{lifecycleError}</span>
+        <button onClick={() => setLifecycleError(undefined)}>Dismiss</button>
+      </div>}
       {pending && copy && (
         <div className="modal-backdrop project-lifecycle-backdrop" onMouseDown={cancelPending}>
           <section ref={dialogRef} className="project-lifecycle-modal" role="alertdialog" aria-modal="true" aria-labelledby="project-lifecycle-title" aria-describedby="project-lifecycle-detail" tabIndex={-1} onMouseDown={(event) => event.stopPropagation()}>
