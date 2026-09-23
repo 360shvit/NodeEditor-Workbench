@@ -1,6 +1,6 @@
 # Pre-1.0 Audit 13 — Error handling & resilience
 
-**Status:** IN REVIEW — remediation and local fixtures pass; normal Windows PR CI pending.
+**Status:** PASS — reviewed findings remediated; normal Windows PR CI passed.
 **Reviewed baseline:** PR #25 after Track 12, `ff84304357c8d6c11f02922f8cb43c386775f9d0`.
 **Scope:** fatal UI fallback, native error/cancellation propagation, malformed input, async support-report saves, layout failures, project close/exit, optional storage and update-check recovery.
 
@@ -34,7 +34,9 @@ Global error/rejection diagnostics remain sanitized by Track 12. Raw messages ar
 
 Component handlers run in a deterministic hook-state fixture with controlled I/O. This proves state transitions and promise outcomes, not WebView rendering, focus, OS dialogs or a signed installed-client update. Existing Track 09/10 transaction/recovery and I/O gates remain the write-safety evidence; this track does not replace them with UI assertions.
 
-Local strict app TypeScript, the new gate, privacy, frontend architecture and lifecycle checks passed. The local matrix passed 78 of 86 registered suites; eight existing suites hit this host's subprocess `EPERM` restriction (including compiler-dependent assertions with a null exit status). No failed gate was removed or weakened. Full normal Windows PR validation is pending and must pass before this track is marked complete.
+Local strict app TypeScript, the new gate, privacy, frontend architecture and lifecycle checks passed. The local matrix passed 78 of 86 registered suites; eight existing suites hit this host's subprocess `EPERM` restriction (including compiler-dependent assertions with a null exit status). No failed gate was removed or weakened.
+
+Normal [Windows PR validation](https://github.com/360shvit/NodeEditor-Workbench/actions/runs/35917017907) and [Dependency Approval](https://github.com/360shvit/NodeEditor-Workbench/actions/runs/35917015502) passed on implementation commit `8eac1914323944cf1db968dbaad07b0b69c3b74e`. The Windows job verified **86/86 self-contained regression suites**, **250 packaged-bundle soak cycles**, **34/34 locked native tests**, strict app TypeScript, release/embedded parity, third-party/notice gates and **zero unused source carry**. This is the full validation evidence for the locally restricted suites.
 
 ## Accepted limits and follow-up
 
@@ -46,3 +48,5 @@ Local strict app TypeScript, the new gate, privacy, frontend architecture and li
 - Signed installed-client offline/network/signature/download/restart behavior, real dialog/clipboard interaction and fatal-screen usability remain Tracks 14/18 acceptance. They are not verified by this synthetic gate or an unsigned PR build.
 
 No dependency, lockfile, license, signing key, release identity, native command authority, workflow, runner or Action pin changed. No merge, tag or public release is performed.
+
+Track 13 is complete within the reviewed scope and explicit limits above. **Next:** Track 14 — updater, signing & release pipeline.
