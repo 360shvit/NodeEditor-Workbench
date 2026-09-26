@@ -15,6 +15,7 @@ export * from './changeSet.js';
 export * from './refactor.js';
 export * from './matches.js';
 export * from './validation.js';
+export * from './numericLimits.js';
 
 export * from './output.js';
 

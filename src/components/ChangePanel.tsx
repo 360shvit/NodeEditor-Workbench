@@ -231,7 +231,7 @@ export function ChangePanel() {
           return;
         }
         const entries = workspace.desktopBridge ? undefined : await operation.phaseAsync('entries-build', () => buildOutputEntries(workspace, changedTexts, 'full'));
-        const written = await operation.phaseAsync('write', () => writeOutputDirectory(workspace, targetFolder, changedTexts, 'full', entries), { outputFiles: paths.length });
+        const written = await operation.phaseAsync('write', () => writeOutputDirectory(workspace, targetFolder, changedTexts, 'full', entries, allowOverwrite), { outputFiles: paths.length });
         recordRuntimeEvent('changes.project-copy.completed', { traceId: operation.traceId, durationMs: performance.now() - outputStarted, data: { written } });
         operation.end({ outcome: 'exported', written });
         setStatus(`Exported a project copy with ${written} file(s) to ${outputDirectoryLabel(targetFolder)}. The opened source project was left unchanged.`);
@@ -241,13 +241,18 @@ export function ChangePanel() {
 
       const finalName = normalizeZipName(zipName, defaultZipName(workspace.label, 'changed'));
       const blob = await operation.phaseAsync('zip-build', () => buildOutputZip(workspace, changedTexts, 'changed'), { outputFiles: outputFileCount });
-      operation.phase('download-dispatch', () => downloadBlob(finalName, blob), { outputFiles: outputFileCount });
+      await operation.phaseAsync('download-dispatch', () => downloadBlob(finalName, blob), { outputFiles: outputFileCount });
       setZipName(finalName);
       recordRuntimeEvent('changes.zip-export.completed', { traceId: operation.traceId, durationMs: performance.now() - outputStarted, data: { outputFiles: outputFileCount } });
       operation.end({ outcome: 'exported', outputFiles: outputFileCount });
-      setStatus(`Exported ${outputFileCount} changed file(s) as ${finalName}. The opened source project was left unchanged.`);
+      setStatus(`Exported ${outputFileCount} changed file(s) as ${finalName}.`);
       setReviewOpen(false);
     } catch (error) {
+      if (error instanceof DOMException && error.name === 'AbortError') {
+        operation.end({ outcome: 'cancelled' });
+        setStatus('Export cancelled. No ZIP was saved.');
+        return;
+      }
       operation.fail(error, { mode, changedFiles: changedTexts.size });
       recordRuntimeError('changes.output.failed', error, { mode, changedFiles: changedTexts.size }, operation.traceId);
       setStatus(error instanceof Error ? error.message : String(error));

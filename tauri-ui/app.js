@@ -389,7 +389,7 @@ define("core/symbolIndex", ["require", "exports"], function (require, exports) {
     exports.buildSymbolIndex = buildSymbolIndex;
     exports.findNameCollisions = findNameCollisions;
     function symbolKey(symbolType, name) {
-        return `${symbolType}::${name}`;
+        return JSON.stringify([symbolType, name]);
     }
     function buildSymbolIndex(files) {
         const index = new Map();
@@ -787,9 +787,9 @@ define("core/matches", ["require", "exports", "core/jsonPath"], function (requir
     }
     function fieldMatchKey(nodeKind, field) {
         if (field.refactorBehavior === 'literal')
-            return `literal|${field.key}|${valueKey(field.value)}`;
+            return JSON.stringify(['literal', field.key, valueKey(field.value)]);
         if (field.refactorBehavior === 'field')
-            return `field|${nodeKind}|${field.key}|${valueKey(field.value)}`;
+            return JSON.stringify(['field', nodeKind, field.key, valueKey(field.value)]);
         return undefined;
     }
     function buildFieldMatchIndex(files) {
@@ -1070,6 +1070,9 @@ define("core/parser", ["require", "exports", "core/schemaRegistry", "core/textPa
                     jsonPath: path,
                     fields,
                 });
+            }
+            else {
+                throw new Error(`Duplicate node identity "${rawId}" in ${location} nodes.`);
             }
         }
         for (const [key, child] of Object.entries(value)) {
@@ -1950,6 +1953,8 @@ define("core/refactor", ["require", "exports", "core/changeSet", "core/project",
         };
     }
     function renameSymbol(project, changeSet, symbolType, oldName, newName, options = {}) {
+        if (!newName.trim())
+            throw new Error('Symbol rename target must be non-empty.');
         const record = project.symbolIndex.get((0, symbolIndex_js_3.symbolKey)(symbolType, oldName));
         if (!record)
             return changeSet;
@@ -1970,7 +1975,7 @@ define("core/refactor", ["require", "exports", "core/changeSet", "core/project",
             }
         }
         next = (0, changeSet_js_1.addRule)(next, {
-            id: `symbol:${symbolType}:${oldName}`,
+            id: JSON.stringify(['symbol', symbolType, oldName]),
             kind: 'symbolRename',
             symbolType,
             oldValue: oldName,
@@ -2110,15 +2115,22 @@ define("core/search", ["require", "exports", "core/refactor", "core/semanticRefe
         return (0, jsonPath_js_8.jsonPathKey)(field.jsonPath);
     }
     function nodeKey(node) {
-        return `${node.fileId}|${node.location}|${node.id}`;
+        return JSON.stringify([node.fileId, node.location, node.id]);
     }
     function buildStatusIndex(project, changeSet, needsEffectiveDiagnostics) {
         const changed = new Map();
+        const values = new Map();
         for (const change of changeSet?.changes ?? []) {
-            const key = `${change.fileId}|${change.location}|${change.nodeId}`;
+            const key = nodeKey({ fileId: change.fileId, location: change.location, id: change.nodeId });
             const paths = changed.get(key) ?? new Set();
-            paths.add((0, jsonPath_js_8.jsonPathKey)(change.jsonPath));
+            const path = (0, jsonPath_js_8.jsonPathKey)(change.jsonPath);
+            paths.add(path);
             changed.set(key, paths);
+            const nodeValues = values.get(key) ?? new Map();
+            // Preserve the first matching staged change, including an explicit null value.
+            if (!nodeValues.has(path))
+                nodeValues.set(path, change.newValue);
+            values.set(key, nodeValues);
         }
         const diagnosticProject = needsEffectiveDiagnostics && changeSet?.changes.length
             ? (0, refactor_js_1.applyChangeSet)(project, changeSet).project
@@ -2128,7 +2140,7 @@ define("core/search", ["require", "exports", "core/refactor", "core/semanticRefe
             if (diagnostic.code !== 'unresolved-import')
                 continue;
             for (const occurrence of diagnostic.related ?? []) {
-                const key = `${occurrence.fileId}|${occurrence.location}|${occurrence.nodeId}`;
+                const key = nodeKey({ fileId: occurrence.fileId, location: occurrence.location, id: occurrence.nodeId });
                 const paths = unresolved.get(key) ?? new Set();
                 paths.add((0, jsonPath_js_8.jsonPathKey)(occurrence.jsonPath));
                 unresolved.set(key, paths);
@@ -2140,19 +2152,16 @@ define("core/search", ["require", "exports", "core/refactor", "core/semanticRefe
                     unresolved.set(nodeKey(node), unresolved.get(nodeKey(node)) ?? new Set());
             }
         }
-        return { changed, unresolved };
+        return { changed, unresolved, values };
     }
-    function effectiveValue(changeSet, node, field) {
-        if (!changeSet)
-            return field.value;
-        const path = fieldPathKey(field);
-        const change = changeSet.changes.find((item) => item.fileId === node.fileId && item.nodeId === node.id && item.location === node.location && (0, jsonPath_js_8.jsonPathKey)(item.jsonPath) === path);
-        return change?.newValue ?? field.value;
+    function effectiveValue(values, field) {
+        const value = values?.get(fieldPathKey(field));
+        return value === undefined ? field.value : value;
     }
     function semanticIs(parsed) {
         return parsed.is.filter((value) => value === 'import' || value === 'export');
     }
-    function nodeMatchesQuery(project, node, parsed, status, changeSet) {
+    function nodeMatchesQuery(project, node, parsed, status) {
         const file = project.fileMap.get(node.fileId);
         if (!file)
             return undefined;
@@ -2163,6 +2172,7 @@ define("core/search", ["require", "exports", "core/refactor", "core/semanticRefe
         if (parsed.nodeTypes.length && !parsed.nodeTypes.some((value) => includes(node.nodeKind, value) || includes(node.type, value) || includes(node.id, value)))
             return undefined;
         const key = nodeKey(node);
+        const values = status.values.get(key);
         const semanticPredicates = semanticIs(parsed);
         for (const predicate of parsed.is) {
             if (predicate === 'live' && node.location !== 'live')
@@ -2201,7 +2211,7 @@ define("core/search", ["require", "exports", "core/refactor", "core/semanticRefe
             matchedFieldPaths.add(path);
         // Multiple value: filters are ANDed, while each filter may match any currently selected field.
         for (const valueFilter of parsed.values) {
-            const matches = selectedFields.filter((field) => includes(effectiveValue(changeSet, node, field), valueFilter));
+            const matches = selectedFields.filter((field) => includes(effectiveValue(values, field), valueFilter));
             if (!matches.length)
                 return undefined;
             matches.forEach((field) => matchedFieldPaths.add(fieldPathKey(field)));
@@ -2216,7 +2226,7 @@ define("core/search", ["require", "exports", "core/refactor", "core/semanticRefe
         else {
             for (const term of parsed.terms) {
                 const metadataMatch = !fieldScoped && [node.nodeKind, node.type, node.id].some((value) => includes(value, term));
-                const termFieldMatches = selectedFields.filter((field) => includes(field.key, term) || includes(effectiveValue(changeSet, node, field), term));
+                const termFieldMatches = selectedFields.filter((field) => includes(field.key, term) || includes(effectiveValue(values, field), term));
                 if (!metadataMatch && termFieldMatches.length === 0)
                     return undefined;
                 if (metadataMatch)
@@ -2246,7 +2256,7 @@ define("core/search", ["require", "exports", "core/refactor", "core/semanticRefe
         let total = 0;
         for (const file of project.files) {
             for (const node of file.nodes) {
-                const match = nodeMatchesQuery(project, node, parsed, status, changeSet);
+                const match = nodeMatchesQuery(project, node, parsed, status);
                 if (!match)
                     continue;
                 total += 1;
@@ -2259,7 +2269,7 @@ define("core/search", ["require", "exports", "core/refactor", "core/semanticRefe
     /** Legacy quick-result search kept for direct navigation and compatibility with v0.2/v0.3 core callers. */
     function searchProject(project, query, limit = 80) {
         const needle = query.trim().toLowerCase();
-        if (!needle)
+        if (!needle || limit <= 0)
             return [];
         const results = [];
         const push = (result) => {
@@ -2269,6 +2279,8 @@ define("core/search", ["require", "exports", "core/refactor", "core/semanticRefe
         for (const file of project.files) {
             if (includes(file.path, needle) || includes(file.name, needle)) {
                 push({ id: `file:${file.id}`, kind: 'file', title: file.name, subtitle: `${file.workspace.label} · ${file.path}`, fileId: file.id });
+                if (results.length >= limit)
+                    return results;
             }
         }
         for (const record of project.symbolIndex.values()) {
@@ -2285,6 +2297,8 @@ define("core/search", ["require", "exports", "core/refactor", "core/semanticRefe
                 location: first?.location,
                 symbol: record.key,
             });
+            if (results.length >= limit)
+                return results;
         }
         const resources = new Map();
         for (const reference of project.semanticReferences) {
@@ -2380,8 +2394,14 @@ define("core/validation", ["require", "exports"], function (require, exports) {
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.compareDiagnostics = compareDiagnostics;
     function diagnosticKey(item) {
-        const symbol = item.symbol ? `${item.symbol.symbolType}:${item.symbol.name}` : '';
-        return `${item.code}|${item.fileId ?? ''}|${item.nodeId ?? ''}|${symbol}|${item.message}`;
+        return JSON.stringify([
+            item.code,
+            item.severity,
+            item.fileId ?? null,
+            item.nodeId ?? null,
+            item.symbol ? [item.symbol.symbolType, item.symbol.name] : null,
+            item.message,
+        ]);
     }
     function compareDiagnostics(before, after) {
         const beforeMap = new Map(before.diagnostics.map((item) => [diagnosticKey(item), item]));
@@ -2391,6 +2411,28 @@ define("core/validation", ["require", "exports"], function (require, exports) {
         const addedErrors = added.filter((item) => item.severity === 'error');
         const addedWarnings = added.filter((item) => item.severity === 'warning');
         return { added, removed, addedErrors, addedWarnings, safe: addedErrors.length === 0 };
+    }
+});
+define("core/numericLimits", ["require", "exports"], function (require, exports) {
+    "use strict";
+    Object.defineProperty(exports, "__esModule", { value: true });
+    exports.MAX_EDITOR_LAYOUT_SCALAR = void 0;
+    exports.editorLayoutNumber = editorLayoutNumber;
+    exports.isSafeEditorLayoutNumber = isSafeEditorLayoutNumber;
+    exports.MAX_EDITOR_LAYOUT_SCALAR = 1_000_000_000;
+    /**
+     * Editor/layout metadata is pixel-space data. Keep it finite and far below
+     * JavaScript's arithmetic overflow range before geometry code can consume it.
+     */
+    function editorLayoutNumber(value) {
+        return typeof value === 'number'
+            && Number.isFinite(value)
+            && Math.abs(value) <= exports.MAX_EDITOR_LAYOUT_SCALAR
+            ? value
+            : undefined;
+    }
+    function isSafeEditorLayoutNumber(value) {
+        return editorLayoutNumber(value) !== undefined;
     }
 });
 define("core/output", ["require", "exports"], function (require, exports) {
@@ -2423,7 +2465,7 @@ define("core/output", ["require", "exports"], function (require, exports) {
         return target !== 'original';
     }
 });
-define("core/graph/editorMetadata", ["require", "exports"], function (require, exports) {
+define("core/graph/editorMetadata", ["require", "exports", "core/numericLimits"], function (require, exports, numericLimits_js_1) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.buildEditorMetadataForFile = buildEditorMetadataForFile;
@@ -2447,10 +2489,10 @@ define("core/graph/editorMetadata", ["require", "exports"], function (require, e
             return undefined;
         const jsonPath = ['$NodeEditorMetadata', kind === 'group' ? '$Groups' : '$Comments', index];
         const positionValue = isObject(value.$Position) ? value.$Position : undefined;
-        const x = numberValue(positionValue?.$x);
-        const y = numberValue(positionValue?.$y);
-        const width = numberValue(value.$width);
-        const height = numberValue(value.$height);
+        const x = (0, numericLimits_js_1.editorLayoutNumber)(positionValue?.$x);
+        const y = (0, numericLimits_js_1.editorLayoutNumber)(positionValue?.$y);
+        const width = (0, numericLimits_js_1.editorLayoutNumber)(value.$width);
+        const height = (0, numericLimits_js_1.editorLayoutNumber)(value.$height);
         const common = {
             fileId: file.id,
             id: `${file.id}:${kind}:${index}`,
@@ -2487,13 +2529,13 @@ define("core/graph/editorMetadata", ["require", "exports"], function (require, e
                 if (!isObject(entry))
                     continue;
                 const position = isObject(entry.$Position) ? entry.$Position : undefined;
-                const x = position?.$x;
-                const y = position?.$y;
+                const x = (0, numericLimits_js_1.editorLayoutNumber)(position?.$x);
+                const y = (0, numericLimits_js_1.editorLayoutNumber)(position?.$y);
                 nodes.set(nodeId, {
                     fileId: file.id,
                     nodeId,
                     title: typeof entry.$Title === 'string' ? entry.$Title : undefined,
-                    position: typeof x === 'number' && typeof y === 'number' ? {
+                    position: x !== undefined && y !== undefined ? {
                         x,
                         y,
                         xPath: ['$NodeEditorMetadata', '$Nodes', nodeId, '$Position', '$x'],
@@ -19700,20 +19742,68 @@ define("core/layout/safety", ["require", "exports", "core/layout/geometry", "cor
         return layoutBlockReasons(state).length > 0;
     }
 });
-define("core/layout/strategy", ["require", "exports"], function (require, exports) {
+define("core/layout/limits", ["require", "exports"], function (require, exports) {
+    "use strict";
+    Object.defineProperty(exports, "__esModule", { value: true });
+    exports.MAX_LAYOUT_SETTING = void 0;
+    exports.validateLayoutEngineSettings = validateLayoutEngineSettings;
+    /**
+     * Deliberately generous UI/core ceiling. Real presets are <= 100 px; this
+     * ceiling exists to make arithmetic and generated JSON fail closed on corrupt
+     * persisted state or adversarial callers without constraining normal layouts.
+     */
+    exports.MAX_LAYOUT_SETTING = 1_000_000;
+    const STRATEGIES = new Set(['normalize', 'author-normalize', 'dag-rebuild']);
+    const FLOATER_MODES = new Set(['ignore', 'pack', 'quarantine']);
+    const DAG_DIRECTIONS = new Set(['auto', 'up', 'down', 'type']);
+    function requireBoundedSetting(name, value) {
+        if (!Number.isFinite(value) || value < 0 || value > exports.MAX_LAYOUT_SETTING) {
+            throw new RangeError(`Layout ${name} must be a finite number between 0 and ${exports.MAX_LAYOUT_SETTING}.`);
+        }
+    }
+    function validateLayoutEngineSettings(settings) {
+        if (!STRATEGIES.has(settings.strategy))
+            throw new RangeError(`Unknown layout strategy: ${String(settings.strategy)}`);
+        requireBoundedSetting('horizontalGap', settings.horizontalGap);
+        requireBoundedSetting('verticalGap', settings.verticalGap);
+        requireBoundedSetting('alignmentTolerance', settings.alignmentTolerance);
+        if (typeof settings.includeLive !== 'boolean')
+            throw new TypeError('Layout includeLive must be boolean.');
+        if (!FLOATER_MODES.has(settings.floaterMode))
+            throw new RangeError(`Unknown floater mode: ${String(settings.floaterMode)}`);
+        if (settings.dagBranchDirection !== undefined && !DAG_DIRECTIONS.has(settings.dagBranchDirection)) {
+            throw new RangeError(`Unknown DAG branch direction: ${String(settings.dagBranchDirection)}`);
+        }
+    }
+});
+define("core/layout/strategy", ["require", "exports", "core/numericLimits", "core/layout/limits"], function (require, exports, numericLimits_js_2, limits_js_1) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.buildStrategyProposal = buildStrategyProposal;
     exports.strategyRegistry = strategyRegistry;
+    function assertPatchScalarSafe(patch, side) {
+        const value = patch[side];
+        if (typeof value !== 'number')
+            return;
+        if (!(0, numericLimits_js_2.isSafeEditorLayoutNumber)(value)) {
+            throw new RangeError(`${patch.filePath}: layout ${side} for ${patch.entityKind} ${patch.entityId} ${patch.field} is outside the safe editor range.`);
+        }
+    }
     /** Shared proposal envelope so strategy code only owns per-file placement. */
     function buildStrategyProposal(files, settings, definition) {
+        (0, limits_js_1.validateLayoutEngineSettings)(settings);
         const proposals = files.map((file) => definition.buildFileProposal(file, settings));
+        const patches = proposals.flatMap((file) => file.patches);
+        for (const patch of patches) {
+            assertPatchScalarSafe(patch, 'oldValue');
+            assertPatchScalarSafe(patch, 'newValue');
+        }
         const warnings = proposals.flatMap((file) => file.metrics.warnings.map((warning) => `${file.filePath}: ${warning}`));
         return {
             strategy: definition.id,
             createdAt: Date.now(),
             files: proposals,
-            patches: proposals.flatMap((file) => file.patches),
+            patches,
             blocked: proposals.some((file) => file.metrics.blocked),
             warnings,
         };
@@ -20939,7 +21029,7 @@ define("core/layout/stage", ["require", "exports", "core/refactor"], function (r
         return next;
     }
 });
-define("core/layout/index", ["require", "exports", "core/layout/types", "core/layout/geometry", "core/layout/snapshot", "core/layout/normalize", "core/layout/treeNormalize", "core/layout/stage", "core/layout/readerV2", "core/layout/edgeCorridor", "core/layout/authorGrid", "core/layout/strategy", "core/layout/safety", "core/layout/tolerances", "core/layout/reasons", "core/layout/metrics"], function (require, exports, types_js_2, geometry_js_7, snapshot_js_2, normalize_js_1, treeNormalize_js_2, stage_js_1, readerV2_js_2, edgeCorridor_js_5, authorGrid_js_2, strategy_js_2, safety_js_2, tolerances_js_4, reasons_js_2, metrics_js_2) {
+define("core/layout/index", ["require", "exports", "core/layout/types", "core/layout/geometry", "core/layout/snapshot", "core/layout/normalize", "core/layout/treeNormalize", "core/layout/stage", "core/layout/readerV2", "core/layout/edgeCorridor", "core/layout/authorGrid", "core/layout/strategy", "core/layout/safety", "core/layout/tolerances", "core/layout/limits", "core/layout/reasons", "core/layout/metrics"], function (require, exports, types_js_2, geometry_js_7, snapshot_js_2, normalize_js_1, treeNormalize_js_2, stage_js_1, readerV2_js_2, edgeCorridor_js_5, authorGrid_js_2, strategy_js_2, safety_js_2, tolerances_js_4, limits_js_2, reasons_js_2, metrics_js_2) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     __exportStar(types_js_2, exports);
@@ -20954,6 +21044,7 @@ define("core/layout/index", ["require", "exports", "core/layout/types", "core/la
     __exportStar(strategy_js_2, exports);
     __exportStar(safety_js_2, exports);
     __exportStar(tolerances_js_4, exports);
+    __exportStar(limits_js_2, exports);
     __exportStar(reasons_js_2, exports);
     __exportStar(metrics_js_2, exports);
 });
@@ -21033,13 +21124,29 @@ define("core/projectGraph", ["require", "exports", "core/semanticReferences", "c
         const selectedFile = project.fileMap.get(root.fileId);
         if (!selectedFile)
             return empty(['Selected flow root is unavailable.']);
+        // Per-build indexes avoid scanning every relationship for each expanded node.
+        // Their lifetime ends with this build, so changed project data cannot reuse stale entries.
+        const referencesByFile = new Map();
+        const densityDependencies = new Map();
+        for (const reference of project.semanticReferences) {
+            const fileId = reference.source.fileId;
+            const fromFile = referencesByFile.get(fileId) ?? [];
+            fromFile.push(reference);
+            referencesByFile.set(fileId, fromFile);
+            const owner = reference.source.ownerSymbol;
+            if (reference.relation === 'symbol-import' && owner?.symbolType === 'Density' && reference.target.symbolType === 'Density') {
+                const dependencies = densityDependencies.get(owner.name) ?? [];
+                dependencies.push(reference);
+                densityDependencies.set(owner.name, dependencies);
+            }
+        }
         let worldStructure;
         let worldNodeId;
         let worldDepth = 0;
         if (root.kind === 'instance') {
             const instanceId = `instance:${selectedFile.id}`;
             nodes.set(instanceId, { id: instanceId, kind: 'instance', label: root.label, subtitle: selectedFile.path, fileId: selectedFile.id, depth: 0 });
-            const reference = (0, semanticReferences_js_3.semanticReferencesFromFile)(project.semanticReferences, selectedFile.id, 'instance-worldstructure')[0];
+            const reference = (0, semanticReferences_js_3.semanticReferencesFromFile)(referencesByFile.get(selectedFile.id) ?? [], selectedFile.id, 'instance-worldstructure')[0];
             worldDepth = 1;
             if (!reference) {
                 notes.push('The selected Instance has no semantic Instance → WorldStructure reference.');
@@ -21115,7 +21222,7 @@ define("core/projectGraph", ["require", "exports", "core/semanticReferences", "c
             return id;
         };
         const worldFlowDepth = worldDepth + 1;
-        const worldDensityReferences = (0, semanticReferences_js_3.semanticReferencesFromFile)(project.semanticReferences, worldStructure.id, 'worldstructure-density');
+        const worldDensityReferences = (0, semanticReferences_js_3.semanticReferencesFromFile)(referencesByFile.get(worldStructure.id) ?? [], worldStructure.id, 'worldstructure-density');
         if (worldDensityReferences.length) {
             const densityFieldId = `world-density:${worldStructure.id}`;
             const worldLabel = (0, semanticReferences_js_3.semanticRootName)(worldStructure) ?? (0, semanticReferences_js_3.semanticFileStem)(worldStructure);
@@ -21129,7 +21236,7 @@ define("core/projectGraph", ["require", "exports", "core/semanticReferences", "c
             }
         }
         const linkedBiomeIds = new Set();
-        const biomeReferences = (0, semanticReferences_js_3.semanticReferencesFromFile)(project.semanticReferences, worldStructure.id, 'worldstructure-biome');
+        const biomeReferences = (0, semanticReferences_js_3.semanticReferencesFromFile)(referencesByFile.get(worldStructure.id) ?? [], worldStructure.id, 'worldstructure-biome');
         for (const reference of biomeReferences) {
             const biome = firstResolvedFile(project, reference);
             let biomeId;
@@ -21153,7 +21260,7 @@ define("core/projectGraph", ["require", "exports", "core/semanticReferences", "c
                 const biomeLabel = (0, semanticReferences_js_3.semanticRootName)(biome) ?? (0, semanticReferences_js_3.semanticFileStem)(biome);
                 nodes.set(biomeId, { id: biomeId, kind: 'biome', label: biomeLabel, subtitle: biome.path, fileId: biome.id, depth: worldFlowDepth });
                 if (includeResources) {
-                    const environmentReferences = (0, semanticReferences_js_3.semanticReferencesFromFile)(project.semanticReferences, biome.id, 'biome-environment');
+                    const environmentReferences = (0, semanticReferences_js_3.semanticReferencesFromFile)(referencesByFile.get(biome.id) ?? [], biome.id, 'biome-environment');
                     for (const environmentReference of environmentReferences) {
                         const resourceKey = environmentReference.target.resourcePath ?? environmentReference.target.name;
                         const resourceId = `environment:${resourceKey.toLowerCase()}`;
@@ -21173,7 +21280,7 @@ define("core/projectGraph", ["require", "exports", "core/semanticReferences", "c
                             notes.push(resourceNote);
                     }
                 }
-                const densityReferences = (0, semanticReferences_js_3.semanticReferencesFromFile)(project.semanticReferences, biome.id, 'biome-density');
+                const densityReferences = (0, semanticReferences_js_3.semanticReferencesFromFile)(referencesByFile.get(biome.id) ?? [], biome.id, 'biome-density');
                 if (densityReferences.length) {
                     const densityId = `biome-density:${biome.id}`;
                     nodes.set(densityId, { id: densityId, kind: 'biome-density', label: `${biomeLabel} Density`, subtitle: 'Biome Terrain.Density', fileId: biome.id, depth: worldFlowDepth + 1 });
@@ -21197,7 +21304,7 @@ define("core/projectGraph", ["require", "exports", "core/semanticReferences", "c
             if (depth >= densityExpansionStart + Math.max(0, densityDepthLimit))
                 continue;
             const sourceKey = { symbolType: 'Density', name: symbol };
-            const dependencies = (0, semanticReferences_js_3.semanticSymbolDependencies)(project.semanticReferences, sourceKey, 'Density');
+            const dependencies = (0, semanticReferences_js_3.semanticSymbolDependencies)(densityDependencies.get(symbol) ?? [], sourceKey, 'Density');
             const sourceId = `density:${symbol.toLowerCase()}`;
             for (const reference of dependencies) {
                 if (reference.target.name.toLowerCase() === symbol.toLowerCase())
@@ -21224,7 +21331,7 @@ define("core/projectGraph", ["require", "exports", "core/semanticReferences", "c
         };
     }
 });
-define("core/index", ["require", "exports", "core/types", "core/jsonPath", "core/workspace", "core/search", "core/fieldIndex", "core/projectTree", "core/schemaRegistry", "core/parser", "core/textPatcher", "core/symbolIndex", "core/semanticReferences", "core/diagnostics", "core/project", "core/changeSet", "core/refactor", "core/matches", "core/validation", "core/output", "core/graph/index", "core/geometry/index", "core/layout/index", "core/projectGraph"], function (require, exports, types_js_3, jsonPath_js_9, workspace_js_2, search_js_1, fieldIndex_js_2, projectTree_js_1, schemaRegistry_js_2, parser_js_2, textPatcher_js_3, symbolIndex_js_4, semanticReferences_js_5, diagnostics_js_2, project_js_2, changeSet_js_2, refactor_js_3, matches_js_2, validation_js_1, output_js_1, index_js_1, index_js_2, index_js_3, projectGraph_js_1) {
+define("core/index", ["require", "exports", "core/types", "core/jsonPath", "core/workspace", "core/search", "core/fieldIndex", "core/projectTree", "core/schemaRegistry", "core/parser", "core/textPatcher", "core/symbolIndex", "core/semanticReferences", "core/diagnostics", "core/project", "core/changeSet", "core/refactor", "core/matches", "core/validation", "core/numericLimits", "core/output", "core/graph/index", "core/geometry/index", "core/layout/index", "core/projectGraph"], function (require, exports, types_js_3, jsonPath_js_9, workspace_js_2, search_js_1, fieldIndex_js_2, projectTree_js_1, schemaRegistry_js_2, parser_js_2, textPatcher_js_3, symbolIndex_js_4, semanticReferences_js_5, diagnostics_js_2, project_js_2, changeSet_js_2, refactor_js_3, matches_js_2, validation_js_1, numericLimits_js_3, output_js_1, index_js_1, index_js_2, index_js_3, projectGraph_js_1) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     __exportStar(types_js_3, exports);
@@ -21244,11 +21351,118 @@ define("core/index", ["require", "exports", "core/types", "core/jsonPath", "core
     __exportStar(refactor_js_3, exports);
     __exportStar(matches_js_2, exports);
     __exportStar(validation_js_1, exports);
+    __exportStar(numericLimits_js_3, exports);
     __exportStar(output_js_1, exports);
     __exportStar(index_js_1, exports);
     __exportStar(index_js_2, exports);
     __exportStar(index_js_3, exports);
     __exportStar(projectGraph_js_1, exports);
+});
+define("support/diagnosticPrivacy", ["require", "exports"], function (require, exports) {
+    "use strict";
+    Object.defineProperty(exports, "__esModule", { value: true });
+    exports.safeDiagnosticName = safeDiagnosticName;
+    exports.scrubAbsolutePaths = scrubAbsolutePaths;
+    exports.safeDiagnosticData = safeDiagnosticData;
+    exports.diagnosticErrorName = diagnosticErrorName;
+    // Diagnostics accept metadata, never arbitrary project values or error text.
+    // Keep these fields aligned with the reviewed instrumentation call sites.
+    const scalarFields = new Set(`collisions stagedChanges limit includeProjectPaths canonicalizationChecks fastPathCandidates fastPathUsed inputCount symbolCount projectDiagnostics nodeCount fileCount patchCount resultFiles blocked inventoryFiles semanticInputs projectFiles nodes symbols semanticReferences environmentReferences prefabReferences workspaces discoveryRoots restoredTabs restoredNavigationEntries changedPathCount invalidatedChanges invalidatedHistory pendingChanges changeCount changedFiles conflicts outputFiles written recent enabled desktop persisted sidebarWidth splitRatio splitViewEnabled minSidebarWidth maxSidebarWidth minSplitRatio maxSplitRatio uiScale percent size position maximized assigned descriptorCount rootCount eligibleFiles selectionMode visibleRows expandedFolders queryLength semanticFiles resourceFiles zoom rootIndex densityDepth includeResources edgeCount directories visitedEntries symlinkEntries reparsePointEntries workspaceMarkers candidateFiles semanticBytes probeBytes requestMs nativeTotalMs status durationMs line column count diagnosticDataOmitted`.split(' '));
+    const pathFields = new Set(['path', 'paths', 'filePath', 'filePaths', 'changedPaths']);
+    const containers = new Set(['metadata', 'counts', 'timings']);
+    const stringFields = {
+        source: ['pointer', 'keyboard', 'settings', 'reset', 'restore', '<app-source>'],
+        appliedBy: ['native', 'css', 'css-fallback'],
+        host: ['desktop', 'browser'], sourceKind: ['directory', 'snapshot'],
+        mode: ['apply', 'project-copy', 'zip-export'],
+        kind: ['switch-project', 'close-project', 'exit-app'],
+        outcome: ['blocked-conflict', 'blocked-late-conflict', 'blocked-collision', 'applied', 'exported', 'cancelled'],
+        status: ['failed', 'completed'], classification: ['normal', 'noteworthy', 'slow', 'very-slow'],
+        strategy: ['normalize', 'author-normalize', 'dag-rebuild'],
+        reason: ['workspace-authority-changed', 'project-model-miss', 'pan', 'zoom', 'fit', 'reset', 'restore', 'root-change'],
+        scopeKind: ['builtin', 'all', 'project', 'workspace', 'folder', 'file', 'selection'],
+        rootKind: ['none', 'worldstructure', 'biome', 'density', 'WorldStructure', 'Biome', 'Density'],
+        retainedPane: ['primary', 'secondary'], trackedWindow: ['main'],
+        channel: ['stable', 'preview'], resourceKind: ['environment', 'prefab'],
+        command: ['quickOpen', 'showExplorer', 'showSearch', 'openDiagnostics', 'openChanges', 'openLayout', 'openWorldgenPerformance', 'openProjectGraph', 'navigateBack', 'navigateForward', 'reopenClosedTab'],
+        errorName: ['Error', 'TypeError', 'SyntaxError', 'RangeError', 'ReferenceError', 'URIError', 'EvalError', 'AbortError', 'UnknownError'],
+    };
+    function safeDiagnosticName(value) {
+        // Internal operation names may include a fixed local bridge route, never queries.
+        if (/^[A-Za-z0-9_.-]+$/.test(value) || /^desktop\.request:\/api\/[a-z-]+(?:\/[a-z-]+)*$/.test(value))
+            return value.slice(0, 120);
+        return 'diagnostic.redacted-name';
+    }
+    function scrubAbsolutePaths(value) {
+        // A path field is either an explicitly relative path or entirely redacted.
+        // Do not try to guess where a space-containing absolute path ends.
+        const normalized = value.replaceAll('\\', '/').trim();
+        if (normalized.includes(':') || normalized.startsWith('/') || normalized.split('/').includes('..') || /[\x00-\x1f\x7f]/.test(value))
+            return '<local-path>';
+        return value.slice(0, 600);
+    }
+    function safeDiagnosticData(data) {
+        const seen = new WeakSet();
+        let remaining = 80;
+        function visit(input, depth) {
+            if (depth >= 4 || seen.has(input))
+                return {};
+            seen.add(input);
+            const output = {};
+            let keys = 0;
+            for (const key in input) {
+                if (!Object.hasOwn(input, key))
+                    continue;
+                if (++keys > 40 || --remaining < 0)
+                    break;
+                const descriptor = Object.getOwnPropertyDescriptor(input, key);
+                if (!descriptor || !('value' in descriptor))
+                    continue; // Never execute getters while logging.
+                const raw = descriptor.value;
+                if (pathFields.has(key)) {
+                    if (typeof raw === 'string')
+                        output[key] = scrubAbsolutePaths(raw);
+                    else if (Array.isArray(raw)) {
+                        const paths = [];
+                        for (let i = 0; i < Math.min(raw.length, 30) && remaining > 0; i++, remaining--) {
+                            const item = Object.getOwnPropertyDescriptor(raw, String(i));
+                            if (item && 'value' in item && typeof item.value === 'string')
+                                paths.push(scrubAbsolutePaths(item.value));
+                        }
+                        output[key] = paths;
+                    }
+                }
+                else if (scalarFields.has(key) && (typeof raw === 'boolean' || raw === null || (typeof raw === 'number' && Number.isFinite(raw))))
+                    output[key] = raw;
+                else if (typeof raw === 'string' && Object.hasOwn(stringFields, key) && stringFields[key].includes(raw))
+                    output[key] = raw;
+                else if (key === 'operation' && typeof raw === 'string')
+                    output[key] = safeDiagnosticName(raw);
+                else if (key === 'endpoint' && typeof raw === 'string' && /^\/api\/[a-z-]+(?:\/[a-z-]+)*$/.test(raw))
+                    output[key] = raw.slice(0, 120);
+                else if ((key === 'version' || key === 'expectedVersion') && typeof raw === 'string' && /^\d{1,5}\.\d{1,5}\.\d{1,5}(?:-[a-z0-9.-]{1,30})?$/.test(raw))
+                    output[key] = raw;
+                else if (containers.has(key) && raw && typeof raw === 'object' && !Array.isArray(raw))
+                    output[key] = visit(raw, depth + 1);
+            }
+            return output;
+        }
+        // Unexpected proxies must not turn error handling into another uncaught error.
+        try {
+            return data ? visit(data, 0) : undefined;
+        }
+        catch {
+            return { diagnosticDataOmitted: true };
+        }
+    }
+    function diagnosticErrorName(error) {
+        try {
+            if (error instanceof Error && stringFields.errorName.includes(error.name))
+                return error.name;
+        }
+        catch { /* An untrusted thrown object may have throwing accessors. */ }
+        return 'UnknownError';
+    }
 });
 define("support/releaseIdentity.generated", ["require", "exports"], function (require, exports) {
     "use strict";
@@ -21256,22 +21470,22 @@ define("support/releaseIdentity.generated", ["require", "exports"], function (re
     exports.RELEASE_REVISION_INTERNAL_ONLY = exports.UPDATER_DEFAULT_CHANNEL = exports.UPDATER_VERSION = exports.UPDATER_ENABLED = exports.UPDATER_PREPARED = exports.RELEASE_CANONICAL_RUN_REQUIRED = exports.RELEASE_FEATURE_FREEZE = exports.RELEASE_VALIDATION_PROFILE = exports.RELEASE_BUILD_ID = exports.RELEASE_MILESTONE_NAME = exports.RELEASE_MILESTONE = exports.RELEASE_DISPLAY_VERSION = exports.RELEASE_REVISION = exports.RELEASE_VERSION = void 0;
     // GENERATED from release-spec/release-contract.json by scripts/sync-release-contract.mjs.
     // Do not hand-edit release identity values here.
-    exports.RELEASE_VERSION = '0.11.36-rc.3';
+    exports.RELEASE_VERSION = '0.11.36-rc.4';
     exports.RELEASE_REVISION = 'r1';
-    exports.RELEASE_DISPLAY_VERSION = '0.11.36-rc.3-r1';
-    exports.RELEASE_MILESTONE = 'v0.11.36-rc.3';
-    exports.RELEASE_MILESTONE_NAME = 'Updater E2E Preview';
-    exports.RELEASE_BUILD_ID = 'v0.11.36-rc.3-r1-updater-e2e-preview';
+    exports.RELEASE_DISPLAY_VERSION = '0.11.36-rc.4-r1';
+    exports.RELEASE_MILESTONE = 'v0.11.36-rc.4';
+    exports.RELEASE_MILESTONE_NAME = 'Audited Updater Preview';
+    exports.RELEASE_BUILD_ID = 'v0.11.36-rc.4-r1-audited-updater-preview';
     exports.RELEASE_VALIDATION_PROFILE = 'github-updater-deep-clean-v1';
     exports.RELEASE_FEATURE_FREEZE = false;
     exports.RELEASE_CANONICAL_RUN_REQUIRED = false;
     exports.UPDATER_PREPARED = true;
     exports.UPDATER_ENABLED = true;
-    exports.UPDATER_VERSION = '0.11.36-rc.3';
+    exports.UPDATER_VERSION = '0.11.36-rc.4';
     exports.UPDATER_DEFAULT_CHANNEL = 'stable';
     exports.RELEASE_REVISION_INTERNAL_ONLY = true;
 });
-define("support/runtimeDiagnostics", ["require", "exports", "support/releaseIdentity.generated"], function (require, exports, releaseIdentity_generated_js_1) {
+define("support/runtimeDiagnostics", ["require", "exports", "support/diagnosticPrivacy", "support/releaseIdentity.generated"], function (require, exports, diagnosticPrivacy_js_1, releaseIdentity_generated_js_1) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.readDetailedLogging = readDetailedLogging;
@@ -21301,9 +21515,11 @@ define("support/runtimeDiagnostics", ["require", "exports", "support/releaseIden
     exports.installGlobalRuntimeDiagnostics = installGlobalRuntimeDiagnostics;
     const REPORT_SCHEMA_VERSION = 8;
     const MAX_EVENTS = 500;
-    const MAX_DATA_KEYS = 40;
+    // Event JSON is at most 4,000 UTF-16 units (at most 12,000 UTF-8 bytes).
+    const MAX_EVENT_JSON_CHARACTERS = 4000;
     const MAX_TRACE_SUMMARIES = 20;
     const MAX_METRIC_SAMPLES = 96;
+    const MAX_METRIC_NAMES = 256;
     const MAX_SLOW_OPERATIONS = 20;
     const DETAILED_LOGGING_KEY = 'hytale-workbench.detailed-logging.v1';
     const PERSISTENT_LOG_QUEUE_LIMIT = 1000;
@@ -21327,6 +21543,7 @@ define("support/runtimeDiagnostics", ["require", "exports", "support/releaseIden
     ];
     let nextEventId = 1;
     let nextTraceId = 1;
+    let evictedMetricNames = 0;
     let events = [];
     let projectSnapshot;
     let workbenchLayoutSupport;
@@ -21335,6 +21552,8 @@ define("support/runtimeDiagnostics", ["require", "exports", "support/releaseIden
     let persistentLogQueue = [];
     let persistentLogFlushTimer;
     let persistentLogFlushPromise;
+    let persistentLogClearPromise;
+    let persistentLogClearing = false;
     let persistentLogDisabledForSession = false;
     let persistentLogDroppedEvents = 0;
     let persistentLogLastError;
@@ -21381,45 +21600,14 @@ define("support/runtimeDiagnostics", ["require", "exports", "support/releaseIden
     function safeNumber(value) {
         return Number.isFinite(value) ? Math.round(value * 100) / 100 : 0;
     }
-    function scrubAbsolutePaths(value) {
-        return value
-            .replace(/file:\/{2,3}[^\s)\]}]+/gi, '<local-app-path>')
-            .replace(/\b[A-Za-z]:\\[^\r\n\t"']+/g, '<local-path>')
-            .replace(/\/(?:Users|home|mnt|private|var|tmp)\/[^\r\n\t"']+/g, '<local-path>');
-    }
-    function safeScalar(value) {
-        if (value === null || typeof value === 'boolean' || typeof value === 'number')
-            return value;
-        if (typeof value === 'string')
-            return scrubAbsolutePaths(value).slice(0, 600);
-        return undefined;
-    }
-    function safeData(data) {
-        if (!data)
-            return undefined;
-        const result = {};
-        for (const [key, raw] of Object.entries(data).slice(0, MAX_DATA_KEYS)) {
-            const scalar = safeScalar(raw);
-            if (scalar !== undefined) {
-                result[key] = scalar;
-                continue;
-            }
-            if (Array.isArray(raw)) {
-                result[key] = raw.slice(0, 30).map((item) => safeScalar(item)).filter((item) => item !== undefined);
-                continue;
-            }
-            if (raw && typeof raw === 'object') {
-                result[key] = safeData(raw);
-            }
-        }
-        return result;
-    }
     function persistentLogBridge() {
         if (typeof window === 'undefined' || window.__HYTALE_DESKTOP_BRIDGE__ !== true)
             return undefined;
         return window.__HYTALE_PERSISTENT_LOG__;
     }
     function shouldPersistRuntimeEvent(entry) {
+        if (persistentLogClearing)
+            return false;
         if (!persistentLogBridge() || persistentLogDisabledForSession)
             return false;
         if (entry.level === 'warn' || entry.level === 'error')
@@ -21477,7 +21665,7 @@ define("support/runtimeDiagnostics", ["require", "exports", "support/releaseIden
             persistentLogDisabledForSession = true;
             persistentLogDroppedEvents += persistentLogQueue.length;
             persistentLogQueue = [];
-            persistentLogLastError = scrubAbsolutePaths(error instanceof Error ? error.message : String(error)).slice(0, 800);
+            persistentLogLastError = 'Persistent log operation failed (' + (0, diagnosticPrivacy_js_1.diagnosticErrorName)(error) + ').';
             recordRuntimeEvent('support.persistent-log.init-failed', { level: 'warn', message: persistentLogLastError, skipPersistent: true });
         }
     }
@@ -21489,21 +21677,21 @@ define("support/runtimeDiagnostics", ["require", "exports", "support/releaseIden
         if (persistentLogFlushPromise)
             return persistentLogFlushPromise;
         const bridge = persistentLogBridge();
-        if (!bridge || persistentLogDisabledForSession || persistentLogQueue.length === 0)
+        if (!bridge || persistentLogDisabledForSession || persistentLogClearing || persistentLogQueue.length === 0)
             return;
         persistentLogFlushPromise = (async () => {
             try {
                 while (persistentLogQueue.length > 0 && !persistentLogDisabledForSession) {
                     const batch = persistentLogQueue.splice(0, PERSISTENT_LOG_BATCH_SIZE);
                     try {
-                        persistentLogNativeStatus = await bridge.append(batch);
+                        persistentLogNativeStatus = await Promise.resolve().then(() => bridge.append(batch));
                         persistentLogLastError = undefined;
                     }
                     catch (error) {
                         persistentLogDroppedEvents += batch.length + persistentLogQueue.length;
                         persistentLogQueue = [];
                         persistentLogDisabledForSession = true;
-                        persistentLogLastError = scrubAbsolutePaths(error instanceof Error ? error.message : String(error)).slice(0, 800);
+                        persistentLogLastError = 'Persistent log operation failed (' + (0, diagnosticPrivacy_js_1.diagnosticErrorName)(error) + ').';
                         recordRuntimeEvent('support.persistent-log.write-failed', { level: 'warn', message: persistentLogLastError, skipPersistent: true });
                     }
                 }
@@ -21517,6 +21705,8 @@ define("support/runtimeDiagnostics", ["require", "exports", "support/releaseIden
         return persistentLogFlushPromise;
     }
     async function clearPersistentRuntimeLogs() {
+        if (persistentLogClearPromise)
+            return persistentLogClearPromise;
         const bridge = persistentLogBridge();
         if (!bridge)
             throw new Error('Persistent application logs are available only in the desktop host.');
@@ -21524,14 +21714,24 @@ define("support/runtimeDiagnostics", ["require", "exports", "support/releaseIden
             clearTimeout(persistentLogFlushTimer);
             persistentLogFlushTimer = undefined;
         }
+        persistentLogClearing = true;
         persistentLogQueue = [];
-        if (persistentLogFlushPromise)
-            await persistentLogFlushPromise;
-        persistentLogNativeStatus = await bridge.clear();
-        persistentLogDisabledForSession = false;
-        persistentLogDroppedEvents = 0;
-        persistentLogLastError = undefined;
-        recordRuntimeEvent('support.persistent-log.cleared', { skipPersistent: true });
+        persistentLogClearPromise = (async () => {
+            try {
+                if (persistentLogFlushPromise)
+                    await persistentLogFlushPromise;
+                persistentLogNativeStatus = await Promise.resolve().then(() => bridge.clear());
+                persistentLogDisabledForSession = false;
+                persistentLogDroppedEvents = 0;
+                persistentLogLastError = undefined;
+                recordRuntimeEvent('support.persistent-log.cleared', { skipPersistent: true });
+            }
+            finally {
+                persistentLogClearing = false;
+                persistentLogClearPromise = undefined;
+            }
+        })();
+        return persistentLogClearPromise;
     }
     function recordRuntimeEvent(event, options = {}) {
         if (options.detailed && !readDetailedLogging())
@@ -21540,18 +21740,20 @@ define("support/runtimeDiagnostics", ["require", "exports", "support/releaseIden
             id: nextEventId++,
             timestamp: new Date().toISOString(),
             level: options.level ?? 'info',
-            event: event.slice(0, 120),
-            traceId: options.traceId?.slice(0, 120),
-            message: options.message ? scrubAbsolutePaths(options.message).slice(0, 800) : undefined,
+            event: (0, diagnosticPrivacy_js_1.safeDiagnosticName)(event),
+            traceId: options.traceId ? (0, diagnosticPrivacy_js_1.safeDiagnosticName)(options.traceId) : undefined,
+            message: options.message ? '<details-redacted>' : undefined,
             durationMs: options.durationMs === undefined ? undefined : safeNumber(options.durationMs),
-            data: safeData(options.data),
+            data: (0, diagnosticPrivacy_js_1.safeDiagnosticData)(options.data),
         };
+        if (JSON.stringify(entry).length > MAX_EVENT_JSON_CHARACTERS)
+            entry.data = { diagnosticDataOmitted: true };
         events = [...events.slice(-(MAX_EVENTS - 1)), entry];
         if (entry.durationMs !== undefined && !options.skipMetric)
             recordRuntimeMetric(event, entry.durationMs, options.thresholds);
         if (!options.skipPersistent)
             enqueuePersistentRuntimeEvent(entry);
-        return entry;
+        return cloneEvent(entry);
     }
     function performanceThresholdsFor(name) {
         const lower = name.toLowerCase();
@@ -21584,9 +21786,17 @@ define("support/runtimeDiagnostics", ["require", "exports", "support/releaseIden
     function recordRuntimeMetric(name, durationMs, thresholds) {
         if (!Number.isFinite(durationMs) || durationMs < 0)
             return;
+        name = (0, diagnosticPrivacy_js_1.safeDiagnosticName)(name);
         const value = safeNumber(durationMs);
         const classification = performanceClassification(name, value, thresholds);
         const current = metrics.get(name);
+        // Keep recent operation families bounded even if callers produce dynamic names.
+        if (current)
+            metrics.delete(name);
+        else if (metrics.size >= MAX_METRIC_NAMES) {
+            metrics.delete(metrics.keys().next().value);
+            evictedMetricNames += 1;
+        }
         const samples = [...(current?.samples ?? []), value].slice(-MAX_METRIC_SAMPLES);
         metrics.set(name, current ? {
             count: current.count + 1,
@@ -21611,22 +21821,11 @@ define("support/runtimeDiagnostics", ["require", "exports", "support/releaseIden
             });
         }
     }
-    function errorPayload(error) {
-        if (error instanceof Error) {
-            return {
-                errorName: error.name,
-                errorMessage: scrubAbsolutePaths(error.message),
-                errorStack: error.stack ? scrubAbsolutePaths(error.stack).slice(0, 8_000) : undefined,
-            };
-        }
-        return { errorMessage: scrubAbsolutePaths(String(error)) };
-    }
     function recordRuntimeError(event, error, data, traceId) {
         return recordRuntimeEvent(event, {
             level: 'error',
             traceId,
-            message: error instanceof Error ? error.message : String(error),
-            data: { ...errorPayload(error), ...(data ?? {}) },
+            data: { ...(0, diagnosticPrivacy_js_1.safeDiagnosticData)(data), errorName: (0, diagnosticPrivacy_js_1.diagnosticErrorName)(error) },
         });
     }
     function setWorkbenchLayoutSupportSnapshot(snapshot) {
@@ -21638,8 +21837,11 @@ define("support/runtimeDiagnostics", ["require", "exports", "support/releaseIden
     function projectSupportSnapshot() {
         return projectSnapshot ? { ...projectSnapshot, projectDiagnostics: { ...projectSnapshot.projectDiagnostics } } : undefined;
     }
+    function cloneEvent(entry) {
+        return JSON.parse(JSON.stringify(entry));
+    }
     function runtimeEvents() {
-        return events.map((entry) => ({ ...entry, data: entry.data ? { ...entry.data } : undefined }));
+        return events.map(cloneEvent);
     }
     function runtimeMetrics() {
         return [...metrics.entries()].map(([name, value]) => ({
@@ -21692,6 +21894,7 @@ define("support/runtimeDiagnostics", ["require", "exports", "support/releaseIden
             errorCount: snapshot.filter((event) => event.level === 'error').length,
             warningCount: snapshot.filter((event) => event.level === 'warn').length,
             metricCount: metrics.size,
+            evictedMetricNames,
             slowOperationCount: runtimeSlowOperations().length,
             traceCount: runtimeTraceSummaries().length,
             detailedLogging: readDetailedLogging(),
@@ -21782,16 +21985,31 @@ define("support/runtimeDiagnostics", ["require", "exports", "support/releaseIden
         await navigator.clipboard.writeText(diagnosticReportJson(options));
         recordRuntimeEvent('support.report.copied', { data: { includeProjectPaths: options.includeProjectPaths } });
     }
-    function downloadDiagnosticReport(options) {
+    async function downloadDiagnosticReport(options) {
         const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
         const blob = new Blob([diagnosticReportJson(options)], { type: 'application/json;charset=utf-8' });
+        const filename = `Hytale-Generator-Workbench-Diagnostic-${timestamp}.json`;
+        if (typeof window !== 'undefined' && window.__HYTALE_DESKTOP_BRIDGE__) {
+            if (!window.__HYTALE_SAVE_DIAGNOSTIC_REPORT__)
+                throw new Error('Native diagnostic report saving is unavailable.');
+            const saved = await window.__HYTALE_SAVE_DIAGNOSTIC_REPORT__(filename, blob);
+            if (!saved)
+                return 'cancelled';
+            recordRuntimeEvent('support.report.exported', { data: { includeProjectPaths: options.includeProjectPaths } });
+            return 'saved';
+        }
         const href = URL.createObjectURL(blob);
-        const anchor = document.createElement('a');
-        anchor.href = href;
-        anchor.download = `Hytale-Generator-Workbench-Diagnostic-${timestamp}.json`;
-        anchor.click();
-        setTimeout(() => URL.revokeObjectURL(href), 1000);
-        recordRuntimeEvent('support.report.exported', { data: { includeProjectPaths: options.includeProjectPaths } });
+        try {
+            const anchor = document.createElement('a');
+            anchor.href = href;
+            anchor.download = filename;
+            anchor.click();
+        }
+        finally {
+            setTimeout(() => URL.revokeObjectURL(href), 1000);
+        }
+        recordRuntimeEvent('support.report.download-started', { data: { includeProjectPaths: options.includeProjectPaths } });
+        return 'download-started';
     }
     function installGlobalRuntimeDiagnostics() {
         if (globalListenersInstalled || typeof window === 'undefined')
@@ -21841,6 +22059,7 @@ define("io/desktopBridge", ["require", "exports", "support/runtimeDiagnostics"],
     exports.desktopChooseOutputDirectory = desktopChooseOutputDirectory;
     exports.desktopExistingTargetFiles = desktopExistingTargetFiles;
     exports.desktopExportToDirectory = desktopExportToDirectory;
+    exports.desktopSaveZip = desktopSaveZip;
     exports.desktopSetPendingChangeCount = desktopSetPendingChangeCount;
     exports.desktopCheckForUpdate = desktopCheckForUpdate;
     exports.desktopInstallUpdate = desktopInstallUpdate;
@@ -21849,7 +22068,6 @@ define("io/desktopBridge", ["require", "exports", "support/runtimeDiagnostics"],
     function hasDesktopBridge() {
         return window.__HYTALE_DESKTOP_BRIDGE__ === true;
     }
-    const tracedRequestDurations = new Map();
     function subscribeDesktopProjectChanges(listener) {
         if (!hasDesktopBridge())
             return () => { };
@@ -21872,7 +22090,7 @@ define("io/desktopBridge", ["require", "exports", "support/runtimeDiagnostics"],
         window.addEventListener('hgw:app-close-requested', handler);
         return () => window.removeEventListener('hgw:app-close-requested', handler);
     }
-    async function jsonRequest(path, init, traceId) {
+    async function jsonRequest(path, init, traceId, onDuration) {
         const started = performance.now();
         const response = await fetch(path, {
             ...init,
@@ -21882,14 +22100,14 @@ define("io/desktopBridge", ["require", "exports", "support/runtimeDiagnostics"],
             },
         });
         const durationMs = performance.now() - started;
-        (0, runtimeDiagnostics_1.recordRuntimeMetric)(`desktop.request:${path}`, durationMs);
-        if (traceId)
-            tracedRequestDurations.set(traceId, durationMs);
+        onDuration?.(durationMs);
+        const endpoint = path.split(/[?#]/, 1)[0];
+        (0, runtimeDiagnostics_1.recordRuntimeMetric)(`desktop.request:${endpoint}`, durationMs);
         (0, runtimeDiagnostics_1.recordRuntimeEvent)('desktop.request.completed', {
             detailed: !traceId,
             traceId,
             durationMs,
-            data: { endpoint: path, status: response.status },
+            data: { endpoint, status: response.status },
         });
         if (response.status === 204)
             throw new DOMException('The user aborted a request.', 'AbortError');
@@ -21903,12 +22121,12 @@ define("io/desktopBridge", ["require", "exports", "support/runtimeDiagnostics"],
             catch {
                 // Keep the HTTP status when the launcher did not return JSON.
             }
-            (0, runtimeDiagnostics_1.recordRuntimeEvent)('desktop.request.failed', { level: 'error', traceId, data: { endpoint: path, status: response.status, statusText: response.statusText } });
+            (0, runtimeDiagnostics_1.recordRuntimeEvent)('desktop.request.failed', { level: 'error', traceId, data: { endpoint, status: response.status, statusText: response.statusText } });
             throw new Error(message);
         }
         return response.json();
     }
-    function ingestNativeProjectTrace(scan, fallbackTraceId) {
+    function ingestNativeProjectTrace(scan, fallbackTraceId, requestMs) {
         const nativeTrace = scan.nativeTrace;
         if (!nativeTrace)
             return;
@@ -21921,7 +22139,6 @@ define("io/desktopBridge", ["require", "exports", "support/runtimeDiagnostics"],
             });
         }
         if (traceId) {
-            const requestMs = tracedRequestDurations.get(traceId);
             const nativeTotalMs = nativeTrace.phases.find((phase) => phase.name === 'desktop.project.native-open.total')?.durationMs;
             if (requestMs !== undefined && nativeTotalMs !== undefined) {
                 (0, runtimeDiagnostics_1.recordRuntimeEvent)('desktop.project.bridge-overhead', {
@@ -21930,24 +22147,25 @@ define("io/desktopBridge", ["require", "exports", "support/runtimeDiagnostics"],
                     data: { requestMs, nativeTotalMs },
                 });
             }
-            tracedRequestDurations.delete(traceId);
         }
     }
     async function desktopOpenProject(traceId) {
+        let requestMs;
         const scan = await jsonRequest('/api/project/open', {
             method: 'POST',
             body: JSON.stringify({ traceId }),
-        }, traceId);
-        ingestNativeProjectTrace(scan, traceId);
+        }, traceId, (durationMs) => { requestMs = durationMs; });
+        ingestNativeProjectTrace(scan, traceId, requestMs);
         return scan;
     }
     async function desktopOpenProjectAt(root, traceId) {
         try {
+            let requestMs;
             const scan = await jsonRequest('/api/project/open-recent', {
                 method: 'POST',
                 body: JSON.stringify({ root, traceId }),
-            }, traceId);
-            ingestNativeProjectTrace(scan, traceId);
+            }, traceId, (durationMs) => { requestMs = durationMs; });
+            ingestNativeProjectTrace(scan, traceId, requestMs);
             return scan;
         }
         catch (error) {
@@ -22052,16 +22270,24 @@ define("io/desktopBridge", ["require", "exports", "support/runtimeDiagnostics"],
         });
         return payload.existing;
     }
-    async function desktopExportToDirectory(target, scope, changedTexts) {
+    async function desktopExportToDirectory(target, scope, changedTexts, allowOverwrite = false) {
         const payload = await jsonRequest('/api/output/export', {
             method: 'POST',
             body: JSON.stringify({
                 token: target.token,
                 scope,
                 changedFiles: [...changedTexts].map(([path, text]) => ({ path, text })),
+                allowOverwrite,
             }),
         });
         return payload.written;
+    }
+    async function desktopSaveZip(filename, blob) {
+        await jsonRequest(`/api/output/save-zip?name=${encodeURIComponent(filename)}`, {
+            method: 'POST',
+            body: blob,
+            headers: { 'Content-Type': 'application/zip' },
+        });
     }
     async function desktopSetPendingChangeCount(count) {
         await jsonRequest('/api/app/pending-changes', {
@@ -22803,9 +23029,9 @@ define("io/folderLoader", ["require", "exports", "core/index", "projectFiles/loa
             ? (0, desktopBridge_1.desktopExistingTargetFiles)(target, paths)
             : existingTargetFiles(target, paths);
     }
-    async function writeOutputDirectory(workspace, target, changedTexts, scope, browserEntries) {
+    async function writeOutputDirectory(workspace, target, changedTexts, scope, browserEntries, allowOverwrite = false) {
         if (isDesktopOutputDirectory(target))
-            return (0, desktopBridge_1.desktopExportToDirectory)(target, scope, changedTexts);
+            return (0, desktopBridge_1.desktopExportToDirectory)(target, scope, changedTexts, allowOverwrite);
         if (!browserEntries)
             throw new Error('Browser output entries were not prepared.');
         await writeBlobsToDirectory(target, browserEntries);
@@ -22815,12 +23041,62 @@ define("io/folderLoader", ["require", "exports", "core/index", "projectFiles/loa
         return isDesktopOutputDirectory(target) ? target.name : target.name;
     }
 });
-define("io/zip", ["require", "exports"], function (require, exports) {
+define("io/zip", ["require", "exports", "io/desktopBridge"], function (require, exports, desktopBridge_2) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
+    exports.checkedZipLayout = checkedZipLayout;
     exports.createZipBlob = createZipBlob;
     exports.downloadBlob = downloadBlob;
     const textEncoder = new TextEncoder();
+    const ZIP32_SENTINEL = 0xffffffff;
+    const ZIP32_ENTRY_SENTINEL = 0xffff;
+    // This writer materializes the archive in the WebView. Larger copies use native folder output.
+    const MAX_ZIP_BYTES = 512 * 1024 * 1024;
+    /** Checked metadata arithmetic, independent of payload allocation. */
+    function checkedZipLayout(offset, centralSize, nameBytes, size) {
+        if ([offset, centralSize, nameBytes, size].some((value) => !Number.isSafeInteger(value) || value < 0)
+            || nameBytes > 0xffff || size >= ZIP32_SENTINEL) {
+            throw new Error('ZIP32 size/offset limit exceeded. Use folder output for this project.');
+        }
+        const nextOffset = offset + 30 + nameBytes + size;
+        const nextCentralSize = centralSize + 46 + nameBytes;
+        if (nextOffset >= ZIP32_SENTINEL || nextCentralSize >= ZIP32_SENTINEL) {
+            throw new Error('ZIP32 size/offset limit exceeded. Use folder output for this project.');
+        }
+        if (nextOffset + nextCentralSize + 22 > MAX_ZIP_BYTES) {
+            throw new Error('ZIP export exceeds the 512 MiB in-memory safety limit. Use folder output for this project.');
+        }
+        return { nextOffset, nextCentralSize };
+    }
+    function utf8Size(text) {
+        let size = 0;
+        for (let index = 0; index < text.length; index += 1) {
+            const unit = text.charCodeAt(index);
+            if (unit < 0x80)
+                size += 1;
+            else if (unit < 0x800)
+                size += 2;
+            else if (unit >= 0xd800 && unit <= 0xdbff && text.charCodeAt(index + 1) >= 0xdc00 && text.charCodeAt(index + 1) <= 0xdfff) {
+                size += 4;
+                index += 1;
+            }
+            else
+                size += 3; // TextEncoder replaces unpaired surrogates with U+FFFD.
+            if (size > MAX_ZIP_BYTES)
+                throw new Error('ZIP text exceeds the 512 MiB in-memory safety limit. Use folder output.');
+        }
+        return size;
+    }
+    function zipPath(path) {
+        const normalized = path.replace(/\\/g, '/');
+        const segments = normalized.split('/');
+        if (segments.some((segment) => !segment || segment === '.' || segment === '..'
+            || /[\x00-\x1f<>:"|?*]/.test(segment) || /[. ]$/.test(segment)
+            || /^(?:con|prn|aux|nul|com[1-9¹²³]|lpt[1-9¹²³])(?:\.|$)/i.test(segment))) {
+            throw new Error(`Unsafe ZIP path: ${path}`);
+        }
+        return normalized;
+    }
     const CRC_TABLE = (() => {
         const table = new Uint32Array(256);
         for (let i = 0; i < 256; i += 1) {
@@ -22838,7 +23114,7 @@ define("io/zip", ["require", "exports"], function (require, exports) {
         return (crc ^ 0xffffffff) >>> 0;
     }
     function dosDateTime(date = new Date()) {
-        const year = Math.max(1980, date.getFullYear());
+        const year = Math.min(2107, Math.max(1980, date.getFullYear()));
         const time = (date.getHours() << 11) | (date.getMinutes() << 5) | Math.floor(date.getSeconds() / 2);
         const day = (year - 1980) << 9 | (date.getMonth() + 1) << 5 | date.getDate();
         return { time, date: day };
@@ -22851,7 +23127,7 @@ define("io/zip", ["require", "exports"], function (require, exports) {
         if (typeof data === 'string')
             return textEncoder.encode(data);
         if (data instanceof Uint8Array)
-            return data;
+            return data.slice();
         return new Uint8Array(await data.arrayBuffer());
     }
     /**
@@ -22859,16 +23135,43 @@ define("io/zip", ["require", "exports"], function (require, exports) {
      * No dependency is required and binary project assets are preserved byte-for-byte.
      */
     async function createZipBlob(entries) {
+        if (Array.isArray(entries) && entries.length >= ZIP32_ENTRY_SENTINEL) {
+            throw new Error('ZIP32 supports at most 65,534 entries without Zip64. Use folder output for this project.');
+        }
         const localParts = [];
         const centralParts = [];
+        const files = new Set();
+        const directories = new Set();
         let offset = 0;
+        let centralSize = 0;
+        let count = 0;
         const stamp = dosDateTime();
-        for (const entry of entries) {
-            const normalizedPath = entry.path.replace(/\\/g, '/').replace(/^\/+/, '');
-            if (!normalizedPath || normalizedPath.includes('../'))
-                throw new Error(`Unsafe ZIP path: ${entry.path}`);
+        for await (const entry of entries) {
+            if (++count >= ZIP32_ENTRY_SENTINEL)
+                throw new Error('ZIP32 entry-count limit exceeded. Use folder output for this project.');
+            const normalizedPath = zipPath(entry.path);
+            const identity = normalizedPath.toLowerCase();
+            if (files.has(identity) || directories.has(identity))
+                throw new Error(`Conflicting ZIP path: ${entry.path}`);
+            const segments = identity.split('/');
+            for (let index = 1; index < segments.length; index += 1) {
+                const parent = segments.slice(0, index).join('/');
+                if (files.has(parent))
+                    throw new Error(`Conflicting ZIP path: ${entry.path}`);
+                directories.add(parent);
+            }
+            files.add(identity);
+            if (normalizedPath.length > 0xffff)
+                throw new Error('ZIP32 filename is too long.');
             const name = textEncoder.encode(normalizedPath);
+            if (name.byteLength > 0xffff)
+                throw new Error(`ZIP32 filename is longer than 65,535 UTF-8 bytes: ${entry.path}`);
+            const size = typeof entry.data === 'string' ? utf8Size(entry.data)
+                : entry.data instanceof Uint8Array ? entry.data.byteLength : entry.data.size;
+            const { nextOffset, nextCentralSize } = checkedZipLayout(offset, centralSize, name.byteLength, size);
             const content = await toBytes(entry.data);
+            if (content.byteLength !== size)
+                throw new Error(`ZIP input size changed while reading: ${entry.path}`);
             const crc = crc32(content);
             const local = view(30);
             local.data.setUint32(0, 0x04034b50, true);
@@ -22902,21 +23205,25 @@ define("io/zip", ["require", "exports"], function (require, exports) {
             central.data.setUint32(38, 0, true);
             central.data.setUint32(42, offset, true);
             centralParts.push(central.bytes, name);
-            offset += local.bytes.byteLength + name.byteLength + content.byteLength;
+            offset = nextOffset;
+            centralSize = nextCentralSize;
         }
-        const centralSize = centralParts.reduce((sum, part) => sum + (part instanceof Uint8Array ? part.byteLength : 0), 0);
         const end = view(22);
         end.data.setUint32(0, 0x06054b50, true);
         end.data.setUint16(4, 0, true);
         end.data.setUint16(6, 0, true);
-        end.data.setUint16(8, entries.length, true);
-        end.data.setUint16(10, entries.length, true);
+        end.data.setUint16(8, count, true);
+        end.data.setUint16(10, count, true);
         end.data.setUint32(12, centralSize, true);
         end.data.setUint32(16, offset, true);
         end.data.setUint16(20, 0, true);
         return new Blob([...localParts, ...centralParts, end.bytes], { type: 'application/zip' });
     }
-    function downloadBlob(filename, blob) {
+    async function downloadBlob(filename, blob) {
+        if ((0, desktopBridge_2.hasDesktopBridge)()) {
+            await (0, desktopBridge_2.desktopSaveZip)(filename, blob);
+            return;
+        }
         const url = URL.createObjectURL(blob);
         const anchor = document.createElement('a');
         anchor.href = url;
@@ -22940,9 +23247,16 @@ define("io/output", ["require", "exports", "core/index", "io/folderLoader", "io/
         return entries;
     }
     async function buildOutputZip(workspace, changedTexts, scope) {
-        const entries = await buildOutputEntries(workspace, changedTexts, scope);
-        const zipEntries = [...entries].map(([path, data]) => ({ path, data }));
-        return (0, zip_1.createZipBlob)(zipEntries);
+        // Read each source lazily so the ZIP budget can stop an oversized copy before
+        // the next source file is materialized in the renderer.
+        async function* zipEntries() {
+            const paths = (0, core_3.outputPaths)(workspace.sourceEntries.keys(), changedTexts.keys(), scope);
+            for (const path of paths) {
+                const changed = changedTexts.get(path);
+                yield { path, data: changed !== undefined ? changed : await (0, folderLoader_1.readWorkspaceEntry)(workspace, path) };
+            }
+        }
+        return (0, zip_1.createZipBlob)(zipEntries());
     }
 });
 define("projects/projectPersistence", ["require", "exports"], function (require, exports) {
@@ -22957,8 +23271,18 @@ define("projects/projectPersistence", ["require", "exports"], function (require,
     const RECENT_PROJECTS_KEY = 'hytale-workbench.projects.v1';
     const SESSION_PREFIX = 'hytale-workbench.project-session.v1:';
     const MAX_RECENT_PROJECTS = 20;
+    const MAX_RECENT_PROJECT_SCAN = 200;
+    const MAX_OPEN_FILE_PATHS = 500;
+    const MAX_OPEN_SOURCE_PATHS = 50;
+    const MAX_VISUAL_SELECTED_PATHS = 500;
     const MAX_NAVIGATION_ENTRIES = 100;
     const MAX_RECENTLY_CLOSED = 20;
+    const MAX_RECENT_SEARCHES = 12;
+    const MAX_PATH_LENGTH = 4096;
+    const MAX_LABEL_LENGTH = 512;
+    const MAX_NODE_ID_LENGTH = 2048;
+    const MAX_QUERY_LENGTH = 4096;
+    const MAX_WORKSPACE_ID_LENGTH = 512;
     const PERSISTENCE_DEFAULT_FILTERS = {
         imports: true,
         exports: true,
@@ -22991,13 +23315,37 @@ define("projects/projectPersistence", ["require", "exports"], function (require,
     function finiteNonNegative(value, fallback, max = 100_000) {
         return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? Math.min(max, value) : fallback;
     }
+    function boundedString(value, maxLength) {
+        if (typeof value !== 'string' || !value.trim() || value.length > maxLength)
+            return undefined;
+        return value;
+    }
+    function cleanStringList(value, limit, maxLength) {
+        if (!Array.isArray(value))
+            return [];
+        const result = [];
+        const seen = new Set();
+        for (const item of value) {
+            const cleaned = boundedString(item, maxLength);
+            if (!cleaned || seen.has(cleaned))
+                continue;
+            seen.add(cleaned);
+            result.push(cleaned);
+            if (result.length >= limit)
+                break;
+        }
+        return result;
+    }
     function cleanNavigationLocation(value) {
-        if (!isRecord(value) || typeof value.filePath !== 'string' || !value.filePath.trim())
+        if (!isRecord(value))
+            return undefined;
+        const filePath = boundedString(value.filePath, MAX_PATH_LENGTH);
+        if (!filePath)
             return undefined;
         const location = value.location === 'live' || value.location === 'floating' ? value.location : undefined;
         return {
-            filePath: value.filePath,
-            nodeId: typeof value.nodeId === 'string' ? value.nodeId : undefined,
+            filePath,
+            nodeId: boundedString(value.nodeId, MAX_NODE_ID_LENGTH),
             location,
         };
     }
@@ -23016,7 +23364,7 @@ define("projects/projectPersistence", ["require", "exports"], function (require,
             live: boolOr(value.live, PERSISTENCE_DEFAULT_FILTERS.live),
             floating: boolOr(value.floating, PERSISTENCE_DEFAULT_FILTERS.floating),
             hideEmpty: boolOr(value.hideEmpty, PERSISTENCE_DEFAULT_FILTERS.hideEmpty),
-            workspace: typeof value.workspace === 'string' && value.workspace.length <= 512 ? value.workspace : 'all',
+            workspace: boundedString(value.workspace, MAX_WORKSPACE_ID_LENGTH) ?? 'all',
         };
     }
     function cleanVisualLayoutSettings(value) {
@@ -23053,6 +23401,22 @@ define("projects/projectPersistence", ["require", "exports"], function (require,
         return Object.fromEntries(Object.entries(value)
             .filter(([key, expanded]) => key.length <= 2048 && typeof expanded === 'boolean')
             .slice(0, 5000));
+    }
+    function cleanProjectGraphSettings(value) {
+        if (!isRecord(value))
+            return undefined;
+        const rawViewport = isRecord(value.viewport) ? value.viewport : undefined;
+        const panX = rawViewport ? Number(rawViewport.panX) : Number.NaN;
+        const panY = rawViewport ? Number(rawViewport.panY) : Number.NaN;
+        const zoom = rawViewport ? Number(rawViewport.zoom) : Number.NaN;
+        return {
+            selectedRootPath: boundedString(value.selectedRootPath, MAX_PATH_LENGTH)?.replace(/\\/g, '/'),
+            densityDepth: [4, 6, 8, 12].includes(Number(value.densityDepth)) ? Number(value.densityDepth) : 8,
+            includeResources: value.includeResources === true,
+            viewport: Number.isFinite(panX) && Number.isFinite(panY) && Number.isFinite(zoom)
+                ? { panX, panY, zoom: Math.min(2.5, Math.max(0.15, zoom)) }
+                : undefined,
+        };
     }
     function storageAvailable() {
         if (typeof window === 'undefined')
@@ -23092,15 +23456,17 @@ define("projects/projectPersistence", ["require", "exports"], function (require,
         }
     }
     function cleanRecentEntry(value) {
-        const rootPath = normalizeRootPath(value?.rootPath ?? '');
-        const label = String(value?.label ?? '').trim();
+        if (!isRecord(value))
+            return undefined;
+        const rootPath = boundedString(normalizeRootPath(typeof value.rootPath === 'string' ? value.rootPath : ''), MAX_PATH_LENGTH);
+        const label = boundedString(typeof value.label === 'string' ? value.label.trim() : '', MAX_LABEL_LENGTH);
         if (!rootPath || !label)
             return undefined;
         return {
             rootPath,
             label,
             pinned: value.pinned === true,
-            lastOpenedAt: Number.isFinite(value.lastOpenedAt) ? value.lastOpenedAt : 0,
+            lastOpenedAt: typeof value.lastOpenedAt === 'number' && Number.isFinite(value.lastOpenedAt) ? value.lastOpenedAt : 0,
         };
     }
     function readRecentProjects() {
@@ -23108,7 +23474,7 @@ define("projects/projectPersistence", ["require", "exports"], function (require,
         if (!Array.isArray(raw))
             return [];
         const deduped = new Map();
-        for (const item of raw) {
+        for (const item of raw.slice(0, MAX_RECENT_PROJECT_SCAN)) {
             const entry = cleanRecentEntry(item);
             if (!entry)
                 continue;
@@ -23122,18 +23488,20 @@ define("projects/projectPersistence", ["require", "exports"], function (require,
             .slice(0, MAX_RECENT_PROJECTS);
     }
     function writeRecentProjects(entries) {
-        writeJson(RECENT_PROJECTS_KEY, entries.slice(0, MAX_RECENT_PROJECTS));
+        const cleaned = entries.map(cleanRecentEntry).filter((entry) => !!entry).slice(0, MAX_RECENT_PROJECTS);
+        writeJson(RECENT_PROJECTS_KEY, cleaned);
     }
     function rememberRecentProject(rootPath, label) {
-        const normalized = normalizeRootPath(rootPath);
-        if (!normalized || !label.trim())
+        const normalized = boundedString(normalizeRootPath(rootPath), MAX_PATH_LENGTH);
+        const cleanedLabel = boundedString(label.trim(), MAX_LABEL_LENGTH);
+        if (!normalized || !cleanedLabel)
             return;
         const entries = readRecentProjects();
         const key = normalized.toLocaleLowerCase();
         const previous = entries.find((item) => item.rootPath.toLocaleLowerCase() === key);
         const next = {
             rootPath: normalized,
-            label: label.trim(),
+            label: cleanedLabel,
             pinned: previous?.pinned ?? false,
             lastOpenedAt: Date.now(),
         };
@@ -23141,62 +23509,48 @@ define("projects/projectPersistence", ["require", "exports"], function (require,
             .sort((left, right) => Number(right.pinned) - Number(left.pinned) || right.lastOpenedAt - left.lastOpenedAt));
     }
     function toggleRecentProjectPinned(rootPath) {
-        const normalized = normalizeRootPath(rootPath).toLocaleLowerCase();
+        const normalizedRoot = boundedString(normalizeRootPath(rootPath), MAX_PATH_LENGTH);
+        if (!normalizedRoot)
+            return;
+        const normalized = normalizedRoot.toLocaleLowerCase();
         const entries = readRecentProjects().map((item) => item.rootPath.toLocaleLowerCase() === normalized
             ? { ...item, pinned: !item.pinned }
             : item);
         writeRecentProjects(entries.sort((left, right) => Number(right.pinned) - Number(left.pinned) || right.lastOpenedAt - left.lastOpenedAt));
     }
     function forgetRecentProject(rootPath) {
-        const normalized = normalizeRootPath(rootPath).toLocaleLowerCase();
+        const normalizedRoot = boundedString(normalizeRootPath(rootPath), MAX_PATH_LENGTH);
+        if (!normalizedRoot)
+            return;
+        const normalized = normalizedRoot.toLocaleLowerCase();
         writeRecentProjects(readRecentProjects().filter((item) => item.rootPath.toLocaleLowerCase() !== normalized));
     }
     function readProjectSession(rootPath) {
         const value = readJson(sessionKey(rootPath));
-        if (!value || value.version !== 1 || !Array.isArray(value.openFilePaths))
+        if (!isRecord(value) || value.version !== 1 || !Array.isArray(value.openFilePaths))
             return undefined;
         return {
             version: 1,
-            openFilePaths: value.openFilePaths.filter((path) => typeof path === 'string'),
-            activeFilePath: typeof value.activeFilePath === 'string' ? value.activeFilePath : undefined,
-            openSourcePaths: Array.isArray(value.openSourcePaths) ? value.openSourcePaths.filter((path) => typeof path === 'string') : [],
-            activeSourcePath: typeof value.activeSourcePath === 'string' ? value.activeSourcePath : undefined,
+            openFilePaths: cleanStringList(value.openFilePaths, MAX_OPEN_FILE_PATHS, MAX_PATH_LENGTH),
+            activeFilePath: boundedString(value.activeFilePath, MAX_PATH_LENGTH),
+            openSourcePaths: cleanStringList(value.openSourcePaths, MAX_OPEN_SOURCE_PATHS, MAX_PATH_LENGTH),
+            activeSourcePath: boundedString(value.activeSourcePath, MAX_PATH_LENGTH),
             focusedNode: cleanNavigationLocation(value.focusedNode),
-            explorerWorkspace: typeof value.explorerWorkspace === 'string' ? value.explorerWorkspace : 'all',
+            explorerWorkspace: boundedString(value.explorerWorkspace, MAX_WORKSPACE_ID_LENGTH) ?? 'all',
             explorerFolderState: cleanFolderState(value.explorerFolderState),
             // Tool-specific sidebars are intentionally transient across restarts. Explorer/Search restore normally.
             sidebarView: value.sidebarView === 'search' ? 'search' : 'explorer',
             sidebarVisible: value.sidebarVisible !== false,
-            searchSidebarQuery: typeof value.searchSidebarQuery === 'string' ? value.searchSidebarQuery : '',
-            recentSearches: Array.isArray(value.recentSearches) ? value.recentSearches.filter((item) => typeof item === 'string').slice(0, 12) : [],
+            searchSidebarQuery: typeof value.searchSidebarQuery === 'string' && value.searchSidebarQuery.length <= MAX_QUERY_LENGTH ? value.searchSidebarQuery : '',
+            recentSearches: cleanStringList(value.recentSearches, MAX_RECENT_SEARCHES, MAX_QUERY_LENGTH),
             filters: cleanInspectorFilters(value.filters),
-            recentlyClosedFilePaths: Array.isArray(value.recentlyClosedFilePaths)
-                ? value.recentlyClosedFilePaths.filter((path) => typeof path === 'string').slice(-MAX_RECENTLY_CLOSED)
-                : [],
+            recentlyClosedFilePaths: cleanStringList(value.recentlyClosedFilePaths, MAX_RECENTLY_CLOSED, MAX_PATH_LENGTH),
             navigationCurrent: cleanNavigationLocation(value.navigationCurrent),
             navigationPast: Array.isArray(value.navigationPast) ? value.navigationPast.map(cleanNavigationLocation).filter((item) => !!item).slice(-MAX_NAVIGATION_ENTRIES) : [],
             navigationFuture: Array.isArray(value.navigationFuture) ? value.navigationFuture.map(cleanNavigationLocation).filter((item) => !!item).slice(0, MAX_NAVIGATION_ENTRIES) : [],
-            visualSelectedFilePaths: Array.isArray(value.visualSelectedFilePaths)
-                ? value.visualSelectedFilePaths.filter((path) => typeof path === 'string')
-                : [],
+            visualSelectedFilePaths: cleanStringList(value.visualSelectedFilePaths, MAX_VISUAL_SELECTED_PATHS, MAX_PATH_LENGTH),
             visualSettings: cleanVisualLayoutSettings(value.visualSettings),
-            projectGraphSettings: value.projectGraphSettings && typeof value.projectGraphSettings === 'object'
-                ? {
-                    selectedRootPath: typeof value.projectGraphSettings.selectedRootPath === 'string' ? value.projectGraphSettings.selectedRootPath.replace(/\\/g, '/') : undefined,
-                    densityDepth: [4, 6, 8, 12].includes(Number(value.projectGraphSettings.densityDepth)) ? Number(value.projectGraphSettings.densityDepth) : 8,
-                    includeResources: value.projectGraphSettings.includeResources === true,
-                    viewport: value.projectGraphSettings.viewport && typeof value.projectGraphSettings.viewport === 'object'
-                        && Number.isFinite(Number(value.projectGraphSettings.viewport.panX))
-                        && Number.isFinite(Number(value.projectGraphSettings.viewport.panY))
-                        && Number.isFinite(Number(value.projectGraphSettings.viewport.zoom))
-                        ? {
-                            panX: Number(value.projectGraphSettings.viewport.panX),
-                            panY: Number(value.projectGraphSettings.viewport.panY),
-                            zoom: Math.min(2.5, Math.max(0.15, Number(value.projectGraphSettings.viewport.zoom))),
-                        }
-                        : undefined,
-                }
-                : undefined,
+            projectGraphSettings: cleanProjectGraphSettings(value.projectGraphSettings),
         };
     }
     /**
@@ -23207,25 +23561,25 @@ define("projects/projectPersistence", ["require", "exports"], function (require,
     function writeProjectSession(rootPath, session) {
         writeJson(sessionKey(rootPath), {
             version: 1,
-            openFilePaths: session.openFilePaths,
-            activeFilePath: session.activeFilePath,
-            openSourcePaths: (session.openSourcePaths ?? []).slice(0, 50),
-            activeSourcePath: session.activeSourcePath,
-            focusedNode: session.focusedNode,
-            explorerWorkspace: session.explorerWorkspace,
-            explorerFolderState: session.explorerFolderState,
-            sidebarView: session.sidebarView,
+            openFilePaths: cleanStringList(session.openFilePaths, MAX_OPEN_FILE_PATHS, MAX_PATH_LENGTH),
+            activeFilePath: boundedString(session.activeFilePath, MAX_PATH_LENGTH),
+            openSourcePaths: cleanStringList(session.openSourcePaths, MAX_OPEN_SOURCE_PATHS, MAX_PATH_LENGTH),
+            activeSourcePath: boundedString(session.activeSourcePath, MAX_PATH_LENGTH),
+            focusedNode: cleanNavigationLocation(session.focusedNode),
+            explorerWorkspace: boundedString(session.explorerWorkspace, MAX_WORKSPACE_ID_LENGTH) ?? 'all',
+            explorerFolderState: cleanFolderState(session.explorerFolderState),
+            sidebarView: session.sidebarView === 'search' ? 'search' : 'explorer',
             sidebarVisible: session.sidebarVisible,
-            searchSidebarQuery: session.searchSidebarQuery ?? '',
-            recentSearches: (session.recentSearches ?? []).slice(0, 12),
-            filters: session.filters,
-            recentlyClosedFilePaths: session.recentlyClosedFilePaths.slice(-MAX_RECENTLY_CLOSED),
-            navigationCurrent: session.navigationCurrent,
-            navigationPast: session.navigationPast.slice(-MAX_NAVIGATION_ENTRIES),
-            navigationFuture: session.navigationFuture.slice(0, MAX_NAVIGATION_ENTRIES),
-            visualSelectedFilePaths: session.visualSelectedFilePaths,
-            visualSettings: session.visualSettings,
-            projectGraphSettings: session.projectGraphSettings,
+            searchSidebarQuery: typeof session.searchSidebarQuery === 'string' && session.searchSidebarQuery.length <= MAX_QUERY_LENGTH ? session.searchSidebarQuery : '',
+            recentSearches: cleanStringList(session.recentSearches, MAX_RECENT_SEARCHES, MAX_QUERY_LENGTH),
+            filters: cleanInspectorFilters(session.filters),
+            recentlyClosedFilePaths: cleanStringList(session.recentlyClosedFilePaths, MAX_RECENTLY_CLOSED, MAX_PATH_LENGTH),
+            navigationCurrent: cleanNavigationLocation(session.navigationCurrent),
+            navigationPast: session.navigationPast.map(cleanNavigationLocation).filter((item) => !!item).slice(-MAX_NAVIGATION_ENTRIES),
+            navigationFuture: session.navigationFuture.map(cleanNavigationLocation).filter((item) => !!item).slice(0, MAX_NAVIGATION_ENTRIES),
+            visualSelectedFilePaths: cleanStringList(session.visualSelectedFilePaths, MAX_VISUAL_SELECTED_PATHS, MAX_PATH_LENGTH),
+            visualSettings: cleanVisualLayoutSettings(session.visualSettings),
+            projectGraphSettings: cleanProjectGraphSettings(session.projectGraphSettings),
         });
     }
 });
@@ -25231,7 +25585,7 @@ define("components/ChangePanel", ["require", "exports", "react/jsx-runtime", "re
                         return;
                     }
                     const entries = workspace.desktopBridge ? undefined : await operation.phaseAsync('entries-build', () => (0, output_1.buildOutputEntries)(workspace, changedTexts, 'full'));
-                    const written = await operation.phaseAsync('write', () => (0, folderLoader_2.writeOutputDirectory)(workspace, targetFolder, changedTexts, 'full', entries), { outputFiles: paths.length });
+                    const written = await operation.phaseAsync('write', () => (0, folderLoader_2.writeOutputDirectory)(workspace, targetFolder, changedTexts, 'full', entries, allowOverwrite), { outputFiles: paths.length });
                     (0, runtimeDiagnostics_4.recordRuntimeEvent)('changes.project-copy.completed', { traceId: operation.traceId, durationMs: performance.now() - outputStarted, data: { written } });
                     operation.end({ outcome: 'exported', written });
                     setStatus(`Exported a project copy with ${written} file(s) to ${(0, folderLoader_2.outputDirectoryLabel)(targetFolder)}. The opened source project was left unchanged.`);
@@ -25240,14 +25594,19 @@ define("components/ChangePanel", ["require", "exports", "react/jsx-runtime", "re
                 }
                 const finalName = (0, core_5.normalizeZipName)(zipName, (0, core_5.defaultZipName)(workspace.label, 'changed'));
                 const blob = await operation.phaseAsync('zip-build', () => (0, output_1.buildOutputZip)(workspace, changedTexts, 'changed'), { outputFiles: outputFileCount });
-                operation.phase('download-dispatch', () => (0, zip_2.downloadBlob)(finalName, blob), { outputFiles: outputFileCount });
+                await operation.phaseAsync('download-dispatch', () => (0, zip_2.downloadBlob)(finalName, blob), { outputFiles: outputFileCount });
                 setZipName(finalName);
                 (0, runtimeDiagnostics_4.recordRuntimeEvent)('changes.zip-export.completed', { traceId: operation.traceId, durationMs: performance.now() - outputStarted, data: { outputFiles: outputFileCount } });
                 operation.end({ outcome: 'exported', outputFiles: outputFileCount });
-                setStatus(`Exported ${outputFileCount} changed file(s) as ${finalName}. The opened source project was left unchanged.`);
+                setStatus(`Exported ${outputFileCount} changed file(s) as ${finalName}.`);
                 setReviewOpen(false);
             }
             catch (error) {
+                if (error instanceof DOMException && error.name === 'AbortError') {
+                    operation.end({ outcome: 'cancelled' });
+                    setStatus('Export cancelled. No ZIP was saved.');
+                    return;
+                }
                 operation.fail(error, { mode, changedFiles: changedTexts.size });
                 (0, runtimeDiagnostics_4.recordRuntimeError)('changes.output.failed', error, { mode, changedFiles: changedTexts.size }, operation.traceId);
                 setStatus(error instanceof Error ? error.message : String(error));
@@ -25264,7 +25623,22 @@ define("components/ChangePanel", ["require", "exports", "react/jsx-runtime", "re
         return ((0, jsx_runtime_5.jsxs)(jsx_runtime_5.Fragment, { children: [(0, jsx_runtime_5.jsxs)("footer", { className: `change-panel ${changeSet.changes.length ? '' : 'muted'}`, children: [(0, jsx_runtime_5.jsxs)("div", { className: "change-summary", children: [(0, jsx_runtime_5.jsxs)("button", { className: "change-summary-button", disabled: !project, onClick: openChangesTab, "data-tooltip": "Open staged changes", children: [(0, jsx_runtime_5.jsx)("span", { className: "change-summary-icon", children: (0, jsx_runtime_5.jsx)(LucideIcon_2.LucideIcon, { name: "git-compare-arrows", size: 17 }) }), (0, jsx_runtime_5.jsxs)("span", { children: [(0, jsx_runtime_5.jsx)("strong", { children: changeSet.changes.length ? `${changeSet.changes.length} staged change${changeSet.changes.length === 1 ? '' : 's'}` : 'No staged changes' }), (0, jsx_runtime_5.jsx)("small", { children: changeSet.changes.length ? `${changedFileIds.size} file${changedFileIds.size === 1 ? '' : 's'} affected` : 'Edits and layout proposals appear here.' })] })] }), (0, jsx_runtime_5.jsx)(RenameRulesPanel_1.RenameRulesPanel, {})] }), (0, jsx_runtime_5.jsxs)("div", { className: "change-actions", children: [status && (0, jsx_runtime_5.jsx)("small", { className: "apply-status", children: status }), (0, jsx_runtime_5.jsx)("button", { disabled: !historyCount, onClick: undoChanges, "data-tooltip": "Undo staged changes", children: "Undo" }), (0, jsx_runtime_5.jsx)("button", { disabled: !futureCount, onClick: redoChanges, "data-tooltip": "Redo staged changes", children: "Redo" }), (0, jsx_runtime_5.jsx)("button", { disabled: !changeSet.changes.length, onClick: resetChanges, children: "Discard" }), (0, jsx_runtime_5.jsx)("button", { className: "primary", disabled: !changeSet.changes.length, onClick: () => setReviewOpen(true), children: "Review & Export" })] })] }), reviewOpen && preview && validation && workspace && ((0, jsx_runtime_5.jsx)("div", { className: "modal-backdrop", onMouseDown: () => setReviewOpen(false), children: (0, jsx_runtime_5.jsxs)("section", { ref: reviewDialogRef, className: "review-modal output-review-modal", role: "dialog", "aria-modal": "true", "aria-labelledby": "change-review-title", "aria-describedby": "change-review-description", tabIndex: -1, onMouseDown: (event) => event.stopPropagation(), children: [(0, jsx_runtime_5.jsxs)("header", { children: [(0, jsx_runtime_5.jsxs)("div", { children: [(0, jsx_runtime_5.jsx)("h3", { id: "change-review-title", children: "Review changes" }), (0, jsx_runtime_5.jsx)("small", { id: "change-review-description", children: "Validate the staged refactor, then export it safely or explicitly apply it to the opened project." })] }), (0, jsx_runtime_5.jsx)("button", { ref: reviewCloseButtonRef, onClick: () => setReviewOpen(false), "aria-label": "Close change review", children: (0, jsx_runtime_5.jsx)(LucideIcon_2.LucideIcon, { name: "x", size: 15 }) })] }), (0, jsx_runtime_5.jsxs)("div", { className: "review-validation", children: [(0, jsx_runtime_5.jsxs)("span", { className: validation.safe ? 'ok' : 'bad', children: [(0, jsx_runtime_5.jsx)(LucideIcon_2.LucideIcon, { name: validation.safe ? 'circle-check' : 'circle-x', size: 14 }), " semantic preflight"] }), (0, jsx_runtime_5.jsxs)("span", { children: [validation.addedErrors.length, " new errors"] }), (0, jsx_runtime_5.jsxs)("span", { children: [validation.addedWarnings.length, " new warnings"] }), (0, jsx_runtime_5.jsxs)("span", { children: [validation.removed.length, " diagnostics resolved"] }), (0, jsx_runtime_5.jsxs)("span", { children: [preview.changedFileIds.length, " changed files"] })] }), (0, jsx_runtime_5.jsxs)("section", { className: "output-settings", children: [(0, jsx_runtime_5.jsxs)("div", { className: "output-mode-row", children: [(0, jsx_runtime_5.jsxs)("div", { children: [(0, jsx_runtime_5.jsx)("strong", { children: "What should Workbench do?" }), (0, jsx_runtime_5.jsx)("small", { children: "Exporting is the safe default. Applying to the opened project is always an explicit choice." })] }), (0, jsx_runtime_5.jsxs)("div", { className: "output-mode-grid", role: "group", "aria-label": "Output mode", children: [(0, jsx_runtime_5.jsxs)("button", { className: `output-mode-card ${mode === 'changes-zip' ? 'active' : ''}`, onClick: () => setMode('changes-zip'), children: [(0, jsx_runtime_5.jsxs)("span", { children: [(0, jsx_runtime_5.jsx)("strong", { children: "Export Changes ZIP" }), (0, jsx_runtime_5.jsx)("em", { children: "Recommended" })] }), (0, jsx_runtime_5.jsx)("small", { children: "Only changed files. Original project stays untouched." })] }), (0, jsx_runtime_5.jsxs)("button", { className: `output-mode-card ${mode === 'project-copy' ? 'active' : ''}`, onClick: () => setMode('project-copy'), children: [(0, jsx_runtime_5.jsx)("span", { children: (0, jsx_runtime_5.jsx)("strong", { children: "Export Project Copy" }) }), (0, jsx_runtime_5.jsx)("small", { children: "Complete project in another folder, including unchanged files and assets." })] }), workspace.writable && ((0, jsx_runtime_5.jsxs)("button", { className: `output-mode-card danger-choice ${mode === 'apply' ? 'active' : ''}`, onClick: () => setMode('apply'), children: [(0, jsx_runtime_5.jsx)("span", { children: (0, jsx_runtime_5.jsx)("strong", { children: "Apply to Project" }) }), (0, jsx_runtime_5.jsx)("small", { children: "Writes changed files directly into the opened project." })] }))] })] }), mode === 'changes-zip' && ((0, jsx_runtime_5.jsxs)("div", { className: "output-setting-row", children: [(0, jsx_runtime_5.jsxs)("div", { children: [(0, jsx_runtime_5.jsx)("strong", { children: "ZIP name" }), (0, jsx_runtime_5.jsx)("small", { children: "The archive keeps relative project paths so the changed files can be reviewed or copied back later." })] }), (0, jsx_runtime_5.jsx)("input", { className: "output-name-input", value: zipName, onChange: (event) => { setZipName(event.target.value); setZipNameTouched(true); }, onBlur: () => setZipName((0, core_5.normalizeZipName)(zipName, (0, core_5.defaultZipName)(workspace.label, 'changed'))) })] })), mode === 'project-copy' && ((0, jsx_runtime_5.jsxs)("div", { className: "output-setting-row", children: [(0, jsx_runtime_5.jsxs)("div", { children: [(0, jsx_runtime_5.jsx)("strong", { children: "Export folder" }), (0, jsx_runtime_5.jsx)("small", { children: "The selected folder becomes the root of a complete modified project copy. Relative paths are preserved." })] }), (0, jsx_runtime_5.jsxs)("div", { className: "output-folder-choice", children: [(0, jsx_runtime_5.jsx)("code", { children: targetFolder ? (0, folderLoader_2.outputDirectoryLabel)(targetFolder) : 'No folder selected' }), (0, jsx_runtime_5.jsx)("button", { onClick: selectTargetFolder, children: targetFolder ? 'Change…' : 'Choose…' })] })] })), (0, jsx_runtime_5.jsxs)("div", { className: "output-summary-grid", children: [(0, jsx_runtime_5.jsxs)("span", { children: [(0, jsx_runtime_5.jsx)("strong", { children: "Source" }), workspace.label] }), (0, jsx_runtime_5.jsxs)("span", { children: [(0, jsx_runtime_5.jsx)("strong", { children: "Access" }), workspace.writable ? 'Opened project · Read / Write' : 'Folder snapshot · Read only'] }), (0, jsx_runtime_5.jsxs)("span", { children: [(0, jsx_runtime_5.jsx)("strong", { children: "Result files" }), outputFileCount] }), (0, jsx_runtime_5.jsxs)("span", { children: [(0, jsx_runtime_5.jsx)("strong", { children: "Changed values" }), changeSet.changes.length] })] }), preflightBusy && (0, jsx_runtime_5.jsx)("div", { className: "output-notice", children: "Checking selected action\u2026" }), sourceConflicts.length > 0 && mode === 'apply' && ((0, jsx_runtime_5.jsxs)("div", { className: "output-notice bad", children: [(0, jsx_runtime_5.jsx)("strong", { children: "External changes detected." }), (0, jsx_runtime_5.jsxs)("span", { children: [sourceConflicts.length, " changed source file(s) no longer match the version loaded by Workbench. Apply is blocked."] }), (0, jsx_runtime_5.jsxs)("details", { children: [(0, jsx_runtime_5.jsx)("summary", { children: "Show files" }), sourceConflicts.map((path) => (0, jsx_runtime_5.jsx)("code", { children: path }, path))] })] })), targetCollisions.length > 0 && mode === 'project-copy' && ((0, jsx_runtime_5.jsxs)("div", { className: "output-notice warning", children: [(0, jsx_runtime_5.jsx)("strong", { children: "Export folder contains existing files." }), (0, jsx_runtime_5.jsxs)("span", { children: [targetCollisions.length, " project file(s) already exist in ", targetFolder ? (0, folderLoader_2.outputDirectoryLabel)(targetFolder) : 'the selected folder', "."] }), (0, jsx_runtime_5.jsxs)("label", { children: [(0, jsx_runtime_5.jsx)("input", { type: "checkbox", checked: allowOverwrite, onChange: (event) => setAllowOverwrite(event.target.checked) }), " I understand these target files will be overwritten."] }), (0, jsx_runtime_5.jsxs)("details", { children: [(0, jsx_runtime_5.jsx)("summary", { children: "Show collisions" }), targetCollisions.slice(0, 50).map((path) => (0, jsx_runtime_5.jsx)("code", { children: path }, path))] })] }))] }), (validation.added.length > 0 || validation.removed.length > 0) && ((0, jsx_runtime_5.jsxs)("details", { className: "diagnostic-diff", children: [(0, jsx_runtime_5.jsx)("summary", { children: "Diagnostic diff" }), validation.added.map((item, index) => (0, jsx_runtime_5.jsxs)("div", { className: `diagnostic-diff-row ${item.severity}`, children: ["+ ", item.message] }, `a-${index}`)), validation.removed.map((item, index) => (0, jsx_runtime_5.jsxs)("div", { className: "diagnostic-diff-row resolved", children: ["\u2212 ", item.message] }, `r-${index}`))] })), (0, jsx_runtime_5.jsxs)("section", { className: "apply-diff-review", "aria-label": "File diff review", children: [(0, jsx_runtime_5.jsxs)("div", { className: "apply-diff-heading", children: [(0, jsx_runtime_5.jsx)("strong", { children: "File diff" }), (0, jsx_runtime_5.jsx)("small", { children: "Read-only final review for Apply / Export. Edit or remove staged values in the Changes tab." })] }), diffFiles.map((file) => ((0, jsx_runtime_5.jsxs)("details", { className: "apply-diff-file", open: diffFiles.length <= 3, children: [(0, jsx_runtime_5.jsxs)("summary", { children: [(0, jsx_runtime_5.jsx)("strong", { children: file.path }), (0, jsx_runtime_5.jsxs)("small", { children: [file.lines.filter((line) => line.kind !== 'context').length, " changed line(s)"] })] }), (0, jsx_runtime_5.jsx)("div", { className: "unified-diff", children: file.lines.map((line, index) => (0, jsx_runtime_5.jsxs)("div", { className: `unified-diff-line ${line.kind}`, children: [(0, jsx_runtime_5.jsx)("span", { className: "diff-line-number", children: line.oldLine ?? '' }), (0, jsx_runtime_5.jsx)("span", { className: "diff-line-number", children: line.newLine ?? '' }), (0, jsx_runtime_5.jsxs)("code", { children: [line.kind === 'remove' ? '− ' : line.kind === 'add' ? '+ ' : '  ', line.text] })] }, `${file.path}:${index}`)) })] }, file.path)))] }), (0, jsx_runtime_5.jsxs)("div", { className: `apply-warning ${mode === 'apply' ? '' : 'export-warning'}`, children: [(0, jsx_runtime_5.jsx)("strong", { children: mode === 'apply' ? 'Apply modifies the opened project.' : mode === 'project-copy' ? 'Project Copy is non-destructive.' : 'Changes ZIP is non-destructive.' }), (0, jsx_runtime_5.jsx)("span", { children: mode === 'apply' ? 'Workbench checks for external file changes first. After a successful write the project is reloaded and staged Undo/Redo history is cleared.' : 'The opened source project and staged Undo/Redo history stay unchanged after export.' })] }), (0, jsx_runtime_5.jsxs)("footer", { children: [!validation.safe && (0, jsx_runtime_5.jsx)("span", { className: "bad", children: "Action blocked: the proposed patch introduces new errors." }), sourceConflicts.length > 0 && mode === 'apply' && (0, jsx_runtime_5.jsx)("span", { className: "bad", children: "Apply blocked by external file changes." }), (0, jsx_runtime_5.jsx)("button", { onClick: () => setReviewOpen(false), children: "Cancel" }), (0, jsx_runtime_5.jsx)("button", { className: "primary", disabled: !canExecute || busy, onClick: executeOutput, children: busy ? 'Working…' : mode === 'apply' ? `Apply ${changeSet.changes.length} Changes` : mode === 'project-copy' ? `Export Project Copy · ${outputFileCount} Files` : `Export ${outputFileCount} Changed Files as ZIP` })] })] }) }))] }));
     }
 });
-define("projects/ProjectLifecycleGuard", ["require", "exports", "react/jsx-runtime", "react", "io/desktopBridge", "store", "components/LucideIcon", "support/runtimeDiagnostics", "workbench/modalFocus"], function (require, exports, jsx_runtime_6, react_7, desktopBridge_2, store_3, LucideIcon_3, runtimeDiagnostics_5, modalFocus_2) {
+define("support/userFacingError", ["require", "exports"], function (require, exports) {
+    "use strict";
+    Object.defineProperty(exports, "__esModule", { value: true });
+    exports.userFacingError = userFacingError;
+    // For local UI only. Diagnostic storage separately excludes raw error text.
+    function userFacingError(error, fallback = 'The operation failed. Try again.') {
+        try {
+            const message = typeof error === 'string' ? error : error instanceof Error ? error.message : undefined;
+            return typeof message === 'string' && message.trim() ? message.slice(0, 8000) : fallback;
+        }
+        catch {
+            return fallback;
+        }
+    }
+});
+define("projects/ProjectLifecycleGuard", ["require", "exports", "react/jsx-runtime", "react", "io/desktopBridge", "store", "components/LucideIcon", "support/runtimeDiagnostics", "support/userFacingError", "workbench/modalFocus"], function (require, exports, jsx_runtime_6, react_7, desktopBridge_3, store_3, LucideIcon_3, runtimeDiagnostics_5, userFacingError_1, modalFocus_2) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.ProjectLifecycleProvider = ProjectLifecycleProvider;
@@ -25298,9 +25672,10 @@ define("projects/ProjectLifecycleGuard", ["require", "exports", "react/jsx-runti
         const closeProjectState = (0, store_3.useWorkbenchStore)((state) => state.closeProject);
         const [pending, setPending] = (0, react_7.useState)();
         const [busy, setBusy] = (0, react_7.useState)(false);
+        const [lifecycleError, setLifecycleError] = (0, react_7.useState)();
         const cancelButtonRef = (0, react_7.useRef)(null);
         const dialogRef = (0, react_7.useRef)(null);
-        const desktop = (0, desktopBridge_2.hasDesktopBridge)();
+        const desktop = (0, desktopBridge_3.hasDesktopBridge)();
         const guardProjectAction = (0, react_7.useCallback)(async (kind, execute) => {
             const state = store_3.useWorkbenchStore.getState();
             if (!state.project || state.changeSet.changes.length === 0) {
@@ -25313,29 +25688,38 @@ define("projects/ProjectLifecycleGuard", ["require", "exports", "react/jsx-runti
                 setPending({ kind, execute, resolve, reject });
             });
         }, []);
-        const requestCloseProject = (0, react_7.useCallback)(async () => guardProjectAction('close-project', async () => {
-            if (desktop)
-                await (0, desktopBridge_2.desktopCloseProject)();
-            closeProjectState();
-        }), [closeProjectState, desktop, guardProjectAction]);
+        const requestCloseProject = (0, react_7.useCallback)(async () => {
+            setLifecycleError(undefined);
+            try {
+                return await guardProjectAction('close-project', async () => {
+                    if (desktop)
+                        await (0, desktopBridge_3.desktopCloseProject)();
+                    closeProjectState();
+                });
+            }
+            catch (error) {
+                (0, runtimeDiagnostics_5.recordRuntimeError)('lifecycle.action.failed', error, { kind: 'close-project' });
+                setLifecycleError((0, userFacingError_1.userFacingError)(error));
+                return false;
+            }
+        }, [closeProjectState, desktop, guardProjectAction]);
         (0, react_7.useEffect)(() => {
             if (!desktop)
                 return;
-            void (0, desktopBridge_2.desktopSetPendingChangeCount)(changeCount).catch((error) => (0, runtimeDiagnostics_5.recordRuntimeError)('lifecycle.pending-change-sync-failed', error, { pendingChanges: changeCount }));
+            void (0, desktopBridge_3.desktopSetPendingChangeCount)(changeCount).catch((error) => (0, runtimeDiagnostics_5.recordRuntimeError)('lifecycle.pending-change-sync-failed', error, { pendingChanges: changeCount }));
         }, [changeCount, desktop]);
         (0, react_7.useEffect)(() => {
             if (!desktop)
                 return;
-            return (0, desktopBridge_2.subscribeDesktopAppCloseRequested)(() => {
+            return (0, desktopBridge_3.subscribeDesktopAppCloseRequested)(() => {
                 if (pending)
                     return;
-                const state = store_3.useWorkbenchStore.getState();
-                if (!state.changeSet.changes.length) {
-                    void (0, desktopBridge_2.desktopExitApplication)();
-                    return;
-                }
+                setLifecycleError(undefined);
                 void guardProjectAction('exit-app', async () => {
-                    await (0, desktopBridge_2.desktopExitApplication)();
+                    await (0, desktopBridge_3.desktopExitApplication)();
+                }).catch((error) => {
+                    (0, runtimeDiagnostics_5.recordRuntimeError)('lifecycle.action.failed', error, { kind: 'exit-app' });
+                    setLifecycleError((0, userFacingError_1.userFacingError)(error));
                 });
             });
         }, [desktop, guardProjectAction, pending]);
@@ -25391,7 +25775,7 @@ define("projects/ProjectLifecycleGuard", ["require", "exports", "react/jsx-runti
         };
         const contextValue = (0, react_7.useMemo)(() => ({ guardProjectAction, requestCloseProject }), [guardProjectAction, requestCloseProject]);
         const copy = pending ? actionCopy(pending.kind) : undefined;
-        return ((0, jsx_runtime_6.jsxs)(ProjectLifecycleContext.Provider, { value: contextValue, children: [children, pending && copy && ((0, jsx_runtime_6.jsx)("div", { className: "modal-backdrop project-lifecycle-backdrop", onMouseDown: cancelPending, children: (0, jsx_runtime_6.jsxs)("section", { ref: dialogRef, className: "project-lifecycle-modal", role: "alertdialog", "aria-modal": "true", "aria-labelledby": "project-lifecycle-title", "aria-describedby": "project-lifecycle-detail", tabIndex: -1, onMouseDown: (event) => event.stopPropagation(), children: [(0, jsx_runtime_6.jsxs)("header", { children: [(0, jsx_runtime_6.jsx)("div", { className: "project-lifecycle-icon", children: (0, jsx_runtime_6.jsx)(LucideIcon_3.LucideIcon, { name: "triangle-alert", size: 21 }) }), (0, jsx_runtime_6.jsxs)("div", { children: [(0, jsx_runtime_6.jsx)("h3", { id: "project-lifecycle-title", children: copy.title }), (0, jsx_runtime_6.jsx)("small", { id: "project-lifecycle-detail", children: copy.detail })] })] }), (0, jsx_runtime_6.jsxs)("div", { className: "project-lifecycle-summary", children: [(0, jsx_runtime_6.jsxs)("strong", { children: [changeCount, " staged change", changeCount === 1 ? '' : 's'] }), (0, jsx_runtime_6.jsx)("span", { children: "Review or export them before continuing if you want to keep the work." })] }), (0, jsx_runtime_6.jsxs)("footer", { children: [(0, jsx_runtime_6.jsx)("button", { ref: cancelButtonRef, disabled: busy, onClick: cancelPending, children: "Cancel" }), (0, jsx_runtime_6.jsx)("button", { disabled: busy, onClick: reviewPending, children: "Review Changes" }), (0, jsx_runtime_6.jsx)("button", { className: "danger", disabled: busy, onClick: () => void discardAndContinue(), children: busy ? 'Continuing…' : copy.discardLabel })] })] }) }))] }));
+        return ((0, jsx_runtime_6.jsxs)(ProjectLifecycleContext.Provider, { value: contextValue, children: [children, lifecycleError && (0, jsx_runtime_6.jsxs)("div", { className: "source-parse-error", role: "alert", children: [(0, jsx_runtime_6.jsx)("span", { children: lifecycleError }), (0, jsx_runtime_6.jsx)("button", { onClick: () => setLifecycleError(undefined), children: "Dismiss" })] }), pending && copy && ((0, jsx_runtime_6.jsx)("div", { className: "modal-backdrop project-lifecycle-backdrop", onMouseDown: cancelPending, children: (0, jsx_runtime_6.jsxs)("section", { ref: dialogRef, className: "project-lifecycle-modal", role: "alertdialog", "aria-modal": "true", "aria-labelledby": "project-lifecycle-title", "aria-describedby": "project-lifecycle-detail", tabIndex: -1, onMouseDown: (event) => event.stopPropagation(), children: [(0, jsx_runtime_6.jsxs)("header", { children: [(0, jsx_runtime_6.jsx)("div", { className: "project-lifecycle-icon", children: (0, jsx_runtime_6.jsx)(LucideIcon_3.LucideIcon, { name: "triangle-alert", size: 21 }) }), (0, jsx_runtime_6.jsxs)("div", { children: [(0, jsx_runtime_6.jsx)("h3", { id: "project-lifecycle-title", children: copy.title }), (0, jsx_runtime_6.jsx)("small", { id: "project-lifecycle-detail", children: copy.detail })] })] }), (0, jsx_runtime_6.jsxs)("div", { className: "project-lifecycle-summary", children: [(0, jsx_runtime_6.jsxs)("strong", { children: [changeCount, " staged change", changeCount === 1 ? '' : 's'] }), (0, jsx_runtime_6.jsx)("span", { children: "Review or export them before continuing if you want to keep the work." })] }), (0, jsx_runtime_6.jsxs)("footer", { children: [(0, jsx_runtime_6.jsx)("button", { ref: cancelButtonRef, disabled: busy, onClick: cancelPending, children: "Cancel" }), (0, jsx_runtime_6.jsx)("button", { disabled: busy, onClick: reviewPending, children: "Review Changes" }), (0, jsx_runtime_6.jsx)("button", { className: "danger", disabled: busy, onClick: () => void discardAndContinue(), children: busy ? 'Continuing…' : copy.discardLabel })] })] }) }))] }));
     }
     function useProjectLifecycle() {
         const value = (0, react_7.useContext)(ProjectLifecycleContext);
@@ -25400,7 +25784,7 @@ define("projects/ProjectLifecycleGuard", ["require", "exports", "react/jsx-runti
         return value;
     }
 });
-define("components/FolderOpenButton", ["require", "exports", "react/jsx-runtime", "react", "io/desktopBridge", "io/folderLoader", "projects/projectPersistence", "store", "projects/ProjectLifecycleGuard", "components/LucideIcon", "support/runtimeDiagnostics"], function (require, exports, jsx_runtime_7, react_8, desktopBridge_3, folderLoader_3, projectPersistence_2, store_4, ProjectLifecycleGuard_1, LucideIcon_4, runtimeDiagnostics_6) {
+define("components/FolderOpenButton", ["require", "exports", "react/jsx-runtime", "react", "io/desktopBridge", "io/folderLoader", "projects/projectPersistence", "store", "projects/ProjectLifecycleGuard", "components/LucideIcon", "support/runtimeDiagnostics"], function (require, exports, jsx_runtime_7, react_8, desktopBridge_4, folderLoader_3, projectPersistence_2, store_4, ProjectLifecycleGuard_1, LucideIcon_4, runtimeDiagnostics_6) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.FolderOpenButton = FolderOpenButton;
@@ -25412,13 +25796,13 @@ define("components/FolderOpenButton", ["require", "exports", "react/jsx-runtime"
         const [loading, setLoading] = (0, react_8.useState)(false);
         const [menuOpen, setMenuOpen] = (0, react_8.useState)(false);
         const [recentRevision, setRecentRevision] = (0, react_8.useState)(0);
-        const desktop = (0, desktopBridge_3.hasDesktopBridge)();
+        const desktop = (0, desktopBridge_4.hasDesktopBridge)();
         const recentProjects = desktop ? (0, projectPersistence_2.readRecentProjects)() : [];
         void recentRevision;
         const removeRecent = async (rootPath) => {
             try {
                 if (desktop)
-                    await (0, desktopBridge_3.desktopRevokeRecentProject)(rootPath);
+                    await (0, desktopBridge_4.desktopRevokeRecentProject)(rootPath);
                 (0, projectPersistence_2.forgetRecentProject)(rootPath);
                 setRecentRevision((value) => value + 1);
             }
@@ -25491,7 +25875,7 @@ define("appIconData", ["require", "exports"], function (require, exports) {
     // Embedded copy of the committed HGW application icon for the offline-capable start screen.
     exports.APP_ICON_DATA_URI = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAAIq0lEQVR4nL1XW4ydVRX+1tr7/899hum0pe3YCimITK2lAYGW4BQvVRQvEf4JoAk8IA/KJd6IQcNhYoIPWB8ALw+KiZpo5ijSRCzIdUAgJFBsLRehQpkOtHN6m56Zc85/2XstH87MdKZjiyHG7+nPXnvv9e31f2vttYF3QRQNG6DKUTRsBgaqFqATTaWBgQEbRZHBSSYtWHRSW7VKGBqSuYOPD8DeTad9XFC+0gkFqrrNpebph57bsWfu0ii6wtTrdRoZ2STA/D1OSqAK8BMDVR4ZGfIAdPPVd1995Mjk15O0/Q7DHezSPRcXubHGIoalFAYpXBYnqtl29tkj7CcfOb25/4UtO9Gc5yca5gg11Go1AaDHE6Aoiri/v6ZDQxAAUB02H7ty3x2Tk+1bsiwDEYOI4EXhvReCV9YMhjKEnJqQY1i0wb4JkngU6v5GkL+GRp564NFH35h7yCiKTL1ep00jI0JRFJlareZnjF+6oHImLbn4Cwfthqsn42B9mkwKESsUAKkSwAAYICgRoAQFq4JFiZRUjTUgwwrWDOLSxHOwk7mwZ1EwunV5ev/9v314vDkvAp/fuLGS2PYnjWtcZbs+cFkjvzF/uEkQF3tmNqoAQQEiqCqIOkFUYPYb0M5unXEBWFUJxGSYDZgNVupjkNa+MQ7yT7db7QfHj048Q5s3rP15EPBn8gFWpsU12Of60YpTZ8kzyPDc0HWcd0gAmP0monl2qEKh4I5dvVqt2EO6OHmcFJZVFaV8iDNWLatbw7iG2eSbXZe4eraK0rTBhtmKABAB0bReiGY2nOeQiSDTUSEiiCiMMVBYePGw7ChzRN3mAMR7kAm0t7uUXLT+LFsu5kYtEf4ZBLl1WWsPLaZxSKGbMipDqIRMA2SO4EUgInDOgUkg3oOnHXoRWGPgvMIwYIyBS5ug9uswxeXwWIJ8AJh4FJVSCevPXu2tNflSMY84db+zNrA3ORffmpdXPwUQnBfkyIBtERx2QUwXXNAFb7rguYLYhxAtIHGACEDikboMloE0cwjDED5rIJe+Dutfg0M3Sj19WNpbxNrT3q8rly+xY+OH3kzi+JvXDd17/2wduPzSiy71SXqLF/2oqJAhIagA6uFFwMQI80VwUEKGPBxKSNEFsV1wKMMhD0GIdtqJSLPZgMnGwMkexM1xXd23WKOBsxnAPb7hbr3uznsnq9UqLyhEN15x4W9ix1/ZfzRxKmpnxCbTv8EwYBiAduqJgiCwEMqBbBmeu+BMNzjfC5tfisx59NBOWbvMU3eIa2/60fCvAWB4ODKDgzVP69Z1n7KKeEvB0qkHDk5963Nf/MRml6Z3jR2YdG+OJ1anU4uZ4UWmxYdOYWKCtQbiHACBdw5pmqBUCHHBurOw4tSlmIqh465E5eZrEx/p2bn8CVybAkOYKXi2gEqp4dw1xqoplnKbXt71ypuVxX0YO5SZzHkACmvtbFp5ETAziADxHolzHeF5RT5XwDn9Z6p6ryuWLeM0SbFz99taWbqKujV7+8Ca87OhwSGdW4p55Y6x/WLC145IybdNqfT2+OEP/euVl5BMHqQgsAhyeYgq0iSD9wLD3Am9CJiBMLRgJvQt7cEl530QZ606lXKFkF2a4NXRA3hsx5g+t30X6hPtPYODNR9F0bzawjXAM7RezIcmV17skmCRNMXCpA3Yyb1wUwchImBjIOKRZQ7eeSgIziuyNANBcf7aM7S3u4LJODmUa8lTR7e/hSWFWDevX6Hv6y2gu8C7AaC/vz5PdzxdUPYyBGHOoljpYS4uRgNdmMqAXDaBfLwfcDGITSf0oigEhJ5yCK8EgKBeNLCM8in2j+HY/v3maBu5vNG+5SvQv7oPlDVfP17wANBROWRURL1LpjSXK8CWS0gCi2bLwkmKXNoCtAmyeRhjICoIDHDm8jx6ywaHpgRJ2ubx+lE1AV/vV5aRNDMszuf4YIvV+ibIud0AsOblpbqAAAS7FTBeCJK0xAQpB8wIA4M0y0F9CzkLiLUg8fDifbFQNmGYR7kgWLaoiLg5gcwLqYhfvqLHxJnXuNVCJjCUxhJy+hYAvNRfm0eAAXDIfrjVnPpBmmYQWJbMi7oElgFDnZuQAbjMqRfxpWLBMBMEhO5KBd2VEpihxZz1p/f1mjTO7mtNNn8IY0mJARcfTsffeQcAhoawgIA8vHO8+eQ/9t0Wt1oXT7WaL7ZTz97z7ERjDFRF2RiqlAsmzbLf95bD25gZUOehHvnAUlcpbyYa7Z987c4/XZ5m3sVZp4gZkr1DDx5uYPbCPk6EADAwAPvMq/VnR6fGNlRK9pnMOWnHWSaA96ISBJas5bgx2fz2tqd2XLWou7CXmTHZjKUdpwKiVjN2X71hy9YbACAM6NzEA+KchOT2AcDwcSk4j8DICNyNnz4jt3s3kjWrV+za8OHTTU8pDAhqrDUsaVyfaDQ3bnt61xYFKMt8dyE0MEziBBwnbvvNP976i2oUhQoQkfk7fIa+8Agba/8AAIgWZsE8Rnc9uDutVsH1ifSOfD738MZzVj+atdt3ElECSX/65POvvHj9ZecWqdP0sIjCmk5XpNDGcBSZlwEPBb5zz7bvl3I8UOTsy9/92SO/UgUNDh5r/eZnwTQIUAxBgWffArB5Zvyz5636+X0vjL9RrYKBCoo/AwIOpjux6QaJjgzWar46MGCP9S1/eRIAZhqphec/LgIzUD3WrkcRzAPPj74BgGYukA5ZDawh5EILay2YcAQAsGnaTtAoisxwFJkTOV8QgdnNjy2gWg2+CvAQMO9xQaDAMsN5D8sKa6YJzEGtVvO1E3mexn+MwBwoABzvHADazpskmynEkAx0+F32ek8ETggD9IgqpZl3+XzAFjT1fyKwSQAQW956dCreVyzkylnmdhUC85Aq6PbbRxYo/WT4r1+xc6HTmfeN6MK+RV3hzQy75Xu/fGz8ZGr/n6NarR73aHlvh/k3LTh7xjEhZ1sAAAAASUVORK5CYII=';
 });
-define("components/ProjectStartScreen", ["require", "exports", "react/jsx-runtime", "react", "appIconData", "io/desktopBridge", "io/folderLoader", "projects/projectPersistence", "store", "components/FolderOpenButton", "components/LucideIcon", "support/runtimeDiagnostics"], function (require, exports, jsx_runtime_8, react_9, appIconData_1, desktopBridge_4, folderLoader_4, projectPersistence_3, store_5, FolderOpenButton_1, LucideIcon_5, runtimeDiagnostics_7) {
+define("components/ProjectStartScreen", ["require", "exports", "react/jsx-runtime", "react", "appIconData", "io/desktopBridge", "io/folderLoader", "projects/projectPersistence", "store", "components/FolderOpenButton", "components/LucideIcon", "support/runtimeDiagnostics"], function (require, exports, jsx_runtime_8, react_9, appIconData_1, desktopBridge_5, folderLoader_4, projectPersistence_3, store_5, FolderOpenButton_1, LucideIcon_5, runtimeDiagnostics_7) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.ProjectStartScreen = ProjectStartScreen;
@@ -25515,14 +25899,14 @@ define("components/ProjectStartScreen", ["require", "exports", "react/jsx-runtim
         const [loadingPath, setLoadingPath] = (0, react_9.useState)();
         const [error, setError] = (0, react_9.useState)();
         const [revision, setRevision] = (0, react_9.useState)(0);
-        const desktop = (0, desktopBridge_4.hasDesktopBridge)();
+        const desktop = (0, desktopBridge_5.hasDesktopBridge)();
         const recent = desktop ? (0, projectPersistence_3.readRecentProjects)() : [];
         void revision;
         const removeRecent = async (rootPath) => {
             setError(undefined);
             try {
                 if (desktop)
-                    await (0, desktopBridge_4.desktopRevokeRecentProject)(rootPath);
+                    await (0, desktopBridge_5.desktopRevokeRecentProject)(rootPath);
                 (0, projectPersistence_3.forgetRecentProject)(rootPath);
                 setRevision((value) => value + 1);
             }
@@ -25656,8 +26040,8 @@ define("components/WorkbenchRail", ["require", "exports", "react/jsx-runtime", "
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.WorkbenchRail = WorkbenchRail;
-    function RailButton({ label, icon, active, badge, onClick, className = '', pressed, }) {
-        return ((0, jsx_runtime_10.jsxs)("button", { className: `rail-button ${active ? 'active' : ''} ${className}`, onClick: onClick, "data-tooltip": label, "data-tooltip-side": "right", "aria-label": label, "aria-pressed": pressed ?? active ?? false, children: [(0, jsx_runtime_10.jsx)("span", { className: "rail-icon", "aria-hidden": "true", children: (0, jsx_runtime_10.jsx)(LucideIcon_7.LucideIcon, { name: icon, size: 20 }) }), badge !== undefined && badge > 0 && (0, jsx_runtime_10.jsx)("span", { className: "rail-badge", children: badge > 99 ? '99+' : badge })] }));
+    function RailButton({ label, icon, active, badge, onClick, className = '', pressed, current, }) {
+        return ((0, jsx_runtime_10.jsxs)("button", { className: `rail-button ${active ? 'active' : ''} ${className}`, onClick: onClick, "data-tooltip": label, "data-tooltip-side": "right", "aria-label": label, "aria-pressed": pressed, "aria-current": current ? 'page' : undefined, children: [(0, jsx_runtime_10.jsx)("span", { className: "rail-icon", "aria-hidden": "true", children: (0, jsx_runtime_10.jsx)(LucideIcon_7.LucideIcon, { name: icon, size: 20 }) }), badge !== undefined && badge > 0 && (0, jsx_runtime_10.jsx)("span", { className: "rail-badge", children: badge > 99 ? '99+' : badge })] }));
     }
     function WorkbenchRail({ onOpenSettings }) {
         const sidebarView = (0, store_7.useWorkbenchStore)((state) => state.sidebarView);
@@ -25680,8 +26064,31 @@ define("components/WorkbenchRail", ["require", "exports", "react/jsx-runtime", "
         const toolSidebarActive = activeTab?.kind === 'visual' || activeTab?.kind === 'project-graph';
         const globalSidebarActive = !toolSidebarActive || Boolean(toolSidebarOverride);
         const effectiveGlobalSidebarView = toolSidebarOverride ?? sidebarView;
-        const sidebarButton = (view, label, icon) => ((0, jsx_runtime_10.jsx)(RailButton, { label: `${label}${sidebarVisible && globalSidebarActive && effectiveGlobalSidebarView === view ? ' — hide sidebar' : ''}`, icon: icon, active: sidebarVisible && globalSidebarActive && effectiveGlobalSidebarView === view, onClick: () => activateSidebar(view) }));
-        return ((0, jsx_runtime_10.jsxs)("nav", { className: "workbench-rail", "aria-label": "Workbench tools", children: [(0, jsx_runtime_10.jsxs)("div", { className: "rail-group rail-sidebar-group", children: [sidebarButton('explorer', 'Explorer', 'folder-tree'), sidebarButton('search', 'Search', 'search')] }), (0, jsx_runtime_10.jsx)("div", { className: "rail-separator" }), (0, jsx_runtime_10.jsxs)("div", { className: "rail-group rail-tool-group", children: [(0, jsx_runtime_10.jsx)(RailButton, { label: "Diagnostics", icon: "triangle-alert", badge: actionableDiagnostics, active: !!activeTabId?.startsWith('tab:diagnostics:'), onClick: () => openDiagnosticsTab() }), (0, jsx_runtime_10.jsx)(RailButton, { label: "Changes", icon: "git-compare-arrows", badge: changeCount, active: activeTabId === 'tab:changes:pending', onClick: openChangesTab }), (0, jsx_runtime_10.jsx)(RailButton, { label: "Layout", icon: "layout-grid", active: activeTabId === 'tab:visual', onClick: openVisualTab }), (0, jsx_runtime_10.jsx)(RailButton, { label: "WorldGen Performance", icon: "circle-dot", active: activeTab?.kind === 'worldgen-performance', onClick: openWorldgenPerformanceTab }), (0, jsx_runtime_10.jsx)(RailButton, { label: "Project Graph", icon: "network", active: activeTab?.kind === 'project-graph', onClick: openProjectGraphTab })] }), (0, jsx_runtime_10.jsx)("div", { className: "rail-spacer" }), (0, jsx_runtime_10.jsxs)("div", { className: "rail-group rail-global-group", children: [(0, jsx_runtime_10.jsx)(RailButton, { label: `Editing ${editing ? 'On' : 'Off'}`, icon: "pencil", className: `editing-rail-button ${editing ? 'editing-on' : 'editing-off'}`, active: editing, pressed: editing, onClick: () => setEditing(!editing) }), (0, jsx_runtime_10.jsx)(RailButton, { label: "Settings", icon: "settings", onClick: onOpenSettings })] })] }));
+        const sidebarButton = (view, label, icon) => ((0, jsx_runtime_10.jsx)(RailButton, { label: `${label}${sidebarVisible && globalSidebarActive && effectiveGlobalSidebarView === view ? ' — hide sidebar' : ''}`, icon: icon, active: sidebarVisible && globalSidebarActive && effectiveGlobalSidebarView === view, pressed: sidebarVisible && globalSidebarActive && effectiveGlobalSidebarView === view, onClick: () => activateSidebar(view) }));
+        return ((0, jsx_runtime_10.jsxs)("nav", { className: "workbench-rail", "aria-label": "Workbench tools", children: [(0, jsx_runtime_10.jsxs)("div", { className: "rail-group rail-sidebar-group", children: [sidebarButton('explorer', 'Explorer', 'folder-tree'), sidebarButton('search', 'Search', 'search')] }), (0, jsx_runtime_10.jsx)("div", { className: "rail-separator" }), (0, jsx_runtime_10.jsxs)("div", { className: "rail-group rail-tool-group", children: [(0, jsx_runtime_10.jsx)(RailButton, { label: "Diagnostics", icon: "triangle-alert", badge: actionableDiagnostics, active: !!activeTabId?.startsWith('tab:diagnostics:'), current: !!activeTabId?.startsWith('tab:diagnostics:'), onClick: () => openDiagnosticsTab() }), (0, jsx_runtime_10.jsx)(RailButton, { label: "Changes", icon: "git-compare-arrows", badge: changeCount, active: activeTabId === 'tab:changes:pending', current: activeTabId === 'tab:changes:pending', onClick: openChangesTab }), (0, jsx_runtime_10.jsx)(RailButton, { label: "Layout", icon: "layout-grid", active: activeTabId === 'tab:visual', current: activeTabId === 'tab:visual', onClick: openVisualTab }), (0, jsx_runtime_10.jsx)(RailButton, { label: "WorldGen Performance", icon: "circle-dot", active: activeTab?.kind === 'worldgen-performance', current: activeTab?.kind === 'worldgen-performance', onClick: openWorldgenPerformanceTab }), (0, jsx_runtime_10.jsx)(RailButton, { label: "Project Graph", icon: "network", active: activeTab?.kind === 'project-graph', current: activeTab?.kind === 'project-graph', onClick: openProjectGraphTab })] }), (0, jsx_runtime_10.jsx)("div", { className: "rail-spacer" }), (0, jsx_runtime_10.jsxs)("div", { className: "rail-group rail-global-group", children: [(0, jsx_runtime_10.jsx)(RailButton, { label: `Editing ${editing ? 'On' : 'Off'}`, icon: "pencil", className: `editing-rail-button ${editing ? 'editing-on' : 'editing-off'}`, active: editing, pressed: editing, onClick: () => setEditing(!editing) }), (0, jsx_runtime_10.jsx)(RailButton, { label: "Settings", icon: "settings", onClick: onOpenSettings })] })] }));
+    }
+});
+define("release/updatePreferences", ["require", "exports"], function (require, exports) {
+    "use strict";
+    Object.defineProperty(exports, "__esModule", { value: true });
+    exports.readUpdateChannel = readUpdateChannel;
+    exports.persistUpdateChannel = persistUpdateChannel;
+    function readUpdateChannel(fallback) {
+        try {
+            const stored = globalThis.localStorage?.getItem('hgw.update-channel');
+            return stored === 'stable' || stored === 'preview' ? stored : fallback;
+        }
+        catch {
+            return fallback;
+        }
+    }
+    function persistUpdateChannel(channel) {
+        try {
+            globalThis.localStorage?.setItem('hgw.update-channel', channel);
+        }
+        catch {
+            // The selected in-memory channel remains usable when optional storage fails.
+        }
     }
 });
 define("release/releaseIdentity", ["require", "exports"], function (require, exports) {
@@ -25690,18 +26097,18 @@ define("release/releaseIdentity", ["require", "exports"], function (require, exp
     exports.RELEASE_REVISION_INTERNAL_ONLY = exports.UPDATER_DEFAULT_CHANNEL = exports.UPDATER_VERSION = exports.UPDATER_ENABLED = exports.UPDATER_PREPARED = exports.RELEASE_CANONICAL_RUN_REQUIRED = exports.RELEASE_FEATURE_FREEZE = exports.RELEASE_VALIDATION_PROFILE = exports.RELEASE_BUILD_ID = exports.RELEASE_MILESTONE_NAME = exports.RELEASE_MILESTONE = exports.RELEASE_DISPLAY_VERSION = exports.RELEASE_REVISION = exports.RELEASE_VERSION = void 0;
     // GENERATED from release-spec/release-contract.json by scripts/sync-release-contract.mjs.
     // Do not hand-edit release identity values here.
-    exports.RELEASE_VERSION = '0.11.36-rc.3';
+    exports.RELEASE_VERSION = '0.11.36-rc.4';
     exports.RELEASE_REVISION = 'r1';
-    exports.RELEASE_DISPLAY_VERSION = '0.11.36-rc.3-r1';
-    exports.RELEASE_MILESTONE = 'v0.11.36-rc.3';
-    exports.RELEASE_MILESTONE_NAME = 'Updater E2E Preview';
-    exports.RELEASE_BUILD_ID = 'v0.11.36-rc.3-r1-updater-e2e-preview';
+    exports.RELEASE_DISPLAY_VERSION = '0.11.36-rc.4-r1';
+    exports.RELEASE_MILESTONE = 'v0.11.36-rc.4';
+    exports.RELEASE_MILESTONE_NAME = 'Audited Updater Preview';
+    exports.RELEASE_BUILD_ID = 'v0.11.36-rc.4-r1-audited-updater-preview';
     exports.RELEASE_VALIDATION_PROFILE = 'github-updater-deep-clean-v1';
     exports.RELEASE_FEATURE_FREEZE = false;
     exports.RELEASE_CANONICAL_RUN_REQUIRED = false;
     exports.UPDATER_PREPARED = true;
     exports.UPDATER_ENABLED = true;
-    exports.UPDATER_VERSION = '0.11.36-rc.3';
+    exports.UPDATER_VERSION = '0.11.36-rc.4';
     exports.UPDATER_DEFAULT_CHANNEL = 'stable';
     exports.RELEASE_REVISION_INTERNAL_ONLY = true;
 });
@@ -25871,7 +26278,7 @@ define("components/HotkeySettings", ["require", "exports", "react/jsx-runtime", 
                     }) }), conflicts.length > 0 && (0, jsx_runtime_11.jsxs)("div", { className: "hotkey-conflict", role: "alert", children: ["Shortcut conflict: ", conflicts.map((conflict) => `${conflict.shortcut} (${conflict.commands.map(commandRegistry_2.commandLabel).join(', ')})`).join(' · ')] }), status && (0, jsx_runtime_11.jsx)("small", { className: "hotkey-status", role: "status", children: status })] }));
     }
 });
-define("components/WorkbenchSettings", ["require", "exports", "react/jsx-runtime", "react", "io/desktopBridge", "release/releaseIdentity", "support/runtimeDiagnostics", "store", "workbench/appearancePreferences", "components/LucideIcon", "components/HotkeySettings", "workbench/modalFocus"], function (require, exports, jsx_runtime_12, react_12, desktopBridge_5, releaseIdentity_1, runtimeDiagnostics_9, store_8, appearancePreferences_1, LucideIcon_8, HotkeySettings_1, modalFocus_4) {
+define("components/WorkbenchSettings", ["require", "exports", "react/jsx-runtime", "release/updatePreferences", "support/userFacingError", "react", "io/desktopBridge", "release/releaseIdentity", "support/runtimeDiagnostics", "store", "workbench/appearancePreferences", "components/LucideIcon", "components/HotkeySettings", "workbench/modalFocus"], function (require, exports, jsx_runtime_12, updatePreferences_1, userFacingError_2, react_12, desktopBridge_6, releaseIdentity_1, runtimeDiagnostics_9, store_8, appearancePreferences_1, LucideIcon_8, HotkeySettings_1, modalFocus_4) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.WorkbenchSettings = WorkbenchSettings;
@@ -25889,7 +26296,7 @@ define("components/WorkbenchSettings", ["require", "exports", "react/jsx-runtime
         const setDetailedLogging = (0, store_8.useWorkbenchStore)((state) => state.setDetailedLogging);
         const workspace = (0, store_8.useWorkbenchStore)((state) => state.workspace);
         const pendingChangeCount = (0, store_8.useWorkbenchStore)((state) => state.changeSet.changes.length);
-        const desktop = (0, desktopBridge_5.hasDesktopBridge)();
+        const desktop = (0, desktopBridge_6.hasDesktopBridge)();
         const closeButtonRef = (0, react_12.useRef)(null);
         const dialogRef = (0, react_12.useRef)(null);
         const [activePage, setActivePage] = (0, react_12.useState)('appearance');
@@ -25897,12 +26304,11 @@ define("components/WorkbenchSettings", ["require", "exports", "react/jsx-runtime
         const [includeLogs, setIncludeLogs] = (0, react_12.useState)(true);
         const [includePerformance, setIncludePerformance] = (0, react_12.useState)(true);
         const [reportStatus, setReportStatus] = (0, react_12.useState)();
+        const [reportBusy, setReportBusy] = (0, react_12.useState)(false);
+        const reportInFlight = (0, react_12.useRef)(false);
         const [persistentLogStatus, setPersistentLogStatus] = (0, react_12.useState)();
         const [persistentLogRevision, setPersistentLogRevision] = (0, react_12.useState)(0);
-        const [updateChannel, setUpdateChannel] = (0, react_12.useState)(() => {
-            const stored = globalThis.localStorage?.getItem('hgw.update-channel');
-            return stored === 'preview' ? 'preview' : releaseIdentity_1.UPDATER_DEFAULT_CHANNEL;
-        });
+        const [updateChannel, setUpdateChannel] = (0, react_12.useState)(() => (0, updatePreferences_1.readUpdateChannel)(releaseIdentity_1.UPDATER_DEFAULT_CHANNEL));
         const [updateCheck, setUpdateCheck] = (0, react_12.useState)();
         const [updateStatus, setUpdateStatus] = (0, react_12.useState)();
         const [updateBusy, setUpdateBusy] = (0, react_12.useState)(false);
@@ -25950,7 +26356,7 @@ define("components/WorkbenchSettings", ["require", "exports", "react/jsx-runtime
             }
             catch (error) {
                 (0, runtimeDiagnostics_9.recordRuntimeError)('support.persistent-log.clear-failed', error);
-                setPersistentLogStatus(error instanceof Error ? error.message : String(error));
+                setPersistentLogStatus((0, userFacingError_2.userFacingError)(error));
             }
         };
         const copyReport = async () => {
@@ -25961,31 +26367,40 @@ define("components/WorkbenchSettings", ["require", "exports", "react/jsx-runtime
             }
             catch (error) {
                 (0, runtimeDiagnostics_9.recordRuntimeError)('support.report.copy-failed', error);
-                setReportStatus(error instanceof Error ? error.message : String(error));
+                setReportStatus((0, userFacingError_2.userFacingError)(error));
             }
         };
-        const saveReport = () => {
+        const saveReport = async () => {
+            if (reportInFlight.current)
+                return;
+            reportInFlight.current = true;
+            setReportBusy(true);
             setReportStatus(undefined);
             try {
-                (0, runtimeDiagnostics_9.downloadDiagnosticReport)(reportOptions);
-                setReportStatus(desktop ? 'Choose where to save the diagnostic JSON.' : 'Diagnostic JSON download started.');
+                const outcome = await (0, runtimeDiagnostics_9.downloadDiagnosticReport)(reportOptions);
+                setReportStatus(outcome === 'saved' ? 'Diagnostic report saved. Review it before sharing.' : outcome === 'cancelled' ? 'Save cancelled. No report was saved.' : 'Diagnostic JSON download started.');
             }
             catch (error) {
                 (0, runtimeDiagnostics_9.recordRuntimeError)('support.report.export-failed', error);
-                setReportStatus(error instanceof Error ? error.message : String(error));
+                setReportStatus((0, userFacingError_2.userFacingError)(error));
+            }
+            finally {
+                reportInFlight.current = false;
+                setReportBusy(false);
             }
         };
         const chooseUpdateChannel = (channel) => {
             setUpdateChannel(channel);
             setUpdateCheck(undefined);
             setUpdateStatus(undefined);
-            globalThis.localStorage?.setItem('hgw.update-channel', channel);
+            (0, updatePreferences_1.persistUpdateChannel)(channel);
         };
         const checkForUpdates = async () => {
+            setUpdateCheck(undefined);
             setUpdateBusy(true);
             setUpdateStatus('Checking for updates…');
             try {
-                const result = await (0, desktopBridge_5.desktopCheckForUpdate)(updateChannel);
+                const result = await (0, desktopBridge_6.desktopCheckForUpdate)(updateChannel);
                 setUpdateCheck(result);
                 setUpdateStatus(!result.configured
                     ? (result.reason ?? 'Updater deployment is not configured for this build.')
@@ -25995,7 +26410,7 @@ define("components/WorkbenchSettings", ["require", "exports", "react/jsx-runtime
             }
             catch (error) {
                 (0, runtimeDiagnostics_9.recordRuntimeError)('app.update.check-failed', error);
-                setUpdateStatus(error instanceof Error ? error.message : String(error));
+                setUpdateStatus((0, userFacingError_2.userFacingError)(error));
             }
             finally {
                 setUpdateBusy(false);
@@ -26011,15 +26426,15 @@ define("components/WorkbenchSettings", ["require", "exports", "react/jsx-runtime
             setUpdateBusy(true);
             setUpdateStatus(`Downloading ${updateCheck.version}… the app will restart after installation.`);
             try {
-                await (0, desktopBridge_5.desktopInstallUpdate)(updateChannel, updateCheck.version);
+                await (0, desktopBridge_6.desktopInstallUpdate)(updateChannel, updateCheck.version);
             }
             catch (error) {
                 (0, runtimeDiagnostics_9.recordRuntimeError)('app.update.install-failed', error);
-                setUpdateStatus(error instanceof Error ? error.message : String(error));
+                setUpdateStatus((0, userFacingError_2.userFacingError)(error));
                 setUpdateBusy(false);
             }
         };
-        return ((0, jsx_runtime_12.jsx)("div", { className: "modal-backdrop", onMouseDown: closeSettings, children: (0, jsx_runtime_12.jsxs)("section", { ref: dialogRef, className: "settings-modal settings-modal-v2", role: "dialog", "aria-modal": "true", "aria-labelledby": "workbench-settings-title", tabIndex: -1, onMouseDown: (event) => event.stopPropagation(), children: [(0, jsx_runtime_12.jsxs)("header", { children: [(0, jsx_runtime_12.jsxs)("div", { children: [(0, jsx_runtime_12.jsx)("h3", { id: "workbench-settings-title", children: "Settings" }), (0, jsx_runtime_12.jsx)("small", { children: "Workbench preferences are global and do not modify the current Hytale project." })] }), (0, jsx_runtime_12.jsx)("button", { ref: closeButtonRef, onClick: closeSettings, disabled: updateBusy, "aria-label": updateBusy ? "Close settings (disabled while update is installing)" : "Close settings", children: (0, jsx_runtime_12.jsx)(LucideIcon_8.LucideIcon, { name: "x", size: 16 }) })] }), (0, jsx_runtime_12.jsxs)("div", { className: "settings-shell", children: [(0, jsx_runtime_12.jsx)("nav", { className: "settings-navigation", "aria-label": "Settings categories", children: SETTINGS_PAGES.map((page) => ((0, jsx_runtime_12.jsxs)("button", { className: activePage === page.id ? 'active' : '', onClick: () => setActivePage(page.id), "aria-current": activePage === page.id ? 'page' : undefined, children: [(0, jsx_runtime_12.jsx)("strong", { children: page.label }), (0, jsx_runtime_12.jsx)("small", { children: page.detail })] }, page.id))) }), (0, jsx_runtime_12.jsxs)("div", { className: "settings-body settings-page-body", children: [activePage === 'appearance' && ((0, jsx_runtime_12.jsxs)("div", { className: "settings-page", children: [(0, jsx_runtime_12.jsxs)("div", { className: "settings-page-heading", children: [(0, jsx_runtime_12.jsx)("span", { className: "settings-page-kicker", children: "Appearance" }), (0, jsx_runtime_12.jsx)("h4", { children: "Make the Workbench comfortable to read" }), (0, jsx_runtime_12.jsx)("p", { children: "UI scale changes the entire application surface. Windows display scaling and Project Graph camera zoom remain independent." })] }), (0, jsx_runtime_12.jsxs)("section", { className: "settings-section settings-section-spacious", children: [(0, jsx_runtime_12.jsxs)("div", { className: "settings-row settings-row-stack", children: [(0, jsx_runtime_12.jsxs)("div", { children: [(0, jsx_runtime_12.jsx)("strong", { children: "UI scale" }), (0, jsx_runtime_12.jsx)("small", { children: "Choose a fixed, tested scale. 100% is the default. Larger ranges remain intentionally unavailable until the next reflow-hardening milestone." })] }), (0, jsx_runtime_12.jsx)("div", { className: "ui-scale-picker", role: "group", "aria-label": "UI scale", children: appearancePreferences_1.WORKBENCH_UI_SCALE_STEPS.map((scale) => ((0, jsx_runtime_12.jsx)("button", { className: uiScale === scale ? 'active' : '', "aria-pressed": uiScale === scale, onClick: () => onUiScaleChange(scale), children: (0, appearancePreferences_1.formatWorkbenchUiScale)(scale) }, scale))) })] }), (0, jsx_runtime_12.jsxs)("div", { className: "settings-row", children: [(0, jsx_runtime_12.jsxs)("div", { children: [(0, jsx_runtime_12.jsx)("strong", { children: "Current scale" }), (0, jsx_runtime_12.jsx)("small", { children: "Keyboard: Ctrl/Cmd + Plus, Ctrl/Cmd + Minus, and Ctrl/Cmd + 0." })] }), (0, jsx_runtime_12.jsxs)("div", { className: "settings-value-actions", children: [(0, jsx_runtime_12.jsx)("span", { className: "settings-value-badge", children: (0, appearancePreferences_1.formatWorkbenchUiScale)(uiScale) }), (0, jsx_runtime_12.jsx)("button", { className: "settings-layout-reset", onClick: onResetUiScale, disabled: uiScale === 1, children: "Reset" })] })] }), (0, jsx_runtime_12.jsxs)("div", { className: "settings-inline-note", children: [(0, jsx_runtime_12.jsx)(LucideIcon_8.LucideIcon, { name: "circle-check", size: 16 }), (0, jsx_runtime_12.jsxs)("span", { children: [(0, jsx_runtime_12.jsx)("strong", { children: "Separate from Windows DPI." }), " The desktop host scales its WebView only; project data and Project Graph camera state are unchanged."] })] })] })] })), activePage === 'workbench' && ((0, jsx_runtime_12.jsxs)("div", { className: "settings-page", children: [(0, jsx_runtime_12.jsxs)("div", { className: "settings-page-heading", children: [(0, jsx_runtime_12.jsx)("span", { className: "settings-page-kicker", children: "Workbench" }), (0, jsx_runtime_12.jsx)("h4", { children: "Layout and pane preferences" }), (0, jsx_runtime_12.jsx)("p", { children: "These preferences belong to the application, not to a ProjectSession." })] }), (0, jsx_runtime_12.jsxs)("section", { className: "settings-section settings-section-spacious", children: [(0, jsx_runtime_12.jsxs)("div", { className: "settings-row", children: [(0, jsx_runtime_12.jsxs)("div", { children: [(0, jsx_runtime_12.jsx)("strong", { children: "Workbench layout" }), (0, jsx_runtime_12.jsxs)("small", { children: ["Sidebar: ", Math.round(sidebarWidth), " px \u00B7 split ratio: ", Math.round(splitRatio * 100), "/", 100 - Math.round(splitRatio * 100), ". Resize either divider directly; Reset restores the layout defaults."] })] }), (0, jsx_runtime_12.jsx)("button", { className: "settings-layout-reset", onClick: onResetLayout, children: "Reset" })] }), (0, jsx_runtime_12.jsxs)("div", { className: "settings-inline-note neutral", children: [(0, jsx_runtime_12.jsx)(LucideIcon_8.LucideIcon, { name: "columns-2", size: 16 }), (0, jsx_runtime_12.jsx)("span", { children: "Split mode itself remains transient. Pane-local tab references and globally unique document instances keep their existing v0.11.21 contract." })] })] })] })), activePage === 'keyboard' && ((0, jsx_runtime_12.jsxs)("div", { className: "settings-page", children: [(0, jsx_runtime_12.jsxs)("div", { className: "settings-page-heading", children: [(0, jsx_runtime_12.jsx)("span", { className: "settings-page-kicker", children: "Keyboard" }), (0, jsx_runtime_12.jsx)("h4", { children: "Global Workbench shortcuts" }), (0, jsx_runtime_12.jsx)("p", { children: "Record, unassign, or restore command shortcuts. Widget-local keyboard behavior remains local." })] }), (0, jsx_runtime_12.jsx)(HotkeySettings_1.HotkeySettings, {})] })), activePage === 'diagnostics' && ((0, jsx_runtime_12.jsxs)("div", { className: "settings-page", children: [(0, jsx_runtime_12.jsxs)("div", { className: "settings-page-heading", children: [(0, jsx_runtime_12.jsx)("span", { className: "settings-page-kicker", children: "Diagnostics" }), (0, jsx_runtime_12.jsx)("h4", { children: "Logging, support and developer details" }), (0, jsx_runtime_12.jsx)("p", { children: "Diagnostics stay local unless you explicitly copy or save a report." })] }), (0, jsx_runtime_12.jsxs)("section", { className: "settings-section", children: [(0, jsx_runtime_12.jsx)("div", { className: "settings-section-title", children: "Logging" }), (0, jsx_runtime_12.jsxs)("div", { className: "settings-row", children: [(0, jsx_runtime_12.jsxs)("div", { children: [(0, jsx_runtime_12.jsx)("strong", { children: "Detailed logging" }), (0, jsx_runtime_12.jsx)("small", { children: "Records additional structured diagnostic events in memory and, on desktop, into the bounded persistent log. Logs stay local and are never uploaded automatically." })] }), (0, jsx_runtime_12.jsx)("button", { className: `settings-toggle ${detailedLogging ? 'active' : ''}`, onClick: () => setDetailedLogging(!detailedLogging), "aria-pressed": detailedLogging, children: detailedLogging ? 'On' : 'Off' })] }), (0, jsx_runtime_12.jsxs)("div", { className: "settings-row", children: [(0, jsx_runtime_12.jsxs)("div", { children: [(0, jsx_runtime_12.jsx)("strong", { children: "Persistent application log" }), (0, jsx_runtime_12.jsx)("small", { children: desktop ? `JSONL in the native app-log directory · ${persistentLog.retainedFiles} files max · ${Math.round(persistentLog.maxFileBytes / (1024 * 1024))} MiB each. Warnings, errors and lifecycle events are kept by default; Detailed logging adds the full structured event stream. Project paths are always redacted.` : 'Available in the Tauri desktop host. Browser/dev sessions keep the existing in-memory diagnostics only.' }), persistentLog.lastError && (0, jsx_runtime_12.jsxs)("small", { className: "settings-warning", children: ["File sink unavailable for this session: ", persistentLog.lastError] }), persistentLogStatus && (0, jsx_runtime_12.jsx)("small", { className: "support-report-status", role: "status", children: persistentLogStatus })] }), (0, jsx_runtime_12.jsx)("button", { className: "settings-layout-reset", onClick: () => void clearPersistentLogs(), disabled: !desktop, children: "Clear logs" })] }), (0, jsx_runtime_12.jsxs)("div", { className: "settings-row", children: [(0, jsx_runtime_12.jsxs)("div", { children: [(0, jsx_runtime_12.jsx)("strong", { children: "Developer mode" }), (0, jsx_runtime_12.jsx)("small", { children: "Shows runtime and diagnostic details inside the release app. This does not start Node, hot reload, or a localhost development server." })] }), (0, jsx_runtime_12.jsx)("button", { className: `settings-toggle ${developerMode ? 'active' : ''}`, onClick: () => setDeveloperMode(!developerMode), "aria-pressed": developerMode, children: developerMode ? 'On' : 'Off' })] })] }), (0, jsx_runtime_12.jsxs)("section", { className: "settings-section support-report-section", children: [(0, jsx_runtime_12.jsx)("div", { className: "settings-section-title", children: "Support report" }), (0, jsx_runtime_12.jsxs)("div", { className: "support-report-intro", children: [(0, jsx_runtime_12.jsxs)("div", { children: [(0, jsx_runtime_12.jsx)("strong", { children: "Create diagnostic report" }), (0, jsx_runtime_12.jsx)("small", { children: "Creates a local JSON report that can be attached to a bug report. Workbench does not add project file contents and does not upload the report." })] }), (0, jsx_runtime_12.jsxs)("div", { className: "support-report-counters", "aria-label": "Current diagnostic session summary", children: [(0, jsx_runtime_12.jsxs)("span", { children: [(0, jsx_runtime_12.jsx)("strong", { children: summary.eventCount }), " events"] }), (0, jsx_runtime_12.jsxs)("span", { children: [(0, jsx_runtime_12.jsx)("strong", { children: summary.errorCount }), " errors"] }), (0, jsx_runtime_12.jsxs)("span", { children: [(0, jsx_runtime_12.jsx)("strong", { children: summary.warningCount }), " warnings"] }), (0, jsx_runtime_12.jsxs)("span", { children: [(0, jsx_runtime_12.jsx)("strong", { children: summary.metricCount }), " metrics"] }), (0, jsx_runtime_12.jsxs)("span", { children: [(0, jsx_runtime_12.jsx)("strong", { children: summary.slowOperationCount }), " slow ops"] }), (0, jsx_runtime_12.jsxs)("span", { children: [(0, jsx_runtime_12.jsx)("strong", { children: summary.traceCount }), " traces"] })] })] }), (0, jsx_runtime_12.jsxs)("label", { className: "support-report-option", children: [(0, jsx_runtime_12.jsx)("input", { type: "checkbox", checked: includeLogs, onChange: (event) => setIncludeLogs(event.target.checked) }), (0, jsx_runtime_12.jsxs)("span", { children: [(0, jsx_runtime_12.jsx)("strong", { children: "Include recent application logs" }), (0, jsx_runtime_12.jsx)("small", { children: "Structured Workbench events only; the in-memory log is capped." })] })] }), (0, jsx_runtime_12.jsxs)("label", { className: "support-report-option", children: [(0, jsx_runtime_12.jsx)("input", { type: "checkbox", checked: includePerformance, onChange: (event) => setIncludePerformance(event.target.checked) }), (0, jsx_runtime_12.jsxs)("span", { children: [(0, jsx_runtime_12.jsx)("strong", { children: "Include performance metrics" }), (0, jsx_runtime_12.jsx)("small", { children: "Unified timing summaries with p50/p95/p99, slow-operation ranking and correlated operation traces." })] })] }), (0, jsx_runtime_12.jsxs)("label", { className: "support-report-option privacy-sensitive", children: [(0, jsx_runtime_12.jsx)("input", { type: "checkbox", checked: includeProjectPaths, onChange: (event) => setIncludeProjectPaths(event.target.checked) }), (0, jsx_runtime_12.jsxs)("span", { children: [(0, jsx_runtime_12.jsx)("strong", { children: "Include project-relative paths" }), (0, jsx_runtime_12.jsx)("small", { children: "Off by default. Enable only when filenames and relative paths are useful for reproducing the issue." })] })] }), (0, jsx_runtime_12.jsxs)("div", { className: "support-report-privacy", children: [(0, jsx_runtime_12.jsx)(LucideIcon_8.LucideIcon, { name: "circle-check", size: 16 }), (0, jsx_runtime_12.jsxs)("span", { children: [(0, jsx_runtime_12.jsx)("strong", { children: "Private by default." }), " No automatic upload, no project file contents, and project-path fields are redacted unless you opt in. Review the JSON before sharing it."] })] }), (0, jsx_runtime_12.jsxs)("div", { className: "support-report-actions", children: [(0, jsx_runtime_12.jsxs)("button", { onClick: () => void copyReport(), children: [(0, jsx_runtime_12.jsx)(LucideIcon_8.LucideIcon, { name: "file-text", size: 14 }), " Copy report"] }), (0, jsx_runtime_12.jsxs)("button", { className: "primary", onClick: saveReport, children: [(0, jsx_runtime_12.jsx)(LucideIcon_8.LucideIcon, { name: "corner-down-left", size: 14 }), " Save diagnostic JSON"] })] }), reportStatus && (0, jsx_runtime_12.jsx)("small", { className: "support-report-status", role: "status", children: reportStatus })] })] })), activePage === 'about' && ((0, jsx_runtime_12.jsxs)("div", { className: "settings-page", children: [(0, jsx_runtime_12.jsxs)("div", { className: "settings-page-heading", children: [(0, jsx_runtime_12.jsx)("span", { className: "settings-page-kicker", children: "About" }), (0, jsx_runtime_12.jsx)("h4", { children: "Hytale Generator Workbench" }), (0, jsx_runtime_12.jsx)("p", { children: "Runtime identity and current distribution state." })] }), (0, jsx_runtime_12.jsx)("section", { className: "settings-section runtime-settings", children: (0, jsx_runtime_12.jsxs)("div", { className: "settings-runtime-grid settings-runtime-grid-v2", children: [(0, jsx_runtime_12.jsxs)("span", { children: [(0, jsx_runtime_12.jsx)("strong", { children: "Version" }), releaseIdentity_1.RELEASE_DISPLAY_VERSION] }), (0, jsx_runtime_12.jsxs)("span", { children: [(0, jsx_runtime_12.jsx)("strong", { children: "Host" }), desktop ? 'Tauri Desktop' : 'Browser / Dev'] }), (0, jsx_runtime_12.jsxs)("span", { children: [(0, jsx_runtime_12.jsx)("strong", { children: "Frontend" }), desktop ? 'Embedded' : 'Web / Dev'] }), (0, jsx_runtime_12.jsxs)("span", { children: [(0, jsx_runtime_12.jsx)("strong", { children: "Filesystem" }), desktop ? 'Native Rust authority' : 'Browser APIs'] }), (0, jsx_runtime_12.jsxs)("span", { children: [(0, jsx_runtime_12.jsx)("strong", { children: "TCP server" }), desktop ? 'None' : 'Depends on host'] }), (0, jsx_runtime_12.jsxs)("span", { children: [(0, jsx_runtime_12.jsx)("strong", { children: "Project source" }), workspace ? (workspace.sourceKind === 'directory' ? 'Opened folder' : 'Folder snapshot') : 'None'] }), (0, jsx_runtime_12.jsxs)("span", { children: [(0, jsx_runtime_12.jsx)("strong", { children: "Write access" }), workspace?.writable ? 'Read / Write' : workspace ? 'Read only' : '—'] }), (0, jsx_runtime_12.jsxs)("span", { children: [(0, jsx_runtime_12.jsx)("strong", { children: "Distribution" }), "Windows NSIS Setup"] }), (0, jsx_runtime_12.jsxs)("span", { children: [(0, jsx_runtime_12.jsx)("strong", { children: "Automatic updates" }), releaseIdentity_1.UPDATER_ENABLED ? 'Installed builds / user-controlled' : releaseIdentity_1.UPDATER_PREPARED ? 'Prepared / disabled' : 'Not configured'] })] }) }), (0, jsx_runtime_12.jsxs)("section", { className: "settings-section updater-settings", children: [(0, jsx_runtime_12.jsx)("div", { className: "settings-section-title", children: "Updates" }), (0, jsx_runtime_12.jsxs)("div", { className: "settings-row updater-channel-row", children: [(0, jsx_runtime_12.jsxs)("div", { children: [(0, jsx_runtime_12.jsx)("strong", { children: "Update channel" }), (0, jsx_runtime_12.jsx)("small", { children: "Stable receives release builds only. Preview may also receive prerelease builds." })] }), (0, jsx_runtime_12.jsxs)("select", { value: updateChannel, onChange: (event) => chooseUpdateChannel(event.target.value), disabled: !desktop || updateBusy, children: [(0, jsx_runtime_12.jsx)("option", { value: "stable", children: "Stable" }), (0, jsx_runtime_12.jsx)("option", { value: "preview", children: "Preview" })] })] }), (0, jsx_runtime_12.jsxs)("div", { className: "settings-row", children: [(0, jsx_runtime_12.jsxs)("div", { children: [(0, jsx_runtime_12.jsx)("strong", { children: "Check and install" }), (0, jsx_runtime_12.jsx)("small", { children: "Checks run only when you request them. The signed package is downloaded first, then native authority rechecks staged project changes immediately before installation/restart." }), updateCheck?.available && updateCheck.notes && (0, jsx_runtime_12.jsx)("small", { className: "updater-release-notes", children: updateCheck.notes }), updateStatus && (0, jsx_runtime_12.jsx)("small", { className: "support-report-status", role: "status", children: updateStatus })] }), (0, jsx_runtime_12.jsxs)("div", { className: "updater-actions", children: [(0, jsx_runtime_12.jsx)("button", { className: "settings-layout-reset", onClick: () => void checkForUpdates(), disabled: !desktop || !releaseIdentity_1.UPDATER_ENABLED || updateBusy, children: "Check" }), updateCheck?.available && updateCheck.version && ((0, jsx_runtime_12.jsx)("button", { className: "primary", onClick: () => void installCheckedUpdate(), disabled: updateBusy || pendingChangeCount > 0, children: "Install & restart" }))] })] }), pendingChangeCount > 0 && (0, jsx_runtime_12.jsxs)("div", { className: "settings-inline-note neutral", children: [(0, jsx_runtime_12.jsx)(LucideIcon_8.LucideIcon, { name: "info", size: 16 }), (0, jsx_runtime_12.jsxs)("span", { children: [pendingChangeCount, " staged project change(s) currently block update installation."] })] })] }), (0, jsx_runtime_12.jsx)("div", { className: "settings-about-note", children: "Installed NSIS builds can use signed updates after deployment is bootstrapped. The native host refuses automatic update configuration for raw/development builds. Existing pre-updater installations require one manual upgrade to the first updater-enabled release." })] }))] })] }), (0, jsx_runtime_12.jsx)("footer", { children: (0, jsx_runtime_12.jsx)("button", { className: "primary", onClick: closeSettings, disabled: updateBusy, children: updateBusy ? "Update in progress…" : "Done" }) })] }) }));
+        return ((0, jsx_runtime_12.jsx)("div", { className: "modal-backdrop", onMouseDown: closeSettings, children: (0, jsx_runtime_12.jsxs)("section", { ref: dialogRef, className: "settings-modal settings-modal-v2", role: "dialog", "aria-modal": "true", "aria-labelledby": "workbench-settings-title", tabIndex: -1, onMouseDown: (event) => event.stopPropagation(), children: [(0, jsx_runtime_12.jsxs)("header", { children: [(0, jsx_runtime_12.jsxs)("div", { children: [(0, jsx_runtime_12.jsx)("h3", { id: "workbench-settings-title", children: "Settings" }), (0, jsx_runtime_12.jsx)("small", { children: "Workbench preferences are global and do not modify the current Hytale project." })] }), (0, jsx_runtime_12.jsx)("button", { ref: closeButtonRef, onClick: closeSettings, disabled: updateBusy, "aria-label": updateBusy ? "Close settings (disabled while update is installing)" : "Close settings", children: (0, jsx_runtime_12.jsx)(LucideIcon_8.LucideIcon, { name: "x", size: 16 }) })] }), (0, jsx_runtime_12.jsxs)("div", { className: "settings-shell", children: [(0, jsx_runtime_12.jsx)("nav", { className: "settings-navigation", "aria-label": "Settings categories", children: SETTINGS_PAGES.map((page) => ((0, jsx_runtime_12.jsxs)("button", { className: activePage === page.id ? 'active' : '', onClick: () => setActivePage(page.id), "aria-current": activePage === page.id ? 'page' : undefined, children: [(0, jsx_runtime_12.jsx)("strong", { children: page.label }), (0, jsx_runtime_12.jsx)("small", { children: page.detail })] }, page.id))) }), (0, jsx_runtime_12.jsxs)("div", { className: "settings-body settings-page-body", children: [activePage === 'appearance' && ((0, jsx_runtime_12.jsxs)("div", { className: "settings-page", children: [(0, jsx_runtime_12.jsxs)("div", { className: "settings-page-heading", children: [(0, jsx_runtime_12.jsx)("span", { className: "settings-page-kicker", children: "Appearance" }), (0, jsx_runtime_12.jsx)("h4", { children: "Make the Workbench comfortable to read" }), (0, jsx_runtime_12.jsx)("p", { children: "UI scale changes the entire application surface. Windows display scaling and Project Graph camera zoom remain independent." })] }), (0, jsx_runtime_12.jsxs)("section", { className: "settings-section settings-section-spacious", children: [(0, jsx_runtime_12.jsxs)("div", { className: "settings-row settings-row-stack", children: [(0, jsx_runtime_12.jsxs)("div", { children: [(0, jsx_runtime_12.jsx)("strong", { children: "UI scale" }), (0, jsx_runtime_12.jsx)("small", { children: "Choose a fixed, tested scale. 100% is the default. Larger ranges remain intentionally unavailable until the next reflow-hardening milestone." })] }), (0, jsx_runtime_12.jsx)("div", { className: "ui-scale-picker", role: "group", "aria-label": "UI scale", children: appearancePreferences_1.WORKBENCH_UI_SCALE_STEPS.map((scale) => ((0, jsx_runtime_12.jsx)("button", { className: uiScale === scale ? 'active' : '', "aria-pressed": uiScale === scale, onClick: () => onUiScaleChange(scale), children: (0, appearancePreferences_1.formatWorkbenchUiScale)(scale) }, scale))) })] }), (0, jsx_runtime_12.jsxs)("div", { className: "settings-row", children: [(0, jsx_runtime_12.jsxs)("div", { children: [(0, jsx_runtime_12.jsx)("strong", { children: "Current scale" }), (0, jsx_runtime_12.jsx)("small", { children: "Keyboard: Ctrl/Cmd + Plus, Ctrl/Cmd + Minus, and Ctrl/Cmd + 0." })] }), (0, jsx_runtime_12.jsxs)("div", { className: "settings-value-actions", children: [(0, jsx_runtime_12.jsx)("span", { className: "settings-value-badge", children: (0, appearancePreferences_1.formatWorkbenchUiScale)(uiScale) }), (0, jsx_runtime_12.jsx)("button", { className: "settings-layout-reset", onClick: onResetUiScale, disabled: uiScale === 1, children: "Reset" })] })] }), (0, jsx_runtime_12.jsxs)("div", { className: "settings-inline-note", children: [(0, jsx_runtime_12.jsx)(LucideIcon_8.LucideIcon, { name: "circle-check", size: 16 }), (0, jsx_runtime_12.jsxs)("span", { children: [(0, jsx_runtime_12.jsx)("strong", { children: "Separate from Windows DPI." }), " The desktop host scales its WebView only; project data and Project Graph camera state are unchanged."] })] })] })] })), activePage === 'workbench' && ((0, jsx_runtime_12.jsxs)("div", { className: "settings-page", children: [(0, jsx_runtime_12.jsxs)("div", { className: "settings-page-heading", children: [(0, jsx_runtime_12.jsx)("span", { className: "settings-page-kicker", children: "Workbench" }), (0, jsx_runtime_12.jsx)("h4", { children: "Layout and pane preferences" }), (0, jsx_runtime_12.jsx)("p", { children: "These preferences belong to the application, not to a ProjectSession." })] }), (0, jsx_runtime_12.jsxs)("section", { className: "settings-section settings-section-spacious", children: [(0, jsx_runtime_12.jsxs)("div", { className: "settings-row", children: [(0, jsx_runtime_12.jsxs)("div", { children: [(0, jsx_runtime_12.jsx)("strong", { children: "Workbench layout" }), (0, jsx_runtime_12.jsxs)("small", { children: ["Sidebar: ", Math.round(sidebarWidth), " px \u00B7 split ratio: ", Math.round(splitRatio * 100), "/", 100 - Math.round(splitRatio * 100), ". Resize either divider directly; Reset restores the layout defaults."] })] }), (0, jsx_runtime_12.jsx)("button", { className: "settings-layout-reset", onClick: onResetLayout, children: "Reset" })] }), (0, jsx_runtime_12.jsxs)("div", { className: "settings-inline-note neutral", children: [(0, jsx_runtime_12.jsx)(LucideIcon_8.LucideIcon, { name: "columns-2", size: 16 }), (0, jsx_runtime_12.jsx)("span", { children: "Split mode itself remains transient. Pane-local tab references and globally unique document instances keep their existing v0.11.21 contract." })] })] })] })), activePage === 'keyboard' && ((0, jsx_runtime_12.jsxs)("div", { className: "settings-page", children: [(0, jsx_runtime_12.jsxs)("div", { className: "settings-page-heading", children: [(0, jsx_runtime_12.jsx)("span", { className: "settings-page-kicker", children: "Keyboard" }), (0, jsx_runtime_12.jsx)("h4", { children: "Global Workbench shortcuts" }), (0, jsx_runtime_12.jsx)("p", { children: "Record, unassign, or restore command shortcuts. Widget-local keyboard behavior remains local." })] }), (0, jsx_runtime_12.jsx)(HotkeySettings_1.HotkeySettings, {})] })), activePage === 'diagnostics' && ((0, jsx_runtime_12.jsxs)("div", { className: "settings-page", children: [(0, jsx_runtime_12.jsxs)("div", { className: "settings-page-heading", children: [(0, jsx_runtime_12.jsx)("span", { className: "settings-page-kicker", children: "Diagnostics" }), (0, jsx_runtime_12.jsx)("h4", { children: "Logging, support and developer details" }), (0, jsx_runtime_12.jsx)("p", { children: "Diagnostics stay local unless you explicitly copy or save a report." })] }), (0, jsx_runtime_12.jsxs)("section", { className: "settings-section", children: [(0, jsx_runtime_12.jsx)("div", { className: "settings-section-title", children: "Logging" }), (0, jsx_runtime_12.jsxs)("div", { className: "settings-row", children: [(0, jsx_runtime_12.jsxs)("div", { children: [(0, jsx_runtime_12.jsx)("strong", { children: "Detailed logging" }), (0, jsx_runtime_12.jsx)("small", { children: "Records additional structured diagnostic events in memory and, on desktop, into the bounded persistent log. Logs stay local and are never uploaded automatically." })] }), (0, jsx_runtime_12.jsx)("button", { className: `settings-toggle ${detailedLogging ? 'active' : ''}`, onClick: () => setDetailedLogging(!detailedLogging), "aria-pressed": detailedLogging, children: detailedLogging ? 'On' : 'Off' })] }), (0, jsx_runtime_12.jsxs)("div", { className: "settings-row", children: [(0, jsx_runtime_12.jsxs)("div", { children: [(0, jsx_runtime_12.jsx)("strong", { children: "Persistent application log" }), (0, jsx_runtime_12.jsx)("small", { children: desktop ? `JSONL in the native app-log directory · ${persistentLog.retainedFiles} files max · ${Math.round(persistentLog.maxFileBytes / (1024 * 1024))} MiB each. Warnings, errors and lifecycle events are kept by default; Detailed logging adds the full structured event stream. Project paths are always redacted. Raw error text and stacks are omitted.` : 'Available in the Tauri desktop host. Browser/dev sessions keep the existing in-memory diagnostics only.' }), (0, jsx_runtime_12.jsx)("small", { children: "Clear logs removes disk history. Current session events stay in memory until restart." }), persistentLog.lastError && (0, jsx_runtime_12.jsxs)("small", { className: "settings-warning", children: ["File sink unavailable for this session: ", persistentLog.lastError] }), persistentLogStatus && (0, jsx_runtime_12.jsx)("small", { className: "support-report-status", role: "status", children: persistentLogStatus })] }), (0, jsx_runtime_12.jsx)("button", { className: "settings-layout-reset", onClick: () => void clearPersistentLogs(), disabled: !desktop, children: "Clear logs" })] }), (0, jsx_runtime_12.jsxs)("div", { className: "settings-row", children: [(0, jsx_runtime_12.jsxs)("div", { children: [(0, jsx_runtime_12.jsx)("strong", { children: "Developer mode" }), (0, jsx_runtime_12.jsx)("small", { children: "Shows runtime and diagnostic details inside the release app. This does not start Node, hot reload, or a localhost development server." })] }), (0, jsx_runtime_12.jsx)("button", { className: `settings-toggle ${developerMode ? 'active' : ''}`, onClick: () => setDeveloperMode(!developerMode), "aria-pressed": developerMode, children: developerMode ? 'On' : 'Off' })] })] }), (0, jsx_runtime_12.jsxs)("section", { className: "settings-section support-report-section", children: [(0, jsx_runtime_12.jsx)("div", { className: "settings-section-title", children: "Support report" }), (0, jsx_runtime_12.jsxs)("div", { className: "support-report-intro", children: [(0, jsx_runtime_12.jsxs)("div", { children: [(0, jsx_runtime_12.jsx)("strong", { children: "Create diagnostic report" }), (0, jsx_runtime_12.jsx)("small", { children: "Creates a local JSON report that can be attached to a bug report. Reports contain operation metadata and error categories, with raw error text and stacks omitted. Workbench does not add project file contents and does not upload the report." })] }), (0, jsx_runtime_12.jsxs)("div", { className: "support-report-counters", "aria-label": "Current diagnostic session summary", children: [(0, jsx_runtime_12.jsxs)("span", { children: [(0, jsx_runtime_12.jsx)("strong", { children: summary.eventCount }), " events"] }), (0, jsx_runtime_12.jsxs)("span", { children: [(0, jsx_runtime_12.jsx)("strong", { children: summary.errorCount }), " errors"] }), (0, jsx_runtime_12.jsxs)("span", { children: [(0, jsx_runtime_12.jsx)("strong", { children: summary.warningCount }), " warnings"] }), (0, jsx_runtime_12.jsxs)("span", { children: [(0, jsx_runtime_12.jsx)("strong", { children: summary.metricCount }), " metrics"] }), (0, jsx_runtime_12.jsxs)("span", { children: [(0, jsx_runtime_12.jsx)("strong", { children: summary.slowOperationCount }), " slow ops"] }), (0, jsx_runtime_12.jsxs)("span", { children: [(0, jsx_runtime_12.jsx)("strong", { children: summary.traceCount }), " traces"] })] })] }), (0, jsx_runtime_12.jsxs)("label", { className: "support-report-option", children: [(0, jsx_runtime_12.jsx)("input", { type: "checkbox", checked: includeLogs, onChange: (event) => setIncludeLogs(event.target.checked) }), (0, jsx_runtime_12.jsxs)("span", { children: [(0, jsx_runtime_12.jsx)("strong", { children: "Include recent application logs" }), (0, jsx_runtime_12.jsx)("small", { children: "Structured Workbench events only; the in-memory log is capped." })] })] }), (0, jsx_runtime_12.jsxs)("label", { className: "support-report-option", children: [(0, jsx_runtime_12.jsx)("input", { type: "checkbox", checked: includePerformance, onChange: (event) => setIncludePerformance(event.target.checked) }), (0, jsx_runtime_12.jsxs)("span", { children: [(0, jsx_runtime_12.jsx)("strong", { children: "Include performance metrics" }), (0, jsx_runtime_12.jsx)("small", { children: "Unified timing summaries with p50/p95/p99, slow-operation ranking and correlated operation traces." })] })] }), (0, jsx_runtime_12.jsxs)("label", { className: "support-report-option privacy-sensitive", children: [(0, jsx_runtime_12.jsx)("input", { type: "checkbox", checked: includeProjectPaths, onChange: (event) => setIncludeProjectPaths(event.target.checked) }), (0, jsx_runtime_12.jsxs)("span", { children: [(0, jsx_runtime_12.jsx)("strong", { children: "Include project-relative paths" }), (0, jsx_runtime_12.jsx)("small", { children: "Off by default. Enable only when filenames and relative paths are useful for reproducing the issue." })] })] }), (0, jsx_runtime_12.jsxs)("div", { className: "support-report-privacy", children: [(0, jsx_runtime_12.jsx)(LucideIcon_8.LucideIcon, { name: "circle-check", size: 16 }), (0, jsx_runtime_12.jsxs)("span", { children: [(0, jsx_runtime_12.jsx)("strong", { children: "Private by default." }), " No automatic upload, no project file contents, and project-path fields are redacted unless you opt in. Review the JSON before sharing it."] })] }), (0, jsx_runtime_12.jsxs)("div", { className: "support-report-actions", children: [(0, jsx_runtime_12.jsxs)("button", { onClick: () => void copyReport(), children: [(0, jsx_runtime_12.jsx)(LucideIcon_8.LucideIcon, { name: "file-text", size: 14 }), " Copy report"] }), (0, jsx_runtime_12.jsxs)("button", { className: "primary", disabled: reportBusy, onClick: () => void saveReport(), children: [(0, jsx_runtime_12.jsx)(LucideIcon_8.LucideIcon, { name: "corner-down-left", size: 14 }), " Save diagnostic JSON"] })] }), reportStatus && (0, jsx_runtime_12.jsx)("small", { className: "support-report-status", role: "status", children: reportStatus })] })] })), activePage === 'about' && ((0, jsx_runtime_12.jsxs)("div", { className: "settings-page", children: [(0, jsx_runtime_12.jsxs)("div", { className: "settings-page-heading", children: [(0, jsx_runtime_12.jsx)("span", { className: "settings-page-kicker", children: "About" }), (0, jsx_runtime_12.jsx)("h4", { children: "Hytale Generator Workbench" }), (0, jsx_runtime_12.jsx)("p", { children: "Runtime identity and current distribution state." })] }), (0, jsx_runtime_12.jsx)("section", { className: "settings-section runtime-settings", children: (0, jsx_runtime_12.jsxs)("div", { className: "settings-runtime-grid settings-runtime-grid-v2", children: [(0, jsx_runtime_12.jsxs)("span", { children: [(0, jsx_runtime_12.jsx)("strong", { children: "Version" }), releaseIdentity_1.RELEASE_DISPLAY_VERSION] }), (0, jsx_runtime_12.jsxs)("span", { children: [(0, jsx_runtime_12.jsx)("strong", { children: "Host" }), desktop ? 'Tauri Desktop' : 'Browser / Dev'] }), (0, jsx_runtime_12.jsxs)("span", { children: [(0, jsx_runtime_12.jsx)("strong", { children: "Frontend" }), desktop ? 'Embedded' : 'Web / Dev'] }), (0, jsx_runtime_12.jsxs)("span", { children: [(0, jsx_runtime_12.jsx)("strong", { children: "Filesystem" }), desktop ? 'Native Rust authority' : 'Browser APIs'] }), (0, jsx_runtime_12.jsxs)("span", { children: [(0, jsx_runtime_12.jsx)("strong", { children: "TCP server" }), desktop ? 'None' : 'Depends on host'] }), (0, jsx_runtime_12.jsxs)("span", { children: [(0, jsx_runtime_12.jsx)("strong", { children: "Project source" }), workspace ? (workspace.sourceKind === 'directory' ? 'Opened folder' : 'Folder snapshot') : 'None'] }), (0, jsx_runtime_12.jsxs)("span", { children: [(0, jsx_runtime_12.jsx)("strong", { children: "Write access" }), workspace?.writable ? 'Read / Write' : workspace ? 'Read only' : '—'] }), (0, jsx_runtime_12.jsxs)("span", { children: [(0, jsx_runtime_12.jsx)("strong", { children: "Distribution" }), "Windows NSIS Setup"] }), (0, jsx_runtime_12.jsxs)("span", { children: [(0, jsx_runtime_12.jsx)("strong", { children: "Automatic updates" }), releaseIdentity_1.UPDATER_ENABLED ? 'Installed builds / user-controlled' : releaseIdentity_1.UPDATER_PREPARED ? 'Prepared / disabled' : 'Not configured'] })] }) }), (0, jsx_runtime_12.jsxs)("section", { className: "settings-section updater-settings", children: [(0, jsx_runtime_12.jsx)("div", { className: "settings-section-title", children: "Updates" }), (0, jsx_runtime_12.jsxs)("div", { className: "settings-row updater-channel-row", children: [(0, jsx_runtime_12.jsxs)("div", { children: [(0, jsx_runtime_12.jsx)("strong", { children: "Update channel" }), (0, jsx_runtime_12.jsx)("small", { children: "Stable receives release builds only. Preview may also receive prerelease builds." })] }), (0, jsx_runtime_12.jsxs)("select", { value: updateChannel, onChange: (event) => chooseUpdateChannel(event.target.value), disabled: !desktop || updateBusy, children: [(0, jsx_runtime_12.jsx)("option", { value: "stable", children: "Stable" }), (0, jsx_runtime_12.jsx)("option", { value: "preview", children: "Preview" })] })] }), (0, jsx_runtime_12.jsxs)("div", { className: "settings-row", children: [(0, jsx_runtime_12.jsxs)("div", { children: [(0, jsx_runtime_12.jsx)("strong", { children: "Check and install" }), (0, jsx_runtime_12.jsx)("small", { children: "Checks run only when you request them. The signed package is downloaded first, then native authority rechecks staged project changes immediately before installation/restart." }), updateCheck?.available && updateCheck.notes && (0, jsx_runtime_12.jsx)("small", { className: "updater-release-notes", children: updateCheck.notes }), updateStatus && (0, jsx_runtime_12.jsx)("small", { className: "support-report-status", role: "status", children: updateStatus })] }), (0, jsx_runtime_12.jsxs)("div", { className: "updater-actions", children: [(0, jsx_runtime_12.jsx)("button", { className: "settings-layout-reset", onClick: () => void checkForUpdates(), disabled: !desktop || !releaseIdentity_1.UPDATER_ENABLED || updateBusy, children: "Check" }), updateCheck?.available && updateCheck.version && ((0, jsx_runtime_12.jsx)("button", { className: "primary", onClick: () => void installCheckedUpdate(), disabled: updateBusy || pendingChangeCount > 0, children: "Install & restart" }))] })] }), pendingChangeCount > 0 && (0, jsx_runtime_12.jsxs)("div", { className: "settings-inline-note neutral", children: [(0, jsx_runtime_12.jsx)(LucideIcon_8.LucideIcon, { name: "info", size: 16 }), (0, jsx_runtime_12.jsxs)("span", { children: [pendingChangeCount, " staged project change(s) currently block update installation."] })] })] }), (0, jsx_runtime_12.jsx)("div", { className: "settings-about-note", children: "Installed NSIS builds can use signed updates after deployment is bootstrapped. The native host refuses automatic update configuration for raw/development builds. Existing pre-updater installations require one manual upgrade to the first updater-enabled release." })] }))] })] }), (0, jsx_runtime_12.jsx)("footer", { children: (0, jsx_runtime_12.jsx)("button", { className: "primary", onClick: closeSettings, disabled: updateBusy, children: updateBusy ? "Update in progress…" : "Done" }) })] }) }));
     }
 });
 define("components/UniversalTooltip", ["require", "exports", "react/jsx-runtime", "react"], function (require, exports, jsx_runtime_13, react_13) {
@@ -26979,7 +27394,7 @@ define("features/visual/visualLayoutUi", ["require", "exports", "core/index"], f
         return 'Preserves the author sketch while cleaning spacing, routing, rows, columns and pixel alignment.';
     }
 });
-define("features/visual/VisualLayoutSidebar", ["require", "exports", "react/jsx-runtime", "react", "components/ToolSidebar", "store", "features/visual/visualLayoutUi"], function (require, exports, jsx_runtime_19, react_17, ToolSidebar_2, store_12, visualLayoutUi_1) {
+define("features/visual/VisualLayoutSidebar", ["require", "exports", "react/jsx-runtime", "react", "core/index", "components/ToolSidebar", "store", "features/visual/visualLayoutUi"], function (require, exports, jsx_runtime_19, react_17, core_12, ToolSidebar_2, store_12, visualLayoutUi_1) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.VisualLayoutSidebar = VisualLayoutSidebar;
@@ -27002,7 +27417,7 @@ define("features/visual/VisualLayoutSidebar", ["require", "exports", "react/jsx-
         const allSelected = eligibleIds.length > 0 && eligibleIds.length === selectedIds.length && eligibleIds.every((id) => selectedIds.includes(id));
         const setSpacingPreset = (preset) => setSettings({ spacingPreset: preset, ...visualLayoutUi_1.spacingDefaults[preset] });
         const setGap = (key, value) => {
-            const next = Math.max(0, Math.round(Number.isFinite(value) ? value : 0));
+            const next = Math.min(core_12.MAX_LAYOUT_SETTING, Math.max(0, Math.round(Number.isFinite(value) ? value : 0)));
             setSettings({ [key]: next, spacingPreset: 'custom' });
         };
         if (!project)
@@ -27011,7 +27426,7 @@ define("features/visual/VisualLayoutSidebar", ["require", "exports", "react/jsx-
                                 ['normalize', 'Normalize', 'Root offset only'],
                                 ['author-normalize', 'Author Normalize', 'Preserve & clean'],
                                 ['dag-rebuild', 'DAG Rebuild', 'Topology rebuild'],
-                            ].map(([strategy, label, detail]) => ((0, jsx_runtime_19.jsxs)("button", { className: settings.strategy === strategy ? 'active' : '', onClick: () => setSettings({ strategy }), children: [(0, jsx_runtime_19.jsx)("strong", { children: label }), (0, jsx_runtime_19.jsx)("small", { children: detail })] }, strategy))) }), (0, jsx_runtime_19.jsx)("small", { className: "visual-layout-sidebar-help", children: (0, visualLayoutUi_1.strategyDescription)(settings.strategy) })] }), settings.strategy !== 'normalize' && ((0, jsx_runtime_19.jsxs)("section", { className: "visual-layout-sidebar-section", children: [(0, jsx_runtime_19.jsx)("div", { className: "visual-layout-sidebar-section-title", children: "Spacing" }), (0, jsx_runtime_19.jsx)("div", { className: "visual-layout-sidebar-segments", role: "group", "aria-label": "Spacing preset", children: ['compact', 'normal', 'spacious'].map((preset) => (0, jsx_runtime_19.jsx)("button", { className: settings.spacingPreset === preset ? 'active' : '', onClick: () => setSpacingPreset(preset), children: (0, visualLayoutUi_1.presetLabel)(preset) }, preset)) }), (0, jsx_runtime_19.jsxs)("div", { className: "visual-layout-sidebar-number-grid", children: [(0, jsx_runtime_19.jsxs)("label", { children: [(0, jsx_runtime_19.jsx)("span", { children: "Horizontal" }), (0, jsx_runtime_19.jsx)("input", { type: "number", min: "0", value: settings.horizontalGap, onChange: (event) => setGap('horizontalGap', Number(event.target.value)) })] }), (0, jsx_runtime_19.jsxs)("label", { children: [(0, jsx_runtime_19.jsx)("span", { children: "Vertical" }), (0, jsx_runtime_19.jsx)("input", { type: "number", min: "0", value: settings.verticalGap, onChange: (event) => setGap('verticalGap', Number(event.target.value)) })] })] }), settings.strategy === 'author-normalize' && ((0, jsx_runtime_19.jsxs)("label", { className: "visual-layout-sidebar-field", children: [(0, jsx_runtime_19.jsx)("span", { children: "Connection plane tolerance" }), (0, jsx_runtime_19.jsx)("input", { type: "number", min: "0", value: settings.alignmentTolerance, onChange: (event) => setGap('alignmentTolerance', Number(event.target.value)) })] })), settings.strategy === 'dag-rebuild' && ((0, jsx_runtime_19.jsxs)(jsx_runtime_19.Fragment, { children: [(0, jsx_runtime_19.jsx)("div", { className: "visual-layout-sidebar-section-title inline", children: "Branches" }), (0, jsx_runtime_19.jsx)("div", { className: "visual-layout-sidebar-segments branches", role: "group", "aria-label": "Branch direction", children: [
+                            ].map(([strategy, label, detail]) => ((0, jsx_runtime_19.jsxs)("button", { className: settings.strategy === strategy ? 'active' : '', onClick: () => setSettings({ strategy }), children: [(0, jsx_runtime_19.jsx)("strong", { children: label }), (0, jsx_runtime_19.jsx)("small", { children: detail })] }, strategy))) }), (0, jsx_runtime_19.jsx)("small", { className: "visual-layout-sidebar-help", children: (0, visualLayoutUi_1.strategyDescription)(settings.strategy) })] }), settings.strategy !== 'normalize' && ((0, jsx_runtime_19.jsxs)("section", { className: "visual-layout-sidebar-section", children: [(0, jsx_runtime_19.jsx)("div", { className: "visual-layout-sidebar-section-title", children: "Spacing" }), (0, jsx_runtime_19.jsx)("div", { className: "visual-layout-sidebar-segments", role: "group", "aria-label": "Spacing preset", children: ['compact', 'normal', 'spacious'].map((preset) => (0, jsx_runtime_19.jsx)("button", { className: settings.spacingPreset === preset ? 'active' : '', onClick: () => setSpacingPreset(preset), children: (0, visualLayoutUi_1.presetLabel)(preset) }, preset)) }), (0, jsx_runtime_19.jsxs)("div", { className: "visual-layout-sidebar-number-grid", children: [(0, jsx_runtime_19.jsxs)("label", { children: [(0, jsx_runtime_19.jsx)("span", { children: "Horizontal" }), (0, jsx_runtime_19.jsx)("input", { type: "number", min: "0", max: core_12.MAX_LAYOUT_SETTING, value: settings.horizontalGap, onChange: (event) => setGap('horizontalGap', Number(event.target.value)) })] }), (0, jsx_runtime_19.jsxs)("label", { children: [(0, jsx_runtime_19.jsx)("span", { children: "Vertical" }), (0, jsx_runtime_19.jsx)("input", { type: "number", min: "0", max: core_12.MAX_LAYOUT_SETTING, value: settings.verticalGap, onChange: (event) => setGap('verticalGap', Number(event.target.value)) })] })] }), settings.strategy === 'author-normalize' && ((0, jsx_runtime_19.jsxs)("label", { className: "visual-layout-sidebar-field", children: [(0, jsx_runtime_19.jsx)("span", { children: "Connection plane tolerance" }), (0, jsx_runtime_19.jsx)("input", { type: "number", min: "0", max: core_12.MAX_LAYOUT_SETTING, value: settings.alignmentTolerance, onChange: (event) => setGap('alignmentTolerance', Number(event.target.value)) })] })), settings.strategy === 'dag-rebuild' && ((0, jsx_runtime_19.jsxs)(jsx_runtime_19.Fragment, { children: [(0, jsx_runtime_19.jsx)("div", { className: "visual-layout-sidebar-section-title inline", children: "Branches" }), (0, jsx_runtime_19.jsx)("div", { className: "visual-layout-sidebar-segments branches", role: "group", "aria-label": "Branch direction", children: [
                                         ['auto', 'Auto'], ['down', 'Down'], ['up', 'Up'], ['type', 'Type'],
                                     ].map(([direction, label]) => (0, jsx_runtime_19.jsx)("button", { className: settings.dagBranchDirection === direction ? 'active' : '', onClick: () => setSettings({ dagBranchDirection: direction }), children: label }, direction)) })] }))] })), (0, jsx_runtime_19.jsxs)("section", { className: "visual-layout-sidebar-section", children: [(0, jsx_runtime_19.jsx)("div", { className: "visual-layout-sidebar-section-title", children: "Advanced" }), (0, jsx_runtime_19.jsx)(SettingToggle, { label: "Live nodes", detail: settings.strategy === 'normalize' ? 'Normalize translates all positioned metadata.' : 'Include positioned live nodes.', checked: settings.includeLive, disabled: settings.strategy === 'normalize', onChange: (includeLive) => setSettings({ includeLive }) }), (0, jsx_runtime_19.jsx)(SettingToggle, { label: "Floating geometry", detail: "Include floating-node geometry in coverage counters.", checked: settings.includeFloating, onChange: (includeFloating) => setSettings({ includeFloating }) }), (0, jsx_runtime_19.jsxs)("label", { className: "visual-layout-sidebar-field", children: [(0, jsx_runtime_19.jsx)("span", { children: "Floater handling" }), (0, jsx_runtime_19.jsxs)("select", { disabled: settings.strategy === 'normalize', value: settings.floaterMode, onChange: (event) => {
                                         const floaterMode = event.target.value;
@@ -27129,7 +27544,7 @@ define("components/WorkbenchSplitter", ["require", "exports", "react/jsx-runtime
             }, children: (0, jsx_runtime_21.jsx)("span", { "aria-hidden": "true" }) }));
     }
 });
-define("features/inspector/queryTabs", ["require", "exports", "core/index", "features/inspector/visibility"], function (require, exports, core_12, visibility_2) {
+define("features/inspector/queryTabs", ["require", "exports", "core/index", "features/inspector/visibility"], function (require, exports, core_13, visibility_2) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.DIAGNOSTIC_ORDER = void 0;
@@ -27196,7 +27611,7 @@ define("features/inspector/queryTabs", ["require", "exports", "core/index", "fea
                         fileId: occurrence.fileId,
                         nodeId: occurrence.nodeId,
                         location: occurrence.location,
-                        matchedFieldPaths: [(0, core_12.jsonPathKey)(occurrence.jsonPath)],
+                        matchedFieldPaths: [(0, core_13.jsonPathKey)(occurrence.jsonPath)],
                     });
                 }
                 continue;
@@ -27224,7 +27639,7 @@ define("features/inspector/queryTabs", ["require", "exports", "core/index", "fea
                 fileId: change.fileId,
                 nodeId: change.nodeId,
                 location: change.location,
-                matchedFieldPaths: [(0, core_12.jsonPathKey)(change.jsonPath)],
+                matchedFieldPaths: [(0, core_13.jsonPathKey)(change.jsonPath)],
             });
         }
         return [...merged.values()];
@@ -27254,7 +27669,7 @@ define("features/inspector/queryTabs", ["require", "exports", "core/index", "fea
         if (!match.matchedFieldPaths.length)
             return true;
         const matched = new Set(match.matchedFieldPaths);
-        return node.fields.some((field) => matched.has((0, core_12.jsonPathKey)(field.jsonPath)) && (0, visibility_2.fieldVisible)(field, filters));
+        return node.fields.some((field) => matched.has((0, core_13.jsonPathKey)(field.jsonPath)) && (0, visibility_2.fieldVisible)(field, filters));
     }
     function queryTabVisibleMatches(project, tab, changeSet, filters) {
         return queryTabMatches(project, tab, changeSet).flatMap((match) => {
@@ -27279,7 +27694,7 @@ define("features/inspector/queryTabs", ["require", "exports", "core/index", "fea
         });
     }
 });
-define("components/FileTabs", ["require", "exports", "react/jsx-runtime", "react", "core/index", "features/inspector/queryTabs", "store", "features/fileState", "components/FileStateIndicators", "components/LucideIcon"], function (require, exports, jsx_runtime_22, react_19, core_13, queryTabs_1, store_14, fileState_3, FileStateIndicators_2, LucideIcon_13) {
+define("components/FileTabs", ["require", "exports", "react/jsx-runtime", "react", "core/index", "features/inspector/queryTabs", "store", "features/fileState", "components/FileStateIndicators", "components/LucideIcon"], function (require, exports, jsx_runtime_22, react_19, core_14, queryTabs_1, store_14, fileState_3, FileStateIndicators_2, LucideIcon_13) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.workbenchTabDomId = workbenchTabDomId;
@@ -27307,7 +27722,7 @@ define("components/FileTabs", ["require", "exports", "react/jsx-runtime", "react
             return 'WorldGen Performance';
         if (tab.canonical)
             return 'Project Graph';
-        const root = (0, core_13.projectGraphRoots)(project).find((item) => item.path === tab.settings.selectedRootPath);
+        const root = (0, core_14.projectGraphRoots)(project).find((item) => item.path === tab.settings.selectedRootPath);
         return `Project Graph · ${root?.label ?? 'View'}`;
     }
     function workbenchTabDomId(paneId, tabId) {
@@ -27425,7 +27840,7 @@ define("components/FileTabs", ["require", "exports", "react/jsx-runtime", "react
                     }) }), menu && menuTab && ((0, jsx_runtime_22.jsxs)("div", { ref: menuRef, className: "tab-context-menu", style: { left: menu.x, top: menu.y }, onPointerDown: (event) => event.stopPropagation(), role: "menu", "aria-label": `Tab actions for ${tabTitle(menuTab, project)}`, children: [(0, jsx_runtime_22.jsx)("strong", { children: tabTitle(menuTab, project) }), (0, jsx_runtime_22.jsx)("button", { role: "menuitem", onClick: () => { closeTab(menuTab.id, paneId); setMenu(undefined); }, children: "Close" }), (0, jsx_runtime_22.jsx)("button", { role: "menuitem", disabled: paneTabs.length <= 1, onClick: () => { closeOtherTabs(menuTab.id, paneId); setMenu(undefined); }, children: "Close Others" }), (0, jsx_runtime_22.jsx)("button", { role: "menuitem", disabled: menuIndex < 0 || menuIndex === paneTabs.length - 1, onClick: () => { closeTabsToRight(menuTab.id, paneId); setMenu(undefined); }, children: "Close to the Right" }), (0, jsx_runtime_22.jsx)("button", { role: "menuitem", onClick: () => { closeAllTabs(paneId); setMenu(undefined); }, children: "Close All" }), menuPath && (0, jsx_runtime_22.jsx)("div", { className: "tab-context-separator" }), menuPath && (0, jsx_runtime_22.jsx)("button", { role: "menuitem", onClick: () => void copyPath(), children: "Copy Relative Path" }), menuFile && (0, jsx_runtime_22.jsx)("button", { role: "menuitem", onClick: () => { openSourceTab(menuFile.path); setMenu(undefined); }, children: "Open Read-only Source" }), menuFile && (0, jsx_runtime_22.jsx)("button", { role: "menuitem", onClick: () => { revealFileInExplorer(menuFile.id); setMenu(undefined); }, children: "Reveal in Explorer" }), menuTab.kind === 'source' && (0, jsx_runtime_22.jsx)("button", { role: "menuitem", onClick: () => { revealPathInExplorer(menuTab.path); setMenu(undefined); }, children: "Reveal in Explorer" })] }))] }));
     }
 });
-define("components/FilterBar", ["require", "exports", "react/jsx-runtime", "workbench/WorkbenchPaneContext", "react", "core/index", "features/inspector/visibility", "features/inspector/queryTabs", "store", "components/LucideIcon"], function (require, exports, jsx_runtime_23, WorkbenchPaneContext_2, react_20, core_14, visibility_3, queryTabs_2, store_15, LucideIcon_14) {
+define("components/FilterBar", ["require", "exports", "react/jsx-runtime", "workbench/WorkbenchPaneContext", "react", "core/index", "features/inspector/visibility", "features/inspector/queryTabs", "store", "components/LucideIcon"], function (require, exports, jsx_runtime_23, WorkbenchPaneContext_2, react_20, core_15, visibility_3, queryTabs_2, store_15, LucideIcon_14) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.FilterBar = FilterBar;
@@ -27494,10 +27909,10 @@ define("components/FilterBar", ["require", "exports", "react/jsx-runtime", "work
             if (!project)
                 return [];
             // Stable per file/search snapshot: quick slots do not reshuffle when a filter button is toggled.
-            return (0, core_14.getAdaptiveQuickFieldStats)(project, contextNodeRefs(project, activeTab, changeSet), true, 2, 1);
+            return (0, core_15.getAdaptiveQuickFieldStats)(project, contextNodeRefs(project, activeTab, changeSet), true, 2, 1);
         }, [project, activeTabId, activeTab, changeSet]);
         const quickFields = quickStats.map((item) => item.key);
-        const pickerStats = (0, react_20.useMemo)(() => project ? (0, core_14.getScopedFieldStats)(project, {
+        const pickerStats = (0, react_20.useMemo)(() => project ? (0, core_15.getScopedFieldStats)(project, {
             workspace: filters.workspace,
             live: filters.live,
             floating: filters.floating,
@@ -27543,7 +27958,7 @@ define("components/ExplorerSelectionDialog", ["require", "exports", "react/jsx-r
                             } }) }), (0, jsx_runtime_24.jsxs)("footer", { children: [(0, jsx_runtime_24.jsx)("span", { children: renderSummary ? renderSummary(draftSelectedFileIds) : (0, jsx_runtime_24.jsxs)(jsx_runtime_24.Fragment, { children: [(0, jsx_runtime_24.jsx)("strong", { children: draftSelectedFileIds.length }), " files selected"] }) }), (0, jsx_runtime_24.jsxs)("div", { children: [(0, jsx_runtime_24.jsx)("button", { onClick: onCancel, children: "Cancel" }), (0, jsx_runtime_24.jsx)("button", { className: "primary", onClick: commit, children: confirmLabel })] })] })] }) }));
     }
 });
-define("features/visual/VisualLayoutTab", ["require", "exports", "react/jsx-runtime", "react", "core/index", "components/ExplorerSelectionDialog", "support/performanceTracing", "features/visual/visualLayoutUi", "store"], function (require, exports, jsx_runtime_25, react_22, core_15, ExplorerSelectionDialog_1, performanceTracing_9, visualLayoutUi_2, store_16) {
+define("features/visual/VisualLayoutTab", ["require", "exports", "react/jsx-runtime", "support/userFacingError", "react", "core/index", "components/ExplorerSelectionDialog", "support/performanceTracing", "features/visual/visualLayoutUi", "store"], function (require, exports, jsx_runtime_25, userFacingError_3, react_22, core_16, ExplorerSelectionDialog_1, performanceTracing_9, visualLayoutUi_2, store_16) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.VisualLayoutTab = VisualLayoutTab;
@@ -27577,13 +27992,14 @@ define("features/visual/VisualLayoutTab", ["require", "exports", "react/jsx-runt
         const [proposalKey, setProposalKey] = (0, react_22.useState)('');
         const [proposalSettings, setProposalSettings] = (0, react_22.useState)();
         const [stageStatus, setStageStatus] = (0, react_22.useState)();
+        const [operationError, setOperationError] = (0, react_22.useState)();
         const [filePickerOpen, setFilePickerOpen] = (0, react_22.useState)(false);
         const lastGenerateRequestRef = (0, react_22.useRef)(generateRequest);
         const lastFilePickerRequestRef = (0, react_22.useRef)(filePickerRequest);
         const fileRows = (0, react_22.useMemo)(() => project.files.map((file) => ({ file, ...(0, visualLayoutUi_2.graphFileInfo)(file) })), [project]);
         const eligibleRows = fileRows.filter((row) => row.eligible);
         const selectedFiles = visualSelectedFileIds.map((id) => project.fileMap.get(id)).filter((file) => Boolean(file));
-        const summary = (0, react_22.useMemo)(() => (0, core_15.summarizeGeometry)(selectedFiles, settings.includeLive, settings.includeFloating), [selectedFiles, settings.includeLive, settings.includeFloating]);
+        const summary = (0, react_22.useMemo)(() => (0, core_16.summarizeGeometry)(selectedFiles, settings.includeLive, settings.includeFloating), [selectedFiles, settings.includeLive, settings.includeFloating]);
         const currentProposalKey = (0, react_22.useMemo)(() => JSON.stringify({
             projectVersion,
             fileIds: [...visualSelectedFileIds].sort(),
@@ -27614,6 +28030,7 @@ define("features/visual/VisualLayoutTab", ["require", "exports", "react/jsx-runt
             if (!selectedFiles.length)
                 return;
             setStageStatus(undefined);
+            setOperationError(undefined);
             const operation = (0, performanceTracing_9.beginPerformanceOperation)('layout.generate', {
                 data: {
                     strategy: settings.strategy,
@@ -27631,7 +28048,7 @@ define("features/visual/VisualLayoutTab", ["require", "exports", "react/jsx-runt
                     includeLive: settings.strategy === 'normalize' ? true : settings.includeLive,
                     floaterMode: settings.strategy === 'normalize' ? 'ignore' : settings.floaterMode,
                 }));
-                const next = operation.phase('proposal-build', () => (0, core_15.buildLayoutProposal)(selectedFiles, layoutSettings), { fileCount: selectedFiles.length });
+                const next = operation.phase('proposal-build', () => (0, core_16.buildLayoutProposal)(selectedFiles, layoutSettings), { fileCount: selectedFiles.length });
                 operation.phase('result.materialize', () => {
                     layoutRenderStartedRef.current = performance.now();
                     layoutRenderTraceRef.current = operation.traceId;
@@ -27650,22 +28067,25 @@ define("features/visual/VisualLayoutTab", ["require", "exports", "react/jsx-runt
             }
             catch (error) {
                 operation.fail(error);
-                throw error;
+                setOperationError((0, userFacingError_3.userFacingError)(error));
+                setProposal(undefined);
             }
         };
         const stageProposal = () => {
             if (!proposal || proposal.blocked || stale || !editing)
                 return;
+            setOperationError(undefined);
             const operation = (0, performanceTracing_9.beginPerformanceOperation)('layout.stage', { data: { patchCount: proposal.patches.length, fileCount: proposal.files.length } });
             try {
-                const next = operation.phase('changeset.apply', () => (0, core_15.stageLayoutProposal)(changeSet, proposal));
+                const next = operation.phase('changeset.apply', () => (0, core_16.stageLayoutProposal)(changeSet, proposal));
                 operation.phase('state.commit', () => setChangeSet(next));
                 setStageStatus(`Staged ${proposal.patches.length} layout value change(s). Existing staged layout values on the same JSON paths were replaced.`);
                 operation.end();
             }
             catch (error) {
                 operation.fail(error);
-                throw error;
+                setOperationError((0, userFacingError_3.userFacingError)(error));
+                setProposal(undefined);
             }
         };
         const eligibleIds = eligibleRows.map((row) => row.file.id);
@@ -27688,7 +28108,7 @@ define("features/visual/VisualLayoutTab", ["require", "exports", "react/jsx-runt
             attachmentHits: totals.attachmentHits + file.metrics.attachmentEdgeNodeIntersectionsAfter,
             crossings: totals.crossings + file.metrics.edgeEdgeCrossingsAfter,
         }), { overlaps: 0, flowHits: 0, attachmentHits: 0, crossings: 0 });
-        return ((0, jsx_runtime_25.jsxs)("div", { className: "visual-layout-tab visual-layout-results", children: [(0, jsx_runtime_25.jsx)("div", { className: "visual-hero compact visual-results-hero", children: (0, jsx_runtime_25.jsxs)("div", { children: [(0, jsx_runtime_25.jsxs)("div", { className: "heading-line", children: [(0, jsx_runtime_25.jsx)("h2", { children: "Layout results" }), (0, jsx_runtime_25.jsx)("span", { className: "virtual-tab-badge visual", children: "Tool" })] }), (0, jsx_runtime_25.jsx)("p", { children: "Scope, strategy and generation live in the Layout sidebar. Review geometry and proposal safety here, then stage only when the result is ready." })] }) }), (0, jsx_runtime_25.jsxs)("details", { className: "visual-card geometry-card visual-aux-card", children: [(0, jsx_runtime_25.jsxs)("summary", { className: "visual-card-summary", children: [(0, jsx_runtime_25.jsxs)("span", { children: [(0, jsx_runtime_25.jsx)("strong", { children: "Geometry coverage" }), (0, jsx_runtime_25.jsxs)("small", { children: [summary.known, "/", summary.positioned, " positioned nodes use known visual geometry", summary.fallback ? ` · ${summary.fallback} fallback` : '', "."] })] }), (0, jsx_runtime_25.jsx)("span", { className: `geometry-profile-pill ${summary.fallback ? 'warning' : ''}`, children: "Hytale Normal" })] }), (0, jsx_runtime_25.jsxs)("div", { className: "geometry-metrics", children: [(0, jsx_runtime_25.jsxs)("div", { children: [(0, jsx_runtime_25.jsx)("strong", { children: summary.files }), (0, jsx_runtime_25.jsx)("span", { children: "files" })] }), (0, jsx_runtime_25.jsxs)("div", { children: [(0, jsx_runtime_25.jsx)("strong", { children: summary.nodes }), (0, jsx_runtime_25.jsx)("span", { children: "nodes in scope" })] }), (0, jsx_runtime_25.jsxs)("div", { children: [(0, jsx_runtime_25.jsx)("strong", { children: summary.positioned }), (0, jsx_runtime_25.jsx)("span", { children: "positioned" })] }), (0, jsx_runtime_25.jsxs)("div", { children: [(0, jsx_runtime_25.jsx)("strong", { children: summary.known }), (0, jsx_runtime_25.jsx)("span", { children: "known visual spec" })] }), (0, jsx_runtime_25.jsxs)("div", { children: [(0, jsx_runtime_25.jsx)("strong", { children: summary.exactHeight }), (0, jsx_runtime_25.jsx)("span", { children: "fixed-height" })] }), (0, jsx_runtime_25.jsxs)("div", { children: [(0, jsx_runtime_25.jsx)("strong", { children: summary.derived }), (0, jsx_runtime_25.jsx)("span", { children: "derived-height" })] }), (0, jsx_runtime_25.jsxs)("div", { children: [(0, jsx_runtime_25.jsx)("strong", { children: summary.dynamic }), (0, jsx_runtime_25.jsx)("span", { children: "dynamic-height" })] }), (0, jsx_runtime_25.jsxs)("div", { className: summary.fallback ? 'warning' : '', children: [(0, jsx_runtime_25.jsx)("strong", { children: summary.fallback }), (0, jsx_runtime_25.jsx)("span", { children: "fallback" })] })] })] }), (0, jsx_runtime_25.jsxs)("section", { className: "visual-card layout-proposal-card", children: [(0, jsx_runtime_25.jsxs)("header", { children: [(0, jsx_runtime_25.jsxs)("div", { children: [(0, jsx_runtime_25.jsx)("h3", { children: "Layout proposal" }), (0, jsx_runtime_25.jsx)("small", { children: "Preview the selected strategy first. Nothing changes until the proposal is staged." })] }), (0, jsx_runtime_25.jsx)("div", { className: "layout-proposal-actions", children: (0, jsx_runtime_25.jsx)("button", { className: "primary", disabled: !proposal || proposal.blocked || stale || !editing || proposal.patches.length === 0, onClick: stageProposal, children: stagedLayoutInScope ? 'Replace staged layout' : 'Stage proposal' }) })] }), !proposal && (0, jsx_runtime_25.jsxs)("div", { className: "visual-foundation-note", children: [(0, jsx_runtime_25.jsx)("strong", { children: "Ready" }), (0, jsx_runtime_25.jsx)("span", { children: "Choose scope and settings in the Layout sidebar, then generate a read-only proposal. Turn Editing On only when you want to stage the result." })] }), proposal && ((0, jsx_runtime_25.jsxs)(jsx_runtime_25.Fragment, { children: [(0, jsx_runtime_25.jsxs)("div", { className: `layout-proposal-banner ${proposal.blocked ? 'bad' : stale ? 'warning' : 'ok'}`, children: [(0, jsx_runtime_25.jsx)("strong", { children: proposal.blocked ? 'BLOCKED' : stale ? 'STALE' : 'READY' }), (0, jsx_runtime_25.jsxs)("span", { children: [proposal.patches.length, " value change(s) \u00B7 ", proposal.files.length, " file(s)", proposalWarningCount ? ` · ${proposalWarningCount} warning(s)` : '', !editing ? ' · Editing Off' : ''] }), proposalSettings && (0, jsx_runtime_25.jsxs)("em", { children: [strategyLabel(proposalSettings.strategy), proposalSettings.strategy === 'normalize' ? ' · origin only' : proposalSettings.strategy === 'dag-rebuild' ? ` · ${(0, visualLayoutUi_2.presetLabel)(proposalSettings.preset)} · X ${proposalSettings.horizontalGap} · Y ${proposalSettings.verticalGap} · Branch ${proposalSettings.dagBranchDirection}` : ` · ${(0, visualLayoutUi_2.presetLabel)(proposalSettings.preset)} · X ${proposalSettings.horizontalGap} · Y ${proposalSettings.verticalGap} · Plane ${proposalSettings.alignmentTolerance}`] })] }), proposalTotals && (0, jsx_runtime_25.jsxs)("div", { className: "layout-proposal-overview", children: [(0, jsx_runtime_25.jsxs)("span", { children: [(0, jsx_runtime_25.jsx)("b", { children: proposal.patches.length }), "value changes"] }), (0, jsx_runtime_25.jsxs)("span", { className: proposalTotals.overlaps ? 'bad' : '', children: [(0, jsx_runtime_25.jsx)("b", { children: proposalTotals.overlaps }), "node overlaps"] }), (0, jsx_runtime_25.jsxs)("span", { className: proposalTotals.flowHits ? 'bad' : '', children: [(0, jsx_runtime_25.jsx)("b", { children: proposalTotals.flowHits }), "flow wire \u2192 node"] }), (0, jsx_runtime_25.jsxs)("span", { className: proposalTotals.attachmentHits ? 'warning' : '', children: [(0, jsx_runtime_25.jsx)("b", { children: proposalTotals.attachmentHits }), "attachment wire \u2192 node"] }), (0, jsx_runtime_25.jsxs)("span", { className: proposalTotals.crossings ? 'warning' : '', children: [(0, jsx_runtime_25.jsx)("b", { children: proposalTotals.crossings }), "unrelated crossings"] })] }), stale && (0, jsx_runtime_25.jsxs)("div", { className: "visual-foundation-note warning", children: [(0, jsx_runtime_25.jsx)("strong", { children: "Settings changed" }), (0, jsx_runtime_25.jsx)("span", { children: "This proposal uses the settings shown in its banner. Generate a new proposal before staging." })] }), stagedLayoutInScope > 0 && (0, jsx_runtime_25.jsxs)("div", { className: "visual-foundation-note", children: [(0, jsx_runtime_25.jsxs)("strong", { children: [stagedLayoutInScope, " staged layout values"] }), (0, jsx_runtime_25.jsxs)("span", { children: ["Changing layout settings does not alter an already staged result. Generate a new proposal, then use ", (0, jsx_runtime_25.jsx)("b", { children: "Replace staged layout" }), "."] })] }), (0, jsx_runtime_25.jsx)("div", { className: "layout-file-results", children: proposal.files.map(({ metrics }) => {
+        return ((0, jsx_runtime_25.jsxs)("div", { className: "visual-layout-tab visual-layout-results", children: [(0, jsx_runtime_25.jsx)("div", { className: "visual-hero compact visual-results-hero", children: (0, jsx_runtime_25.jsxs)("div", { children: [(0, jsx_runtime_25.jsxs)("div", { className: "heading-line", children: [(0, jsx_runtime_25.jsx)("h2", { children: "Layout results" }), (0, jsx_runtime_25.jsx)("span", { className: "virtual-tab-badge visual", children: "Tool" })] }), (0, jsx_runtime_25.jsx)("p", { children: "Scope, strategy and generation live in the Layout sidebar. Review geometry and proposal safety here, then stage only when the result is ready." })] }) }), (0, jsx_runtime_25.jsxs)("details", { className: "visual-card geometry-card visual-aux-card", children: [(0, jsx_runtime_25.jsxs)("summary", { className: "visual-card-summary", children: [(0, jsx_runtime_25.jsxs)("span", { children: [(0, jsx_runtime_25.jsx)("strong", { children: "Geometry coverage" }), (0, jsx_runtime_25.jsxs)("small", { children: [summary.known, "/", summary.positioned, " positioned nodes use known visual geometry", summary.fallback ? ` · ${summary.fallback} fallback` : '', "."] })] }), (0, jsx_runtime_25.jsx)("span", { className: `geometry-profile-pill ${summary.fallback ? 'warning' : ''}`, children: "Hytale Normal" })] }), (0, jsx_runtime_25.jsxs)("div", { className: "geometry-metrics", children: [(0, jsx_runtime_25.jsxs)("div", { children: [(0, jsx_runtime_25.jsx)("strong", { children: summary.files }), (0, jsx_runtime_25.jsx)("span", { children: "files" })] }), (0, jsx_runtime_25.jsxs)("div", { children: [(0, jsx_runtime_25.jsx)("strong", { children: summary.nodes }), (0, jsx_runtime_25.jsx)("span", { children: "nodes in scope" })] }), (0, jsx_runtime_25.jsxs)("div", { children: [(0, jsx_runtime_25.jsx)("strong", { children: summary.positioned }), (0, jsx_runtime_25.jsx)("span", { children: "positioned" })] }), (0, jsx_runtime_25.jsxs)("div", { children: [(0, jsx_runtime_25.jsx)("strong", { children: summary.known }), (0, jsx_runtime_25.jsx)("span", { children: "known visual spec" })] }), (0, jsx_runtime_25.jsxs)("div", { children: [(0, jsx_runtime_25.jsx)("strong", { children: summary.exactHeight }), (0, jsx_runtime_25.jsx)("span", { children: "fixed-height" })] }), (0, jsx_runtime_25.jsxs)("div", { children: [(0, jsx_runtime_25.jsx)("strong", { children: summary.derived }), (0, jsx_runtime_25.jsx)("span", { children: "derived-height" })] }), (0, jsx_runtime_25.jsxs)("div", { children: [(0, jsx_runtime_25.jsx)("strong", { children: summary.dynamic }), (0, jsx_runtime_25.jsx)("span", { children: "dynamic-height" })] }), (0, jsx_runtime_25.jsxs)("div", { className: summary.fallback ? 'warning' : '', children: [(0, jsx_runtime_25.jsx)("strong", { children: summary.fallback }), (0, jsx_runtime_25.jsx)("span", { children: "fallback" })] })] })] }), (0, jsx_runtime_25.jsxs)("section", { className: "visual-card layout-proposal-card", children: [(0, jsx_runtime_25.jsxs)("header", { children: [(0, jsx_runtime_25.jsxs)("div", { children: [(0, jsx_runtime_25.jsx)("h3", { children: "Layout proposal" }), (0, jsx_runtime_25.jsx)("small", { children: "Preview the selected strategy first. Nothing changes until the proposal is staged." })] }), (0, jsx_runtime_25.jsx)("div", { className: "layout-proposal-actions", children: (0, jsx_runtime_25.jsx)("button", { className: "primary", disabled: !proposal || proposal.blocked || stale || !editing || proposal.patches.length === 0, onClick: stageProposal, children: stagedLayoutInScope ? 'Replace staged layout' : 'Stage proposal' }) })] }), operationError && (0, jsx_runtime_25.jsx)("div", { className: "source-parse-error", role: "alert", children: operationError }), !proposal && (0, jsx_runtime_25.jsxs)("div", { className: "visual-foundation-note", children: [(0, jsx_runtime_25.jsx)("strong", { children: "Ready" }), (0, jsx_runtime_25.jsx)("span", { children: "Choose scope and settings in the Layout sidebar, then generate a read-only proposal. Turn Editing On only when you want to stage the result." })] }), proposal && ((0, jsx_runtime_25.jsxs)(jsx_runtime_25.Fragment, { children: [(0, jsx_runtime_25.jsxs)("div", { className: `layout-proposal-banner ${proposal.blocked ? 'bad' : stale ? 'warning' : 'ok'}`, children: [(0, jsx_runtime_25.jsx)("strong", { children: proposal.blocked ? 'BLOCKED' : stale ? 'STALE' : 'READY' }), (0, jsx_runtime_25.jsxs)("span", { children: [proposal.patches.length, " value change(s) \u00B7 ", proposal.files.length, " file(s)", proposalWarningCount ? ` · ${proposalWarningCount} warning(s)` : '', !editing ? ' · Editing Off' : ''] }), proposalSettings && (0, jsx_runtime_25.jsxs)("em", { children: [strategyLabel(proposalSettings.strategy), proposalSettings.strategy === 'normalize' ? ' · origin only' : proposalSettings.strategy === 'dag-rebuild' ? ` · ${(0, visualLayoutUi_2.presetLabel)(proposalSettings.preset)} · X ${proposalSettings.horizontalGap} · Y ${proposalSettings.verticalGap} · Branch ${proposalSettings.dagBranchDirection}` : ` · ${(0, visualLayoutUi_2.presetLabel)(proposalSettings.preset)} · X ${proposalSettings.horizontalGap} · Y ${proposalSettings.verticalGap} · Plane ${proposalSettings.alignmentTolerance}`] })] }), proposalTotals && (0, jsx_runtime_25.jsxs)("div", { className: "layout-proposal-overview", children: [(0, jsx_runtime_25.jsxs)("span", { children: [(0, jsx_runtime_25.jsx)("b", { children: proposal.patches.length }), "value changes"] }), (0, jsx_runtime_25.jsxs)("span", { className: proposalTotals.overlaps ? 'bad' : '', children: [(0, jsx_runtime_25.jsx)("b", { children: proposalTotals.overlaps }), "node overlaps"] }), (0, jsx_runtime_25.jsxs)("span", { className: proposalTotals.flowHits ? 'bad' : '', children: [(0, jsx_runtime_25.jsx)("b", { children: proposalTotals.flowHits }), "flow wire \u2192 node"] }), (0, jsx_runtime_25.jsxs)("span", { className: proposalTotals.attachmentHits ? 'warning' : '', children: [(0, jsx_runtime_25.jsx)("b", { children: proposalTotals.attachmentHits }), "attachment wire \u2192 node"] }), (0, jsx_runtime_25.jsxs)("span", { className: proposalTotals.crossings ? 'warning' : '', children: [(0, jsx_runtime_25.jsx)("b", { children: proposalTotals.crossings }), "unrelated crossings"] })] }), stale && (0, jsx_runtime_25.jsxs)("div", { className: "visual-foundation-note warning", children: [(0, jsx_runtime_25.jsx)("strong", { children: "Settings changed" }), (0, jsx_runtime_25.jsx)("span", { children: "This proposal uses the settings shown in its banner. Generate a new proposal before staging." })] }), stagedLayoutInScope > 0 && (0, jsx_runtime_25.jsxs)("div", { className: "visual-foundation-note", children: [(0, jsx_runtime_25.jsxs)("strong", { children: [stagedLayoutInScope, " staged layout values"] }), (0, jsx_runtime_25.jsxs)("span", { children: ["Changing layout settings does not alter an already staged result. Generate a new proposal, then use ", (0, jsx_runtime_25.jsx)("b", { children: "Replace staged layout" }), "."] })] }), (0, jsx_runtime_25.jsx)("div", { className: "layout-file-results", children: proposal.files.map(({ metrics }) => {
                                         const userWarnings = metrics.warnings.filter(isUserFacingLayoutWarning);
                                         const diagnosticWarnings = metrics.warnings.filter((warning) => !isUserFacingLayoutWarning(warning));
                                         return ((0, jsx_runtime_25.jsxs)("div", { className: `layout-file-result ${metrics.blocked ? 'bad' : ''}`, children: [(0, jsx_runtime_25.jsxs)("div", { className: "layout-file-result-title", children: [(0, jsx_runtime_25.jsx)("strong", { children: metrics.filePath }), (0, jsx_runtime_25.jsx)("small", { children: metrics.rootNodeId ? `root ${metrics.rootNodeId}` : 'root unresolved' })] }), metrics.blockReasons.length > 0 && (0, jsx_runtime_25.jsxs)("div", { className: "layout-block-reasons", role: "status", "aria-label": "Layout block reasons", children: [(0, jsx_runtime_25.jsx)("strong", { children: "Why this file is blocked" }), metrics.blockReasons.map((reason) => (0, jsx_runtime_25.jsxs)("span", { children: [(0, jsx_runtime_25.jsx)("b", { children: reason.count }), reason.summary] }, reason.code))] }), (0, jsx_runtime_25.jsx)("div", { className: "layout-result-summary", children: proposal.strategy === 'normalize' ? (0, jsx_runtime_25.jsxs)(jsx_runtime_25.Fragment, { children: [(0, jsx_runtime_25.jsxs)("span", { children: [(0, jsx_runtime_25.jsx)("b", { children: metrics.translatedNodes }), "nodes origin-shifted"] }), (0, jsx_runtime_25.jsxs)("span", { children: [(0, jsx_runtime_25.jsxs)("b", { children: [formatOffset(metrics.originOffset.x), ", ", formatOffset(metrics.originOffset.y)] }), "rigid offset"] }), (0, jsx_runtime_25.jsxs)("span", { children: [(0, jsx_runtime_25.jsxs)("b", { children: [Math.round(metrics.xSpanAfter), " \u00D7 ", Math.round(metrics.ySpanAfter)] }), "layout span preserved"] }), (0, jsx_runtime_25.jsxs)("span", { children: [(0, jsx_runtime_25.jsxs)("b", { children: [metrics.nodeOverlapsBefore, " \u2192 ", metrics.nodeOverlapsAfter] }), "node overlaps preserved"] }), (0, jsx_runtime_25.jsxs)("span", { children: [(0, jsx_runtime_25.jsx)("b", { children: metrics.translatedGroups }), "groups shifted"] }), (0, jsx_runtime_25.jsxs)("span", { children: [(0, jsx_runtime_25.jsx)("b", { children: metrics.translatedComments }), "comments shifted"] })] }) : proposal.strategy === 'dag-rebuild' ? (0, jsx_runtime_25.jsxs)(jsx_runtime_25.Fragment, { children: [(0, jsx_runtime_25.jsxs)("span", { children: [(0, jsx_runtime_25.jsx)("b", { children: metrics.normalizedNodes }), "nodes rebuilt"] }), (0, jsx_runtime_25.jsxs)("span", { children: [(0, jsx_runtime_25.jsx)("b", { children: metrics.dagLevels }), "DAG depth columns"] }), (0, jsx_runtime_25.jsxs)("span", { children: [(0, jsx_runtime_25.jsxs)("b", { children: [Math.round(metrics.xSpanBefore), " \u2192 ", Math.round(metrics.xSpanAfter)] }), "X span \u00B7 gap ", metrics.horizontalGap] }), (0, jsx_runtime_25.jsxs)("span", { children: [(0, jsx_runtime_25.jsxs)("b", { children: [Math.round(metrics.ySpanBefore), " \u2192 ", Math.round(metrics.ySpanAfter)] }), "Y span \u00B7 gap ", metrics.verticalGap] }), (0, jsx_runtime_25.jsxs)("span", { className: metrics.nodeOverlapsAfter ? 'bad' : '', children: [(0, jsx_runtime_25.jsxs)("b", { children: [metrics.nodeOverlapsBefore, " \u2192 ", metrics.nodeOverlapsAfter] }), "node overlaps"] }), (0, jsx_runtime_25.jsxs)("span", { className: metrics.edgeNodeIntersectionsAfter ? 'bad' : '', children: [(0, jsx_runtime_25.jsxs)("b", { children: [metrics.edgeNodeIntersectionsBefore, " \u2192 ", metrics.edgeNodeIntersectionsAfter] }), "flow wire \u2192 node"] }), (0, jsx_runtime_25.jsxs)("span", { className: metrics.attachmentEdgeNodeIntersectionsAfter ? 'bad' : '', children: [(0, jsx_runtime_25.jsx)("b", { children: metrics.attachmentEdgeNodeIntersectionsAfter }), "attachment wire \u2192 node"] }), (0, jsx_runtime_25.jsxs)("span", { className: metrics.edgeEdgeCrossingsAfter ? 'warning' : '', children: [(0, jsx_runtime_25.jsx)("b", { children: metrics.edgeEdgeCrossingsAfter }), "unrelated crossings"] })] }) : (0, jsx_runtime_25.jsxs)(jsx_runtime_25.Fragment, { children: [(0, jsx_runtime_25.jsxs)("span", { children: [(0, jsx_runtime_25.jsx)("b", { children: metrics.normalizedNodes }), "normalized nodes"] }), (0, jsx_runtime_25.jsxs)("span", { children: [(0, jsx_runtime_25.jsxs)("b", { children: [metrics.xNormalizedNodes, " / ", metrics.yNormalizedNodes] }), "X / Y changed"] }), (0, jsx_runtime_25.jsxs)("span", { children: [(0, jsx_runtime_25.jsxs)("b", { children: [Math.round(metrics.xSpanBefore), " \u2192 ", Math.round(metrics.xSpanAfter)] }), "X span \u00B7 gap ", metrics.horizontalGap] }), (0, jsx_runtime_25.jsxs)("span", { children: [(0, jsx_runtime_25.jsxs)("b", { children: [Math.round(metrics.ySpanBefore), " \u2192 ", Math.round(metrics.ySpanAfter)] }), "Y span \u00B7 gap ", metrics.verticalGap] }), (0, jsx_runtime_25.jsxs)("span", { className: metrics.nodeOverlapsAfter ? 'bad' : '', children: [(0, jsx_runtime_25.jsxs)("b", { children: [metrics.nodeOverlapsBefore, " \u2192 ", metrics.nodeOverlapsAfter] }), "node overlaps"] }), (0, jsx_runtime_25.jsxs)("span", { className: metrics.edgeNodeIntersectionsAfter ? 'bad' : '', children: [(0, jsx_runtime_25.jsxs)("b", { children: [metrics.edgeNodeIntersectionsBefore, " \u2192 ", metrics.edgeNodeIntersectionsAfter] }), "flow wire \u2192 node"] }), (0, jsx_runtime_25.jsxs)("span", { className: metrics.edgeEdgeCrossingsAfter ? 'warning' : '', children: [(0, jsx_runtime_25.jsx)("b", { children: metrics.edgeEdgeCrossingsAfter }), "unrelated crossings"] }), (0, jsx_runtime_25.jsxs)("span", { className: metrics.attachmentEdgeNodeIntersectionsAfter ? 'warning' : '', children: [(0, jsx_runtime_25.jsx)("b", { children: metrics.attachmentEdgeNodeIntersectionsAfter }), "attachment wire audit"] }), (0, jsx_runtime_25.jsxs)("span", { className: metrics.newGroupOverlaps.length ? 'bad' : '', children: [(0, jsx_runtime_25.jsxs)("b", { children: [metrics.groupOverlapsBefore, " \u2192 ", metrics.groupOverlapsAfter] }), "group overlaps"] }), (0, jsx_runtime_25.jsxs)("span", { children: [(0, jsx_runtime_25.jsxs)("b", { children: [metrics.floatersHandled, "/", metrics.floatingNodes] }), "floaters \u00B7 ", metrics.floaterMode] })] }) }), userWarnings.length > 0 && (0, jsx_runtime_25.jsx)("div", { className: "layout-result-warnings", children: userWarnings.map((warning) => (0, jsx_runtime_25.jsx)("span", { children: warning }, warning)) }), (0, jsx_runtime_25.jsxs)("details", { className: "layout-advanced-diagnostics", children: [(0, jsx_runtime_25.jsx)("summary", { children: "Advanced diagnostics" }), diagnosticWarnings.length > 0 && (0, jsx_runtime_25.jsx)("div", { className: "layout-diagnostic-notes", children: diagnosticWarnings.map((warning) => (0, jsx_runtime_25.jsx)("span", { children: warning }, warning)) }), (0, jsx_runtime_25.jsx)("div", { className: "layout-result-metrics", children: proposal.strategy === 'normalize' ? (0, jsx_runtime_25.jsxs)(jsx_runtime_25.Fragment, { children: [(0, jsx_runtime_25.jsxs)("span", { children: [(0, jsx_runtime_25.jsxs)("b", { children: [formatOffset(metrics.originOffset.x), ", ", formatOffset(metrics.originOffset.y)] }), "origin offset"] }), (0, jsx_runtime_25.jsxs)("span", { children: [(0, jsx_runtime_25.jsx)("b", { children: metrics.positionedNodes }), "positioned nodes"] }), (0, jsx_runtime_25.jsxs)("span", { children: [(0, jsx_runtime_25.jsx)("b", { children: metrics.floatingNodes }), "floating nodes shifted with origin"] }), (0, jsx_runtime_25.jsxs)("span", { children: [(0, jsx_runtime_25.jsxs)("b", { children: [metrics.groupOverlapsBefore, " \u2192 ", metrics.groupOverlapsAfter] }), "group overlap relation unchanged"] }), (0, jsx_runtime_25.jsxs)("span", { children: [(0, jsx_runtime_25.jsxs)("b", { children: [metrics.floaterOverlapsBefore, " \u2192 ", metrics.floaterOverlapsAfter] }), "floater overlap relation unchanged"] })] }) : proposal.strategy === 'dag-rebuild' ? (0, jsx_runtime_25.jsxs)(jsx_runtime_25.Fragment, { children: [(0, jsx_runtime_25.jsxs)("span", { children: [(0, jsx_runtime_25.jsxs)("b", { children: [formatOffset(metrics.originOffset.x), ", ", formatOffset(metrics.originOffset.y)] }), "original origin offset"] }), (0, jsx_runtime_25.jsxs)("span", { children: [(0, jsx_runtime_25.jsxs)("b", { children: [metrics.treeNodes, " / ", metrics.treeRoots] }), "DAG nodes / components"] }), (0, jsx_runtime_25.jsxs)("span", { children: [(0, jsx_runtime_25.jsx)("b", { children: metrics.dagLevels }), "depth columns"] }), (0, jsx_runtime_25.jsxs)("span", { children: [(0, jsx_runtime_25.jsx)("b", { children: metrics.treeMaxDepth }), "max depth"] }), (0, jsx_runtime_25.jsxs)("span", { children: [(0, jsx_runtime_25.jsxs)("b", { children: [metrics.forks, " / ", metrics.branchClusters] }), "forks / child branches"] }), (0, jsx_runtime_25.jsxs)("span", { children: [(0, jsx_runtime_25.jsx)("b", { children: metrics.singleChildParents }), "single-child chains"] }), (0, jsx_runtime_25.jsxs)("span", { children: [(0, jsx_runtime_25.jsx)("b", { children: metrics.semanticFlowEdges }), "same-domain flow edges"] }), (0, jsx_runtime_25.jsxs)("span", { children: [(0, jsx_runtime_25.jsxs)("b", { children: [metrics.semanticAttachmentEdges, " + ", metrics.semanticOrderedAttachmentEdges] }), "attachments + ordered attachments"] }), (0, jsx_runtime_25.jsxs)("span", { className: metrics.semanticStructuralEdges ? 'warning' : '', children: [(0, jsx_runtime_25.jsx)("b", { children: metrics.semanticStructuralEdges }), "unresolved structural edges"] }), (0, jsx_runtime_25.jsxs)("span", { children: [(0, jsx_runtime_25.jsxs)("b", { children: [metrics.verticalGap, " \u2192 ", metrics.dagEffectiveVerticalGap] }), "requested \u2192 effective Y gap"] }), (0, jsx_runtime_25.jsxs)("span", { children: [(0, jsx_runtime_25.jsx)("b", { children: metrics.dagSafetyPasses }), "routing safety passes"] }), (0, jsx_runtime_25.jsxs)("span", { children: [(0, jsx_runtime_25.jsx)("b", { children: metrics.routedFlowEdges }), "routed flow wires"] }), (0, jsx_runtime_25.jsxs)("span", { children: [(0, jsx_runtime_25.jsx)("b", { children: metrics.edgeNodeCorridorIntrusionsAfter }), "padded flow-corridor intrusions"] }), (0, jsx_runtime_25.jsxs)("span", { children: [(0, jsx_runtime_25.jsx)("b", { children: metrics.edgeEdgeCrossingsAfter }), "unrelated wire crossings"] }), (0, jsx_runtime_25.jsxs)("span", { children: [(0, jsx_runtime_25.jsxs)("b", { children: [metrics.groupOverlapsBefore, " \u2192 ", metrics.groupOverlapsAfter] }), "author group overlaps"] }), (0, jsx_runtime_25.jsxs)("span", { children: [(0, jsx_runtime_25.jsxs)("b", { children: [metrics.translatedGroups, " / ", metrics.resizedGroups] }), "groups moved / rebuilt"] }), (0, jsx_runtime_25.jsxs)("span", { children: [(0, jsx_runtime_25.jsxs)("b", { children: [metrics.floaterOverlapsBefore, " \u2192 ", metrics.floaterOverlapsAfter] }), "floater overlaps"] })] }) : (0, jsx_runtime_25.jsxs)(jsx_runtime_25.Fragment, { children: [(0, jsx_runtime_25.jsxs)("span", { children: [(0, jsx_runtime_25.jsxs)("b", { children: [formatOffset(metrics.originOffset.x), ", ", formatOffset(metrics.originOffset.y)] }), "origin offset"] }), (0, jsx_runtime_25.jsxs)("span", { children: [(0, jsx_runtime_25.jsxs)("b", { children: [metrics.treeNodes, " / ", metrics.treeRoots] }), "tree nodes / roots"] }), (0, jsx_runtime_25.jsxs)("span", { children: [(0, jsx_runtime_25.jsxs)("b", { children: [metrics.forks, " / ", metrics.branchClusters] }), "solver flow forks / branch clusters"] }), (0, jsx_runtime_25.jsxs)("span", { children: [(0, jsx_runtime_25.jsxs)("b", { children: [metrics.semanticFlowForks, " / ", metrics.semanticStructuralForks] }), "Reader v2 flow / structural forks"] }), (0, jsx_runtime_25.jsxs)("span", { children: [(0, jsx_runtime_25.jsx)("b", { children: metrics.semanticFlowEdges }), "same-domain flow edges"] }), (0, jsx_runtime_25.jsxs)("span", { children: [(0, jsx_runtime_25.jsxs)("b", { children: [metrics.semanticAttachmentEdges, " + ", metrics.semanticOrderedAttachmentEdges] }), "attachments + ordered attachments"] }), (0, jsx_runtime_25.jsxs)("span", { children: [(0, jsx_runtime_25.jsx)("b", { children: metrics.semanticMixedParents }), "mixed flow/attachment parents"] }), (0, jsx_runtime_25.jsxs)("span", { className: metrics.semanticStructuralEdges ? 'warning' : '', children: [(0, jsx_runtime_25.jsx)("b", { children: metrics.semanticStructuralEdges }), "unresolved semantic edges"] }), (0, jsx_runtime_25.jsxs)("span", { children: [(0, jsx_runtime_25.jsxs)("b", { children: [metrics.singleChildParents, " / ", metrics.connectionPlanesAligned] }), "single-child / plane aligns"] }), (0, jsx_runtime_25.jsxs)("span", { children: [(0, jsx_runtime_25.jsxs)("b", { children: [metrics.authorDepthBands, " / ", metrics.deepBranchStarts] }), "depth bands / deep starts"] }), (0, jsx_runtime_25.jsxs)("span", { children: [(0, jsx_runtime_25.jsx)("b", { children: metrics.authorDepthXRescues }), "X-depth collision rescues"] }), (0, jsx_runtime_25.jsxs)("span", { children: [(0, jsx_runtime_25.jsx)("b", { children: metrics.contourXRescues }), "local contour X rescues"] }), (0, jsx_runtime_25.jsxs)("span", { children: [(0, jsx_runtime_25.jsx)("b", { children: metrics.attachmentXAdjustments }), "owner attachment X pads"] }), (0, jsx_runtime_25.jsxs)("span", { children: [(0, jsx_runtime_25.jsx)("b", { children: Math.round(metrics.maxAttachmentXAdjustment) }), "max owner X pad"] }), (0, jsx_runtime_25.jsxs)("span", { children: [(0, jsx_runtime_25.jsxs)("b", { children: [metrics.attachmentContourRescues, " / ", metrics.attachmentContourShiftedNodes] }), "attachment contour rescues / nodes"] }), (0, jsx_runtime_25.jsxs)("span", { children: [(0, jsx_runtime_25.jsx)("b", { children: Math.round(metrics.maxAttachmentContourShift) }), "max attachment contour shift"] }), (0, jsx_runtime_25.jsxs)("span", { children: [(0, jsx_runtime_25.jsx)("b", { children: metrics.routedFlowEdges }), "routed flow wires"] }), (0, jsx_runtime_25.jsxs)("span", { children: [(0, jsx_runtime_25.jsx)("b", { children: metrics.edgeNodeCorridorIntrusionsAfter }), "padded flow-corridor intrusions"] }), (0, jsx_runtime_25.jsxs)("span", { children: [(0, jsx_runtime_25.jsxs)("b", { children: [metrics.edgeCorridorRepairs, " / ", metrics.edgeCorridorShiftedNodes] }), "edge-corridor repairs / nodes"] }), (0, jsx_runtime_25.jsxs)("span", { children: [(0, jsx_runtime_25.jsx)("b", { children: Math.round(metrics.maxEdgeCorridorShift) }), "max edge-corridor X shift"] }), (0, jsx_runtime_25.jsxs)("span", { children: [(0, jsx_runtime_25.jsxs)("b", { children: [metrics.flowLanes, " / ", metrics.flowLaneEdges] }), "flow lanes / lane edges"] }), (0, jsx_runtime_25.jsxs)("span", { children: [(0, jsx_runtime_25.jsxs)("b", { children: [Math.round(metrics.maxConnectionPlaneDeviationBefore), " \u2192 ", Math.round(metrics.maxConnectionPlaneDeviationAfter)] }), "max lane plane deviation"] }), (0, jsx_runtime_25.jsxs)("span", { children: [(0, jsx_runtime_25.jsxs)("b", { children: [Math.round(metrics.medianConnectionPlaneDeviationBefore), " \u2192 ", Math.round(metrics.medianConnectionPlaneDeviationAfter)] }), "median lane plane deviation"] }), (0, jsx_runtime_25.jsxs)("span", { children: [(0, jsx_runtime_25.jsxs)("b", { children: [metrics.laneRealignments, " / ", metrics.laneRealignedNodes] }), "lane re-aligns / moved nodes"] }), (0, jsx_runtime_25.jsxs)("span", { children: [(0, jsx_runtime_25.jsx)("b", { children: metrics.laneNormalizationBlocked }), "blocked lane re-aligns"] }), (0, jsx_runtime_25.jsxs)("span", { children: [(0, jsx_runtime_25.jsxs)("b", { children: [metrics.visualRowEdges, " / ", metrics.visualRowAuthorJitterEdges] }), "visual rows / author jitter"] }), (0, jsx_runtime_25.jsxs)("span", { children: [(0, jsx_runtime_25.jsxs)("b", { children: [metrics.visualRowMisalignedBefore, " \u2192 ", metrics.visualRowMisalignedAfter] }), "row Y mismatches"] }), (0, jsx_runtime_25.jsxs)("span", { children: [(0, jsx_runtime_25.jsx)("b", { children: metrics.visualRowRealignments }), "visual row re-aligns"] }), (0, jsx_runtime_25.jsxs)("span", { children: [(0, jsx_runtime_25.jsxs)("b", { children: [Math.round(metrics.maxVisualRowDeviationBefore), " \u2192 ", Math.round(metrics.maxVisualRowDeviationAfter)] }), "max row Y deviation"] }), (0, jsx_runtime_25.jsxs)("span", { children: [(0, jsx_runtime_25.jsxs)("b", { children: [metrics.flowVisualGroups, " / ", metrics.visualGroups] }), "flow visual modules / all groups"] }), (0, jsx_runtime_25.jsxs)("span", { children: [(0, jsx_runtime_25.jsxs)("b", { children: [metrics.chainRows, " / ", metrics.chainRowEdges] }), "chain rows / row edges"] }), (0, jsx_runtime_25.jsxs)("span", { children: [(0, jsx_runtime_25.jsxs)("b", { children: [metrics.chainRowsMisalignedBefore, " \u2192 ", metrics.chainRowsMisalignedAfter] }), "misaligned chain rows"] }), (0, jsx_runtime_25.jsxs)("span", { children: [(0, jsx_runtime_25.jsxs)("b", { children: [metrics.rowGuidesAlignedBefore, " \u2192 ", metrics.rowGuidesAlignedAfter] }), "exact author row guides"] }), (0, jsx_runtime_25.jsxs)("span", { children: [(0, jsx_runtime_25.jsxs)("b", { children: [metrics.columnGuidesAlignedBefore, " \u2192 ", metrics.columnGuidesAlignedAfter] }), "exact author column guides"] }), (0, jsx_runtime_25.jsxs)("span", { children: [(0, jsx_runtime_25.jsxs)("b", { children: [metrics.authorRowGuides, " / ", metrics.authorColumnGuides] }), "author row / column guides"] }), (0, jsx_runtime_25.jsxs)("span", { children: [(0, jsx_runtime_25.jsx)("b", { children: metrics.chainRowRealignments }), "chain-row re-aligns"] }), (0, jsx_runtime_25.jsxs)("span", { children: [(0, jsx_runtime_25.jsxs)("b", { children: [metrics.rowGuideRealignments, " / ", metrics.columnGuideRealignments] }), "row / column guide re-aligns"] }), (0, jsx_runtime_25.jsxs)("span", { children: [(0, jsx_runtime_25.jsxs)("b", { children: [metrics.authorGridMovedNodes, " / ", metrics.authorGridBlocked] }), "Author Grid moved / blocked"] }), (0, jsx_runtime_25.jsxs)("span", { children: [(0, jsx_runtime_25.jsxs)("b", { children: [Math.round(metrics.maxRowGuideDeviationBefore), " \u2192 ", Math.round(metrics.maxRowGuideDeviationAfter)] }), "max cross-group row spread"] }), (0, jsx_runtime_25.jsxs)("span", { children: [(0, jsx_runtime_25.jsxs)("b", { children: [Math.round(metrics.maxColumnGuideDeviationBefore), " \u2192 ", Math.round(metrics.maxColumnGuideDeviationAfter)] }), "max cross-group column spread"] }), (0, jsx_runtime_25.jsxs)("span", { children: [(0, jsx_runtime_25.jsxs)("b", { children: [Math.round(metrics.maxAuthorGridShiftX), " / ", Math.round(metrics.maxAuthorGridShiftY)] }), "max Author Grid X / Y shift"] }), (0, jsx_runtime_25.jsxs)("span", { children: [(0, jsx_runtime_25.jsxs)("b", { children: [metrics.attachmentPixelRows, " / ", metrics.orderedAttachmentColumns] }), "pixel rows / ordered columns"] }), (0, jsx_runtime_25.jsxs)("span", { children: [(0, jsx_runtime_25.jsxs)("b", { children: [metrics.attachmentPixelRowsMisalignedBefore, " \u2192 ", metrics.attachmentPixelRowsMisalignedAfter] }), "attachment row mismatches"] }), (0, jsx_runtime_25.jsxs)("span", { children: [(0, jsx_runtime_25.jsxs)("b", { children: [metrics.orderedAttachmentColumnsMisalignedBefore, " \u2192 ", metrics.orderedAttachmentColumnsMisalignedAfter] }), "ordered column mismatches"] }), (0, jsx_runtime_25.jsxs)("span", { children: [(0, jsx_runtime_25.jsxs)("b", { children: [metrics.pixelAlignmentRealignments, " / ", metrics.pixelAlignmentBlocked] }), "pixel re-aligns / blocked"] }), (0, jsx_runtime_25.jsxs)("span", { children: [(0, jsx_runtime_25.jsxs)("b", { children: [Math.round(metrics.maxPixelAlignmentShiftX), " / ", Math.round(metrics.maxPixelAlignmentShiftY)] }), "max pixel X / Y shift"] }), (0, jsx_runtime_25.jsxs)("span", { children: [(0, jsx_runtime_25.jsx)("b", { children: Math.round(metrics.maxLaneShift) }), "max lane Y shift"] }), (0, jsx_runtime_25.jsxs)("span", { children: [(0, jsx_runtime_25.jsx)("b", { children: Math.round(metrics.maxXRescueShift) }), "max node-contour X rescue"] }), (0, jsx_runtime_25.jsxs)("span", { children: [(0, jsx_runtime_25.jsx)("b", { children: metrics.portAlignmentFallbacks }), "port-align fallbacks"] }), (0, jsx_runtime_25.jsxs)("span", { children: [(0, jsx_runtime_25.jsx)("b", { children: metrics.clusterCollisionsResolved }), "cluster collisions resolved"] }), (0, jsx_runtime_25.jsxs)("span", { children: [(0, jsx_runtime_25.jsx)("b", { children: metrics.clusterShiftedNodes }), "nodes shifted with clusters"] }), (0, jsx_runtime_25.jsxs)("span", { children: [(0, jsx_runtime_25.jsx)("b", { children: Math.round(metrics.maxClusterShift) }), "max Y cluster shift"] }), (0, jsx_runtime_25.jsxs)("span", { children: [(0, jsx_runtime_25.jsx)("b", { children: metrics.treeMaxDepth }), "max tree depth"] }), (0, jsx_runtime_25.jsxs)("span", { children: [(0, jsx_runtime_25.jsxs)("b", { children: [metrics.floaterOverlapsBefore, " \u2192 ", metrics.floaterOverlapsAfter] }), "floater overlaps"] }), (0, jsx_runtime_25.jsxs)("span", { children: [(0, jsx_runtime_25.jsx)("b", { children: metrics.translatedGroups }), "groups shifted"] }), (0, jsx_runtime_25.jsxs)("span", { children: [(0, jsx_runtime_25.jsx)("b", { children: metrics.resizedGroups }), "groups expanded"] }), (0, jsx_runtime_25.jsxs)("span", { children: [(0, jsx_runtime_25.jsxs)("b", { children: [metrics.groupMembershipByBounds, " / ", metrics.groupMembershipByCenter] }), "group members by bounds / center"] }), (0, jsx_runtime_25.jsxs)("span", { className: metrics.groupMembershipAmbiguous ? 'bad' : '', children: [(0, jsx_runtime_25.jsx)("b", { children: metrics.groupMembershipAmbiguous }), "ambiguous node\u2192group memberships"] }), (0, jsx_runtime_25.jsxs)("span", { className: metrics.groupParentAmbiguous ? 'bad' : '', children: [(0, jsx_runtime_25.jsx)("b", { children: metrics.groupParentAmbiguous }), "ambiguous group\u2192parent memberships"] }), (0, jsx_runtime_25.jsxs)("span", { children: [(0, jsx_runtime_25.jsxs)("b", { children: [metrics.groupAnchorRescues, " / ", metrics.groupAnchorRescuedNodes] }), "group-anchor rescues / nodes"] }), (0, jsx_runtime_25.jsxs)("span", { children: [(0, jsx_runtime_25.jsx)("b", { children: metrics.translatedComments }), "comments shifted"] })] }) })] })] }, metrics.fileId));
@@ -27698,7 +28118,7 @@ define("features/visual/VisualLayoutTab", ["require", "exports", "react/jsx-runt
                     }, renderSummary: (fileIds) => ((0, jsx_runtime_25.jsxs)(jsx_runtime_25.Fragment, { children: [(0, jsx_runtime_25.jsx)("strong", { children: fileIds.length }), " files \u00B7 ", (0, jsx_runtime_25.jsx)("strong", { children: fileIds.reduce((sum, id) => sum + (project.fileMap.get(id)?.nodes.length ?? 0), 0) }), " nodes selected"] })) })] }));
     }
 });
-define("features/project-graph/ProjectGraphView", ["require", "exports", "react/jsx-runtime", "react", "core/index", "store", "support/performanceTracing", "workbench/WorkbenchPaneContext"], function (require, exports, jsx_runtime_26, react_23, core_16, store_17, performanceTracing_10, WorkbenchPaneContext_3) {
+define("features/project-graph/ProjectGraphView", ["require", "exports", "react/jsx-runtime", "react", "core/index", "store", "support/performanceTracing", "workbench/WorkbenchPaneContext"], function (require, exports, jsx_runtime_26, react_23, core_17, store_17, performanceTracing_10, WorkbenchPaneContext_3) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.ProjectGraphView = ProjectGraphView;
@@ -27770,7 +28190,7 @@ define("features/project-graph/ProjectGraphView", ["require", "exports", "react/
         const selectFile = (0, store_17.useWorkbenchStore)((state) => state.selectFile);
         const openReferenceTab = (0, store_17.useWorkbenchStore)((state) => state.openReferenceTab);
         const openSourceTab = (0, store_17.useWorkbenchStore)((state) => state.openSourceTab);
-        const roots = (0, react_23.useMemo)(() => project ? (0, core_16.projectGraphRoots)(project) : [], [project]);
+        const roots = (0, react_23.useMemo)(() => project ? (0, core_17.projectGraphRoots)(project) : [], [project]);
         const liveTab = (0, store_17.useWorkbenchStore)((state) => state.tabs.find((item) => item.id === tab.id && item.kind === 'project-graph'));
         const graphSettings = liveTab?.settings ?? tab.settings;
         const fitRequest = liveTab?.fitRequest ?? tab.fitRequest;
@@ -27833,7 +28253,7 @@ define("features/project-graph/ProjectGraphView", ["require", "exports", "react/
                 setGraphSettings({ selectedRootPath: nextPath, viewport: undefined });
         }, [selectedRoot?.path, graphSettings.selectedRootPath, setGraphSettings]);
         const graph = (0, react_23.useMemo)(() => project
-            ? (0, performanceTracing_10.measurePerformanceSync)('graph.build', () => (0, core_16.buildProjectGraph)(project, selectedRoot?.fileId, graphSettings.densityDepth, graphSettings.includeResources), {
+            ? (0, performanceTracing_10.measurePerformanceSync)('graph.build', () => (0, core_17.buildProjectGraph)(project, selectedRoot?.fileId, graphSettings.densityDepth, graphSettings.includeResources), {
                 data: { projectFiles: project.files.length, rootIndex: selectedRootIndex, rootKind: selectedRoot?.kind ?? 'none', rootCount: roots.length, densityDepth: graphSettings.densityDepth, includeResources: graphSettings.includeResources },
             })
             : undefined, [project, selectedRoot?.fileId, graphSettings.densityDepth, graphSettings.includeResources]);
@@ -27994,7 +28414,7 @@ define("features/project-graph/ProjectGraphView", ["require", "exports", "react/
                                 })] }) })), (0, jsx_runtime_26.jsxs)("div", { className: "project-graph-overlay project-graph-legend", "aria-label": "Project Graph legend", children: [(0, jsx_runtime_26.jsxs)("span", { children: [(0, jsx_runtime_26.jsx)("i", { className: "legend-instance" }), "Instance"] }), (0, jsx_runtime_26.jsxs)("span", { children: [(0, jsx_runtime_26.jsx)("i", { className: "legend-world" }), "WorldStructure"] }), (0, jsx_runtime_26.jsxs)("span", { children: [(0, jsx_runtime_26.jsx)("i", { className: "legend-biome" }), "Biome"] }), (0, jsx_runtime_26.jsxs)("span", { children: [(0, jsx_runtime_26.jsx)("i", { className: "legend-density" }), "Density"] }), graphSettings.includeResources && (0, jsx_runtime_26.jsxs)("span", { children: [(0, jsx_runtime_26.jsx)("i", { className: "legend-resource" }), "Resource"] }), (0, jsx_runtime_26.jsxs)("span", { children: [(0, jsx_runtime_26.jsx)("i", { className: "legend-unresolved" }), "Unresolved"] })] }), (0, jsx_runtime_26.jsx)("div", { className: "project-graph-overlay project-graph-hint", children: "Click files to open them \u00B7 Density assets open References" })] }) }));
     }
 });
-define("features/worldgen-performance/WorldgenPerformanceTab", ["require", "exports", "react/jsx-runtime", "react", "io/desktopBridge", "components/LucideIcon", "store"], function (require, exports, jsx_runtime_27, react_24, desktopBridge_6, LucideIcon_15, store_18) {
+define("features/worldgen-performance/WorldgenPerformanceTab", ["require", "exports", "react/jsx-runtime", "react", "io/desktopBridge", "components/LucideIcon", "store"], function (require, exports, jsx_runtime_27, react_24, desktopBridge_7, LucideIcon_15, store_18) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.WorldgenPerformanceTab = WorldgenPerformanceTab;
@@ -28026,7 +28446,7 @@ define("features/worldgen-performance/WorldgenPerformanceTab", ["require", "expo
         const [checkedAt, setCheckedAt] = (0, react_24.useState)();
         const activeSelectionKeyRef = (0, react_24.useRef)();
         const inFlightSelectionKeyRef = (0, react_24.useRef)();
-        const desktop = (0, desktopBridge_6.hasDesktopBridge)();
+        const desktop = (0, desktopBridge_7.hasDesktopBridge)();
         const selectionKey = tab.selection?.token;
         activeSelectionKeyRef.current = selectionKey;
         const refresh = (0, react_24.useCallback)(async () => {
@@ -28037,7 +28457,7 @@ define("features/worldgen-performance/WorldgenPerformanceTab", ["require", "expo
             inFlightSelectionKeyRef.current = key;
             setLoading(true);
             try {
-                const next = await (0, desktopBridge_6.desktopReadWorldgenPerformance)(selection.token);
+                const next = await (0, desktopBridge_7.desktopReadWorldgenPerformance)(selection.token);
                 if (activeSelectionKeyRef.current !== key)
                     return;
                 setResult(next);
@@ -28071,7 +28491,7 @@ define("features/worldgen-performance/WorldgenPerformanceTab", ["require", "expo
             if (!desktop)
                 return;
             try {
-                const selection = await (0, desktopBridge_6.desktopChooseWorldgenLog)();
+                const selection = await (0, desktopBridge_7.desktopChooseWorldgenLog)();
                 setSelection({ ...selection, sourceKind: 'file' });
             }
             catch (nextError) {
@@ -28084,7 +28504,7 @@ define("features/worldgen-performance/WorldgenPerformanceTab", ["require", "expo
             if (!desktop)
                 return;
             try {
-                const selection = await (0, desktopBridge_6.desktopChooseWorldgenLogFolder)();
+                const selection = await (0, desktopBridge_7.desktopChooseWorldgenLogFolder)();
                 setSelection({ ...selection, sourceKind: 'folder' });
             }
             catch (nextError) {
@@ -28131,7 +28551,7 @@ define("features/worldgen-performance/WorldgenPerformanceTab", ["require", "expo
                                     : (0, jsx_runtime_27.jsx)("button", { onClick: () => void chooseLog(), children: "Change log" })] })] }), (0, jsx_runtime_27.jsxs)("div", { className: "worldgen-performance-status", "aria-live": "polite", children: [(0, jsx_runtime_27.jsxs)("span", { className: "worldgen-performance-status-mode", children: [(0, jsx_runtime_27.jsx)(LucideIcon_15.LucideIcon, { name: "circle-dot", size: 11 }), tab.selection.sourceKind === 'folder' ? 'Newest .log in folder' : 'Selected log file'] }), (0, jsx_runtime_27.jsxs)("span", { children: [(0, jsx_runtime_27.jsx)("strong", { children: "Last check" }), formatCheckedAt(checkedAt)] }), scanSummary && (0, jsx_runtime_27.jsxs)("span", { children: [(0, jsx_runtime_27.jsx)("strong", { children: "Scanned" }), scanSummary] }), (0, jsx_runtime_27.jsxs)("span", { children: [(0, jsx_runtime_27.jsx)("strong", { children: "Refresh" }), "60 s"] }), tab.selection.sourceKind === 'folder' && (0, jsx_runtime_27.jsx)("span", { className: "worldgen-performance-status-note", children: "Top-level .log only \u00B7 .log.lck ignored" })] }), error && (0, jsx_runtime_27.jsxs)("div", { className: "worldgen-performance-error", role: "alert", children: [(0, jsx_runtime_27.jsx)("strong", { children: "WorldGen monitor error" }), (0, jsx_runtime_27.jsx)("span", { children: error })] }), !error && !loading && result && !report && ((0, jsx_runtime_27.jsxs)("div", { className: "worldgen-performance-no-report", role: "status", children: [(0, jsx_runtime_27.jsx)(LucideIcon_15.LucideIcon, { name: "circle-dot", size: 18 }), (0, jsx_runtime_27.jsxs)("div", { children: [(0, jsx_runtime_27.jsx)("h3", { children: "No complete WorldGen performance report found" }), (0, jsx_runtime_27.jsx)("p", { children: "The source stays active and will be checked again automatically." })] })] })), report && summaryMetrics && ((0, jsx_runtime_27.jsxs)(jsx_runtime_27.Fragment, { children: [(0, jsx_runtime_27.jsxs)("div", { className: "worldgen-performance-report-bar", children: [(0, jsx_runtime_27.jsxs)("div", { className: "worldgen-performance-sample-count", "aria-label": "Current sample count", children: [(0, jsx_runtime_27.jsx)("span", { children: "Sample Count" }), (0, jsx_runtime_27.jsx)("strong", { children: formatCount(report.sampleCount) })] }), (0, jsx_runtime_27.jsxs)("div", { className: "worldgen-performance-report-identity", children: [(0, jsx_runtime_27.jsx)("span", { children: "World Structure" }), (0, jsx_runtime_27.jsx)("strong", { children: report.worldStructureName }), (0, jsx_runtime_27.jsxs)("small", { children: [report.timestamp || 'Timestamp unavailable', " \u00B7 latest complete report"] })] })] }), (0, jsx_runtime_27.jsxs)("div", { className: "worldgen-performance-metrics worldgen-performance-kpi-grid", "aria-label": "WorldGen summary metrics", children: [(0, jsx_runtime_27.jsxs)("div", { className: "worldgen-performance-metric primary-metric", children: [(0, jsx_runtime_27.jsx)("span", { children: "Total" }), (0, jsx_runtime_27.jsx)("strong", { children: formatMs(report.totalMs) })] }), (0, jsx_runtime_27.jsxs)("div", { className: "worldgen-performance-metric", children: [(0, jsx_runtime_27.jsx)("span", { children: "Content Generation" }), (0, jsx_runtime_27.jsx)("strong", { children: formatMs(report.contentGenerationMs) })] }), (0, jsx_runtime_27.jsxs)("div", { className: "worldgen-performance-metric", children: [(0, jsx_runtime_27.jsx)("span", { children: "Access Init" }), (0, jsx_runtime_27.jsx)("strong", { children: formatMs(report.accessInitializationMs) })] }), (0, jsx_runtime_27.jsxs)("div", { className: "worldgen-performance-metric", children: [(0, jsx_runtime_27.jsx)("span", { children: "BiomeStage" }), (0, jsx_runtime_27.jsx)("strong", { children: formatMs(summaryMetrics.biomeStageMs) })] }), (0, jsx_runtime_27.jsxs)("div", { className: "worldgen-performance-metric", children: [(0, jsx_runtime_27.jsx)("span", { children: "TerrainStage" }), (0, jsx_runtime_27.jsx)("strong", { children: formatMs(summaryMetrics.terrainStageMs) })] }), (0, jsx_runtime_27.jsxs)("div", { className: "worldgen-performance-metric", children: [(0, jsx_runtime_27.jsx)("span", { children: "PropStage" }), (0, jsx_runtime_27.jsx)("strong", { children: formatMs(summaryMetrics.propStageMs) })] }), (0, jsx_runtime_27.jsxs)("div", { className: "worldgen-performance-metric", children: [(0, jsx_runtime_27.jsx)("span", { children: "TintStage" }), (0, jsx_runtime_27.jsx)("strong", { children: formatMs(summaryMetrics.tintStageMs) })] }), (0, jsx_runtime_27.jsxs)("div", { className: "worldgen-performance-metric", children: [(0, jsx_runtime_27.jsx)("span", { children: "Data Transfer" }), (0, jsx_runtime_27.jsx)("strong", { children: formatMs(report.dataTransferMs) })] }), (0, jsx_runtime_27.jsxs)("div", { className: "worldgen-performance-metric", children: [(0, jsx_runtime_27.jsx)("span", { children: "Material (Sum)" }), (0, jsx_runtime_27.jsx)("strong", { children: formatMs(summaryMetrics.materialSumMs) }), (0, jsx_runtime_27.jsxs)("small", { children: [summaryMetrics.materialTimings.length, " section", summaryMetrics.materialTimings.length === 1 ? '' : 's'] })] })] }), (0, jsx_runtime_27.jsxs)("div", { className: "worldgen-performance-details-stack", children: [(0, jsx_runtime_27.jsxs)("details", { className: "worldgen-performance-section worldgen-performance-collapsible", children: [(0, jsx_runtime_27.jsxs)("summary", { className: "worldgen-performance-section-title", children: [(0, jsx_runtime_27.jsxs)("div", { children: [(0, jsx_runtime_27.jsx)("h3", { children: "Content Generation" }), (0, jsx_runtime_27.jsx)("p", { children: "Exact stage totals, preparation, execution and async start." })] }), (0, jsx_runtime_27.jsx)("span", { className: "worldgen-performance-summary-value", children: formatMs(report.contentGenerationMs) }), (0, jsx_runtime_27.jsx)(LucideIcon_15.LucideIcon, { name: "chevron-right", size: 15, className: "worldgen-performance-chevron" })] }), (0, jsx_runtime_27.jsx)("div", { className: "worldgen-performance-stage-table-wrap", children: (0, jsx_runtime_27.jsxs)("table", { className: "worldgen-performance-stage-table", children: [(0, jsx_runtime_27.jsx)("thead", { children: (0, jsx_runtime_27.jsxs)("tr", { children: [(0, jsx_runtime_27.jsx)("th", { children: "Stage" }), (0, jsx_runtime_27.jsx)("th", { children: "Total" }), (0, jsx_runtime_27.jsx)("th", { children: "Preparation" }), (0, jsx_runtime_27.jsx)("th", { children: "Execution" }), (0, jsx_runtime_27.jsx)("th", { children: "Async Start" })] }) }), (0, jsx_runtime_27.jsx)("tbody", { children: report.stages.map((stage) => ((0, jsx_runtime_27.jsxs)("tr", { children: [(0, jsx_runtime_27.jsxs)("th", { scope: "row", children: [(0, jsx_runtime_27.jsx)("span", { className: "worldgen-stage-index", children: stage.stage }), stage.name] }), (0, jsx_runtime_27.jsx)("td", { children: formatMs(stage.durationMs) }), (0, jsx_runtime_27.jsx)("td", { children: formatMs(stage.preparationMs) }), (0, jsx_runtime_27.jsx)("td", { children: formatMs(stage.executionMs) }), (0, jsx_runtime_27.jsx)("td", { children: formatMs(stage.asyncProcessesStartMs) })] }, `${stage.stage}-${stage.name}`))) })] }) })] }), (0, jsx_runtime_27.jsxs)("details", { className: "worldgen-performance-section worldgen-performance-collapsible", children: [(0, jsx_runtime_27.jsxs)("summary", { className: "worldgen-performance-section-title", children: [(0, jsx_runtime_27.jsxs)("div", { children: [(0, jsx_runtime_27.jsx)("h3", { children: "Material Sections" }), (0, jsx_runtime_27.jsx)("p", { children: "Exact values contributing to the Material (Sum) KPI." })] }), (0, jsx_runtime_27.jsx)("span", { className: "worldgen-performance-summary-value", children: formatMs(summaryMetrics.materialSumMs) }), (0, jsx_runtime_27.jsx)(LucideIcon_15.LucideIcon, { name: "chevron-right", size: 15, className: "worldgen-performance-chevron" })] }), (0, jsx_runtime_27.jsx)("div", { className: "worldgen-performance-value-grid", children: summaryMetrics.materialTimings.length > 0 ? summaryMetrics.materialTimings.map((timing, index) => ((0, jsx_runtime_27.jsxs)("div", { children: [(0, jsx_runtime_27.jsx)("span", { children: timing.label }), (0, jsx_runtime_27.jsx)("strong", { children: formatMs(timing.durationMs) })] }, `${timing.label}-${index}`))) : (0, jsx_runtime_27.jsx)("p", { className: "worldgen-performance-section-empty", children: "No material section timings in this report." }) })] }), (0, jsx_runtime_27.jsxs)("details", { className: "worldgen-performance-section worldgen-performance-collapsible", children: [(0, jsx_runtime_27.jsxs)("summary", { className: "worldgen-performance-section-title", children: [(0, jsx_runtime_27.jsxs)("div", { children: [(0, jsx_runtime_27.jsx)("h3", { children: "Data Transfer" }), (0, jsx_runtime_27.jsx)("p", { children: "Environment, write, tint, entity and block-state timings." })] }), (0, jsx_runtime_27.jsx)("span", { className: "worldgen-performance-summary-value", children: formatMs(report.dataTransferMs) }), (0, jsx_runtime_27.jsx)(LucideIcon_15.LucideIcon, { name: "chevron-right", size: 15, className: "worldgen-performance-chevron" })] }), (0, jsx_runtime_27.jsx)("div", { className: "worldgen-performance-stage-table-wrap", children: (0, jsx_runtime_27.jsxs)("table", { className: "worldgen-performance-stage-table worldgen-performance-key-value-table", children: [(0, jsx_runtime_27.jsx)("thead", { children: (0, jsx_runtime_27.jsxs)("tr", { children: [(0, jsx_runtime_27.jsx)("th", { children: "Entry" }), (0, jsx_runtime_27.jsx)("th", { children: "Time" })] }) }), (0, jsx_runtime_27.jsx)("tbody", { children: summaryMetrics.otherTransferTimings.map((timing, index) => ((0, jsx_runtime_27.jsxs)("tr", { children: [(0, jsx_runtime_27.jsx)("th", { scope: "row", children: timing.label }), (0, jsx_runtime_27.jsx)("td", { children: formatMs(timing.durationMs) })] }, `${timing.label}-${index}`))) })] }) })] }), (0, jsx_runtime_27.jsxs)("details", { className: "worldgen-performance-section worldgen-performance-collapsible", children: [(0, jsx_runtime_27.jsxs)("summary", { className: "worldgen-performance-section-title", children: [(0, jsx_runtime_27.jsxs)("div", { children: [(0, jsx_runtime_27.jsx)("h3", { children: "Memory Usage" }), (0, jsx_runtime_27.jsx)("p", { children: "Buffer memory and per-grid allocation." })] }), (0, jsx_runtime_27.jsx)("span", { className: "worldgen-performance-summary-value", children: formatMb(report.buffersMemoryMb) }), (0, jsx_runtime_27.jsx)(LucideIcon_15.LucideIcon, { name: "chevron-right", size: 15, className: "worldgen-performance-chevron" })] }), (0, jsx_runtime_27.jsx)("div", { className: "worldgen-performance-stage-table-wrap", children: (0, jsx_runtime_27.jsxs)("table", { className: "worldgen-performance-stage-table", children: [(0, jsx_runtime_27.jsx)("thead", { children: (0, jsx_runtime_27.jsxs)("tr", { children: [(0, jsx_runtime_27.jsx)("th", { children: "Grid" }), (0, jsx_runtime_27.jsx)("th", { children: "Index" }), (0, jsx_runtime_27.jsx)("th", { children: "Memory" }), (0, jsx_runtime_27.jsx)("th", { children: "Buffers" })] }) }), (0, jsx_runtime_27.jsx)("tbody", { children: report.memoryGrids.map((grid) => ((0, jsx_runtime_27.jsxs)("tr", { children: [(0, jsx_runtime_27.jsx)("th", { scope: "row", children: grid.name }), (0, jsx_runtime_27.jsx)("td", { children: grid.index }), (0, jsx_runtime_27.jsx)("td", { children: formatMb(grid.memoryFootprintMb) }), (0, jsx_runtime_27.jsx)("td", { children: formatCount(grid.bufferCount) })] }, `${grid.index}-${grid.name}`))) })] }) })] }), (0, jsx_runtime_27.jsxs)("details", { className: "worldgen-performance-section worldgen-performance-collapsible", children: [(0, jsx_runtime_27.jsxs)("summary", { className: "worldgen-performance-section-title", children: [(0, jsx_runtime_27.jsxs)("div", { children: [(0, jsx_runtime_27.jsx)("h3", { children: "Context Dependencies" }), (0, jsx_runtime_27.jsx)("p", { children: "Buffer-column and chunk-column output sizes." })] }), (0, jsx_runtime_27.jsxs)("span", { className: "worldgen-performance-summary-value", children: [report.contextDependencies.length, " stages"] }), (0, jsx_runtime_27.jsx)(LucideIcon_15.LucideIcon, { name: "chevron-right", size: 15, className: "worldgen-performance-chevron" })] }), (0, jsx_runtime_27.jsx)("div", { className: "worldgen-performance-stage-table-wrap", children: (0, jsx_runtime_27.jsxs)("table", { className: "worldgen-performance-stage-table", children: [(0, jsx_runtime_27.jsx)("thead", { children: (0, jsx_runtime_27.jsxs)("tr", { children: [(0, jsx_runtime_27.jsx)("th", { children: "Stage" }), (0, jsx_runtime_27.jsx)("th", { children: "Buffer Column" }), (0, jsx_runtime_27.jsx)("th", { children: "Chunk Column" })] }) }), (0, jsx_runtime_27.jsx)("tbody", { children: report.contextDependencies.map((dependency) => ((0, jsx_runtime_27.jsxs)("tr", { children: [(0, jsx_runtime_27.jsxs)("th", { scope: "row", children: [(0, jsx_runtime_27.jsx)("span", { className: "worldgen-stage-index", children: dependency.stage }), dependency.name] }), (0, jsx_runtime_27.jsx)("td", { children: formatVector(dependency.outputBufferX, dependency.outputBufferZ) }), (0, jsx_runtime_27.jsx)("td", { children: formatVector(dependency.outputChunkX, dependency.outputChunkZ) })] }, `${dependency.stage}-${dependency.name}`))) })] }) })] }), (0, jsx_runtime_27.jsxs)("details", { className: "worldgen-performance-section worldgen-performance-collapsible", children: [(0, jsx_runtime_27.jsxs)("summary", { className: "worldgen-performance-section-title", children: [(0, jsx_runtime_27.jsxs)("div", { children: [(0, jsx_runtime_27.jsx)("h3", { children: "Buffer Cache" }), (0, jsx_runtime_27.jsx)("p", { children: "Requests, misses and miss ratio." })] }), (0, jsx_runtime_27.jsxs)("span", { className: "worldgen-performance-summary-value", children: [report.missedTotalRatioPercent, "% missed"] }), (0, jsx_runtime_27.jsx)(LucideIcon_15.LucideIcon, { name: "chevron-right", size: 15, className: "worldgen-performance-chevron" })] }), (0, jsx_runtime_27.jsxs)("div", { className: "worldgen-performance-cache-grid", children: [(0, jsx_runtime_27.jsxs)("div", { children: [(0, jsx_runtime_27.jsx)("span", { children: "Total requests" }), (0, jsx_runtime_27.jsx)("strong", { children: formatCount(report.totalCacheBufferRequests) })] }), (0, jsx_runtime_27.jsxs)("div", { children: [(0, jsx_runtime_27.jsx)("span", { children: "Missed requests" }), (0, jsx_runtime_27.jsx)("strong", { children: formatCount(report.missedCacheBufferRequests) })] }), (0, jsx_runtime_27.jsxs)("div", { children: [(0, jsx_runtime_27.jsx)("span", { children: "Miss ratio" }), (0, jsx_runtime_27.jsxs)("strong", { children: [report.missedTotalRatioPercent, "%"] })] })] })] }), (0, jsx_runtime_27.jsxs)("details", { className: "worldgen-performance-section worldgen-performance-collapsible worldgen-performance-raw", children: [(0, jsx_runtime_27.jsxs)("summary", { className: "worldgen-performance-section-title", children: [(0, jsx_runtime_27.jsxs)("div", { children: [(0, jsx_runtime_27.jsx)("h3", { children: "Raw Performance Report" }), (0, jsx_runtime_27.jsx)("p", { children: "Original normalized block for exact inspection." })] }), (0, jsx_runtime_27.jsx)("span", { className: "worldgen-performance-summary-value", children: "Raw" }), (0, jsx_runtime_27.jsx)(LucideIcon_15.LucideIcon, { name: "chevron-right", size: 15, className: "worldgen-performance-chevron" })] }), (0, jsx_runtime_27.jsx)("pre", { children: report.rawReport })] })] })] }))] }));
     }
 });
-define("components/FieldMatchesDrawer", ["require", "exports", "react/jsx-runtime", "react", "core/index", "store", "components/WorkbenchDrawer"], function (require, exports, jsx_runtime_28, react_25, core_17, store_19, WorkbenchDrawer_2) {
+define("components/FieldMatchesDrawer", ["require", "exports", "react/jsx-runtime", "react", "core/index", "store", "components/WorkbenchDrawer"], function (require, exports, jsx_runtime_28, react_25, core_18, store_19, WorkbenchDrawer_2) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.FieldMatchesDrawer = FieldMatchesDrawer;
@@ -28140,16 +28560,16 @@ define("components/FieldMatchesDrawer", ["require", "exports", "react/jsx-runtim
         const changeSet = (0, store_19.useWorkbenchStore)((state) => state.changeSet);
         const setChangeSet = (0, store_19.useWorkbenchStore)((state) => state.setChangeSet);
         const focusNode = (0, store_19.useWorkbenchStore)((state) => state.focusNode);
-        const matches = (0, react_25.useMemo)(() => (0, core_17.findMatchingFields)(project, node, field), [project, node, field]);
+        const matches = (0, react_25.useMemo)(() => (0, core_18.findMatchingFields)(project, node, field), [project, node, field]);
         const [selected, setSelected] = (0, react_25.useState)(new Set());
         const hasNewValue = newValue !== field.value;
-        const keyFor = (item) => `${item.fileId}|${(0, core_17.jsonPathKey)(item.field.jsonPath)}`;
+        const keyFor = (item) => `${item.fileId}|${(0, core_18.jsonPathKey)(item.field.jsonPath)}`;
         const stageSelected = () => {
             let next = changeSet;
             for (const item of matches) {
                 if (!selected.has(keyFor(item)))
                     continue;
-                next = (0, core_17.stageFieldChange)(next, {
+                next = (0, core_18.stageFieldChange)(next, {
                     fileId: item.fileId,
                     filePath: item.filePath,
                     nodeId: item.nodeId,
@@ -28178,7 +28598,7 @@ define("components/FieldMatchesDrawer", ["require", "exports", "react/jsx-runtim
                         })] })] }));
     }
 });
-define("components/RenameSymbolDialog", ["require", "exports", "react/jsx-runtime", "react", "core/index", "store", "components/LucideIcon", "workbench/modalFocus"], function (require, exports, jsx_runtime_29, react_26, core_18, store_20, LucideIcon_16, modalFocus_6) {
+define("components/RenameSymbolDialog", ["require", "exports", "react/jsx-runtime", "react", "core/index", "store", "components/LucideIcon", "workbench/modalFocus"], function (require, exports, jsx_runtime_29, react_26, core_19, store_20, LucideIcon_16, modalFocus_6) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.RenameSymbolDialog = RenameSymbolDialog;
@@ -28189,7 +28609,7 @@ define("components/RenameSymbolDialog", ["require", "exports", "react/jsx-runtim
         const { node, field, newName } = request;
         const oldName = String(field.value);
         const symbolType = field.symbolType;
-        const record = project.symbolIndex.get((0, core_18.symbolKey)(symbolType, oldName));
+        const record = project.symbolIndex.get((0, core_19.symbolKey)(symbolType, oldName));
         const liveDefinitions = record?.definitions.filter((item) => item.location === 'live').length ?? 0;
         const floatingDefinitions = record?.definitions.filter((item) => item.location === 'floating').length ?? 0;
         const liveReferences = record?.references.filter((item) => item.location === 'live').length ?? 0;
@@ -28214,7 +28634,7 @@ define("components/RenameSymbolDialog", ["require", "exports", "react/jsx-runtim
             return count;
         }, [includeDefinition, includeReferences, includeLive, includeFloating, liveDefinitions, floatingDefinitions, liveReferences, floatingReferences]);
         const apply = () => {
-            const next = (0, core_18.renameSymbol)(project, changeSet, symbolType, oldName, newName, {
+            const next = (0, core_19.renameSymbol)(project, changeSet, symbolType, oldName, newName, {
                 includeDefinition,
                 includeReferences,
                 includeLive,
@@ -28226,7 +28646,7 @@ define("components/RenameSymbolDialog", ["require", "exports", "react/jsx-runtim
         return ((0, jsx_runtime_29.jsx)("div", { className: "modal-backdrop", onMouseDown: onClose, children: (0, jsx_runtime_29.jsxs)("section", { ref: dialogRef, className: "rename-modal", role: "dialog", "aria-modal": "true", "aria-labelledby": "rename-symbol-title", "aria-describedby": "rename-symbol-description", tabIndex: -1, onMouseDown: (event) => event.stopPropagation(), children: [(0, jsx_runtime_29.jsxs)("header", { children: [(0, jsx_runtime_29.jsxs)("div", { children: [(0, jsx_runtime_29.jsxs)("h3", { id: "rename-symbol-title", children: ["Rename ", symbolType, " symbol"] }), (0, jsx_runtime_29.jsx)("small", { id: "rename-symbol-description", children: "Choose exactly which symbol occurrences are staged." })] }), (0, jsx_runtime_29.jsx)("button", { onClick: onClose, "aria-label": "Close rename dialog", children: (0, jsx_runtime_29.jsx)(LucideIcon_16.LucideIcon, { name: "x", size: 15 }) })] }), (0, jsx_runtime_29.jsxs)("div", { className: "rename-values", children: [(0, jsx_runtime_29.jsx)("code", { children: oldName }), (0, jsx_runtime_29.jsx)("span", { children: "\u2192" }), (0, jsx_runtime_29.jsx)("code", { children: newName })] }), (0, jsx_runtime_29.jsxs)("div", { className: "rename-options", children: [(0, jsx_runtime_29.jsxs)("label", { children: [(0, jsx_runtime_29.jsx)("input", { ref: firstOptionRef, type: "checkbox", checked: includeDefinition, onChange: (event) => setIncludeDefinition(event.target.checked) }), " Definition(s) ", (0, jsx_runtime_29.jsxs)("small", { children: [liveDefinitions, " live \u00B7 ", floatingDefinitions, " floating"] })] }), (0, jsx_runtime_29.jsxs)("label", { children: [(0, jsx_runtime_29.jsx)("input", { type: "checkbox", checked: includeReferences, onChange: (event) => setIncludeReferences(event.target.checked) }), " References ", (0, jsx_runtime_29.jsxs)("small", { children: [liveReferences, " live \u00B7 ", floatingReferences, " floating"] })] }), (0, jsx_runtime_29.jsxs)("div", { className: "rename-location-options", children: [(0, jsx_runtime_29.jsxs)("label", { children: [(0, jsx_runtime_29.jsx)("input", { type: "checkbox", checked: includeLive, onChange: (event) => setIncludeLive(event.target.checked) }), " Live"] }), (0, jsx_runtime_29.jsxs)("label", { children: [(0, jsx_runtime_29.jsx)("input", { type: "checkbox", checked: includeFloating, onChange: (event) => setIncludeFloating(event.target.checked) }), " Floating"] })] })] }), (0, jsx_runtime_29.jsxs)("footer", { children: [(0, jsx_runtime_29.jsxs)("span", { children: [stagedCount, " occurrence(s) will be staged. Seeds and unrelated literals are never propagated."] }), (0, jsx_runtime_29.jsx)("button", { onClick: onClose, children: "Cancel" }), (0, jsx_runtime_29.jsx)("button", { className: "primary", disabled: stagedCount === 0 || oldName === newName, onClick: apply, children: "Stage rename" })] })] }) }));
     }
 });
-define("components/NodeCard", ["require", "exports", "react/jsx-runtime", "react", "core/index", "store", "features/inspector/visibility", "components/FieldMatchesDrawer", "components/RenameSymbolDialog", "workbench/WorkbenchPaneContext", "components/LucideIcon"], function (require, exports, jsx_runtime_30, react_27, core_19, store_21, visibility_4, FieldMatchesDrawer_1, RenameSymbolDialog_1, WorkbenchPaneContext_4, LucideIcon_17) {
+define("components/NodeCard", ["require", "exports", "react/jsx-runtime", "react", "core/index", "store", "features/inspector/visibility", "components/FieldMatchesDrawer", "components/RenameSymbolDialog", "workbench/WorkbenchPaneContext", "components/LucideIcon"], function (require, exports, jsx_runtime_30, react_27, core_20, store_21, visibility_4, FieldMatchesDrawer_1, RenameSymbolDialog_1, WorkbenchPaneContext_4, LucideIcon_17) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.NodeCard = NodeCard;
@@ -28264,7 +28684,7 @@ define("components/NodeCard", ["require", "exports", "react/jsx-runtime", "react
         const primaryField = visibleFields.find((field) => field.category === 'export')
             ?? visibleFields.find((field) => field.category === 'import')
             ?? visibleFields.find((field) => field.category === 'seed');
-        const pendingFor = (field) => changeSet.changes.find((change) => change.fileId === node.fileId && (0, core_19.jsonPathKey)(change.jsonPath) === (0, core_19.jsonPathKey)(field.jsonPath));
+        const pendingFor = (field) => changeSet.changes.find((change) => change.fileId === node.fileId && (0, core_20.jsonPathKey)(change.jsonPath) === (0, core_20.jsonPathKey)(field.jsonPath));
         const parseValue = (field, rawNewValue) => {
             if (typeof field.value === 'number') {
                 const parsed = Number(rawNewValue);
@@ -28287,7 +28707,7 @@ define("components/NodeCard", ["require", "exports", "react/jsx-runtime", "react
                 setRenameRequest({ node, field, newName: newValue });
                 return;
             }
-            setChangeSet((0, core_19.stageFieldChange)(changeSet, {
+            setChangeSet((0, core_20.stageFieldChange)(changeSet, {
                 fileId: node.fileId,
                 filePath: file.path,
                 nodeId: node.id,
@@ -28301,13 +28721,13 @@ define("components/NodeCard", ["require", "exports", "react/jsx-runtime", "react
         };
         return ((0, jsx_runtime_30.jsxs)(jsx_runtime_30.Fragment, { children: [(0, jsx_runtime_30.jsxs)("article", { className: `node-card ${node.location} ${collapsed ? 'collapsed' : ''}`, id: `node-${paneId}-${encodeURIComponent(node.id)}`, children: [(0, jsx_runtime_30.jsxs)("header", { children: [(0, jsx_runtime_30.jsxs)("div", { className: "node-heading", children: [(0, jsx_runtime_30.jsx)("strong", { children: node.nodeKind }), primaryField && (0, jsx_runtime_30.jsx)("span", { className: "node-primary-value", children: String(primaryField.value) }), node.type !== node.nodeKind && (0, jsx_runtime_30.jsx)("small", { children: node.type })] }), (0, jsx_runtime_30.jsxs)("div", { className: "node-header-actions", children: [(0, jsx_runtime_30.jsxs)("div", { className: "node-header-badges", children: [matchedNodeMetadata && (0, jsx_runtime_30.jsx)("span", { className: "search-match-badge", children: matchedNodeLabel }), (0, jsx_runtime_30.jsx)("span", { className: `location-badge ${node.location}`, children: node.location })] }), (0, jsx_runtime_30.jsx)("button", { className: "node-collapse-button", onClick: () => setCollapsed((value) => !value), "aria-expanded": !collapsed, "aria-label": `${collapsed ? 'Expand' : 'Collapse'} ${node.nodeKind} node`, "data-tooltip": collapsed ? 'Expand node' : 'Collapse node', children: (0, jsx_runtime_30.jsx)(LucideIcon_17.LucideIcon, { name: collapsed ? 'chevron-right' : 'chevron-down', size: 15 }) })] })] }), !collapsed && (0, jsx_runtime_30.jsx)("div", { className: "field-list", children: visibleFields.map((field) => {
                                 const record = field.symbolType && typeof field.value === 'string'
-                                    ? project.symbolIndex.get((0, core_19.symbolKey)(field.symbolType, field.value))
+                                    ? project.symbolIndex.get((0, core_20.symbolKey)(field.symbolType, field.value))
                                     : undefined;
                                 const pending = pendingFor(field);
-                                const suggestion = (0, core_19.suggestRule)(changeSet, field.symbolType, field.value);
-                                const draftKey = (0, core_19.jsonPathKey)(field.jsonPath);
+                                const suggestion = (0, core_20.suggestRule)(changeSet, field.symbolType, field.value);
+                                const draftKey = (0, core_20.jsonPathKey)(field.jsonPath);
                                 const displayValue = pending?.newValue ?? field.value;
-                                const matches = field.refactorBehavior === 'symbol' ? [] : (0, core_19.findMatchingFields)(project, node, field);
+                                const matches = field.refactorBehavior === 'symbol' ? [] : (0, core_20.findMatchingFields)(project, node, field);
                                 return ((0, jsx_runtime_30.jsxs)("div", { className: `field-row ${matchedPaths.has(draftKey) ? 'search-match-field' : ''}`, children: [(0, jsx_runtime_30.jsxs)("div", { className: "field-meta", children: [(0, jsx_runtime_30.jsx)("span", { className: `field-category ${field.category}`, children: field.category }), (0, jsx_runtime_30.jsx)("strong", { children: field.key }), matchedPaths.has(draftKey) && (0, jsx_runtime_30.jsx)("span", { className: "search-match-badge", children: matchedFieldLabel })] }), (0, jsx_runtime_30.jsxs)("div", { className: "field-value", children: [(0, jsx_runtime_30.jsx)("span", { className: "current-value", "data-tooltip": String(field.value), children: String(field.value) }), editing && ((0, jsx_runtime_30.jsxs)(jsx_runtime_30.Fragment, { children: [(0, jsx_runtime_30.jsx)("span", { className: "arrow", children: "\u2192" }), (0, jsx_runtime_30.jsx)("input", { value: drafts[draftKey] ?? String(displayValue), onChange: (event) => setDrafts((current) => ({ ...current, [draftKey]: event.target.value })), onKeyDown: (event) => { if (event.key === 'Enter')
                                                                 event.currentTarget.blur(); }, onBlur: (event) => {
                                                                 if (event.target.value !== String(displayValue))
@@ -28329,7 +28749,7 @@ define("components/ReferenceDrawer", ["require", "exports", "react/jsx-runtime",
         return ((0, jsx_runtime_31.jsxs)(WorkbenchDrawer_3.WorkbenchDrawer, { title: record.key.name, subtitle: `${record.key.symbolType} · ${liveRefs} live refs · ${floatingRefs} floating refs`, onClose: onClose, ariaLabel: "references", children: [(0, jsx_runtime_31.jsxs)("div", { className: "drawer-primary-action", children: [(0, jsx_runtime_31.jsx)("button", { className: "primary", onClick: () => onOpenAsTab(record), children: "Open all as tab" }), (0, jsx_runtime_31.jsx)("small", { children: "Creates a stable reference snapshot using the normal Workbench filters." })] }), (0, jsx_runtime_31.jsxs)("div", { className: "drawer-section", children: [(0, jsx_runtime_31.jsxs)("h4", { children: ["Definitions (", record.definitions.length, ")"] }), record.definitions.length === 0 && (0, jsx_runtime_31.jsx)("div", { className: "drawer-empty", children: "No definition in the loaded project." }), record.definitions.map((item, index) => (0, jsx_runtime_31.jsx)(OccurrenceRow, { item: item, onOpen: onOpenOccurrence }, `d-${index}`))] }), (0, jsx_runtime_31.jsxs)("div", { className: "drawer-section", children: [(0, jsx_runtime_31.jsxs)("h4", { children: ["References (", record.references.length, ")"] }), record.references.length === 0 && (0, jsx_runtime_31.jsx)("div", { className: "drawer-empty", children: "No references in the loaded project." }), record.references.map((item, index) => (0, jsx_runtime_31.jsx)(OccurrenceRow, { item: item, onOpen: onOpenOccurrence }, `r-${index}`))] })] }));
     }
 });
-define("features/inspector/InspectorPane", ["require", "exports", "react/jsx-runtime", "react", "io/folderLoader", "core/index", "components/FileTabs", "components/LucideIcon", "components/FilterBar", "features/visual/VisualLayoutTab", "features/project-graph/ProjectGraphView", "features/worldgen-performance/WorldgenPerformanceTab", "components/NodeCard", "components/ReferenceDrawer", "store", "workbench/WorkbenchPaneContext", "features/inspector/visibility", "features/inspector/queryTabs"], function (require, exports, jsx_runtime_32, react_28, folderLoader_6, core_20, FileTabs_1, LucideIcon_18, FilterBar_1, VisualLayoutTab_1, ProjectGraphView_1, WorldgenPerformanceTab_1, NodeCard_1, ReferenceDrawer_1, store_22, WorkbenchPaneContext_5, visibility_5, queryTabs_3) {
+define("features/inspector/InspectorPane", ["require", "exports", "react/jsx-runtime", "react", "io/folderLoader", "core/index", "components/FileTabs", "components/LucideIcon", "components/FilterBar", "features/visual/VisualLayoutTab", "features/project-graph/ProjectGraphView", "features/worldgen-performance/WorldgenPerformanceTab", "components/NodeCard", "components/ReferenceDrawer", "store", "workbench/WorkbenchPaneContext", "features/inspector/visibility", "features/inspector/queryTabs"], function (require, exports, jsx_runtime_32, react_28, folderLoader_6, core_21, FileTabs_1, LucideIcon_18, FilterBar_1, VisualLayoutTab_1, ProjectGraphView_1, WorldgenPerformanceTab_1, NodeCard_1, ReferenceDrawer_1, store_22, WorkbenchPaneContext_5, visibility_5, queryTabs_3) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.InspectorPane = InspectorPane;
@@ -28394,7 +28814,7 @@ define("features/inspector/InspectorPane", ["require", "exports", "react/jsx-run
             }, 80);
             return () => window.clearTimeout(timer);
         }, [activePane, focusedNode, file.id, paneId]);
-        return ((0, jsx_runtime_32.jsxs)(jsx_runtime_32.Fragment, { children: [(0, jsx_runtime_32.jsxs)("div", { className: "file-heading", children: [(0, jsx_runtime_32.jsxs)("div", { children: [(0, jsx_runtime_32.jsxs)("div", { className: "heading-line", children: [(0, jsx_runtime_32.jsx)("h2", { children: file.name }), (0, jsx_runtime_32.jsx)("span", { className: `workspace-badge ${(0, core_20.workspaceCssClass)(file.workspace)}`, children: (0, core_20.workspaceLabel)(file.workspace) })] }), (0, jsx_runtime_32.jsx)("small", { children: file.path })] }), (0, jsx_runtime_32.jsxs)("div", { className: "file-stats", children: [(0, jsx_runtime_32.jsxs)("span", { children: [groups.live.length, " relevant live"] }), (0, jsx_runtime_32.jsxs)("span", { children: [groups.floating.length, " relevant floating"] }), (0, jsx_runtime_32.jsxs)("span", { children: [file.nodes.length, " total nodes"] }), (0, jsx_runtime_32.jsxs)("button", { className: "source-open-button", onClick: () => openSourceTab(file.path), children: [(0, jsx_runtime_32.jsx)(LucideIcon_18.LucideIcon, { name: "file-text", size: 13 }), " Source"] })] })] }), resourceReferences.length > 0 && ((0, jsx_runtime_32.jsxs)("div", { className: "resource-reference-strip", children: [(0, jsx_runtime_32.jsxs)("span", { className: "resource-reference-strip-label", children: [(0, jsx_runtime_32.jsx)(LucideIcon_18.LucideIcon, { name: "link-2", size: 12 }), " Resources"] }), (0, jsx_runtime_32.jsx)("div", { className: "resource-reference-strip-items", children: resourceReferences.map((reference) => ((0, jsx_runtime_32.jsxs)("button", { className: `resource-reference-chip ${reference.status}`, onClick: () => openResourceReferenceTab(reference.target.resourceKind, reference.target.name, reference.target.resourcePath), "data-tooltip": `${reference.relation} · ${reference.status}`, children: [(0, jsx_runtime_32.jsx)("span", { children: reference.target.type }), (0, jsx_runtime_32.jsx)("strong", { children: reference.target.name })] }, reference.id))) })] })), file.parseError && ((0, jsx_runtime_32.jsxs)("div", { className: "source-parse-error", role: "alert", children: [(0, jsx_runtime_32.jsxs)("div", { children: [(0, jsx_runtime_32.jsx)("strong", { children: "JSON parse error" }), (0, jsx_runtime_32.jsx)("span", { children: file.parseError })] }), (0, jsx_runtime_32.jsx)("button", { onClick: () => openSourceTab(file.path), children: "Open read-only source" })] })), filters.live && ((0, jsx_runtime_32.jsxs)("section", { className: "node-section", children: [(0, jsx_runtime_32.jsxs)("button", { className: "section-toggle", onClick: () => setLiveOpen((value) => !value), children: [(0, jsx_runtime_32.jsxs)("span", { children: [(0, jsx_runtime_32.jsx)(LucideIcon_18.LucideIcon, { name: liveOpen ? 'chevron-down' : 'chevron-right', size: 13 }), " Live nodes"] }), (0, jsx_runtime_32.jsx)("small", { children: groups.live.length })] }), liveOpen && (groups.live.length
+        return ((0, jsx_runtime_32.jsxs)(jsx_runtime_32.Fragment, { children: [(0, jsx_runtime_32.jsxs)("div", { className: "file-heading", children: [(0, jsx_runtime_32.jsxs)("div", { children: [(0, jsx_runtime_32.jsxs)("div", { className: "heading-line", children: [(0, jsx_runtime_32.jsx)("h2", { children: file.name }), (0, jsx_runtime_32.jsx)("span", { className: `workspace-badge ${(0, core_21.workspaceCssClass)(file.workspace)}`, children: (0, core_21.workspaceLabel)(file.workspace) })] }), (0, jsx_runtime_32.jsx)("small", { children: file.path })] }), (0, jsx_runtime_32.jsxs)("div", { className: "file-stats", children: [(0, jsx_runtime_32.jsxs)("span", { children: [groups.live.length, " relevant live"] }), (0, jsx_runtime_32.jsxs)("span", { children: [groups.floating.length, " relevant floating"] }), (0, jsx_runtime_32.jsxs)("span", { children: [file.nodes.length, " total nodes"] }), (0, jsx_runtime_32.jsxs)("button", { className: "source-open-button", onClick: () => openSourceTab(file.path), children: [(0, jsx_runtime_32.jsx)(LucideIcon_18.LucideIcon, { name: "file-text", size: 13 }), " Source"] })] })] }), resourceReferences.length > 0 && ((0, jsx_runtime_32.jsxs)("div", { className: "resource-reference-strip", children: [(0, jsx_runtime_32.jsxs)("span", { className: "resource-reference-strip-label", children: [(0, jsx_runtime_32.jsx)(LucideIcon_18.LucideIcon, { name: "link-2", size: 12 }), " Resources"] }), (0, jsx_runtime_32.jsx)("div", { className: "resource-reference-strip-items", children: resourceReferences.map((reference) => ((0, jsx_runtime_32.jsxs)("button", { className: `resource-reference-chip ${reference.status}`, onClick: () => openResourceReferenceTab(reference.target.resourceKind, reference.target.name, reference.target.resourcePath), "data-tooltip": `${reference.relation} · ${reference.status}`, children: [(0, jsx_runtime_32.jsx)("span", { children: reference.target.type }), (0, jsx_runtime_32.jsx)("strong", { children: reference.target.name })] }, reference.id))) })] })), file.parseError && ((0, jsx_runtime_32.jsxs)("div", { className: "source-parse-error", role: "alert", children: [(0, jsx_runtime_32.jsxs)("div", { children: [(0, jsx_runtime_32.jsx)("strong", { children: "JSON parse error" }), (0, jsx_runtime_32.jsx)("span", { children: file.parseError })] }), (0, jsx_runtime_32.jsx)("button", { onClick: () => openSourceTab(file.path), children: "Open read-only source" })] })), filters.live && ((0, jsx_runtime_32.jsxs)("section", { className: "node-section", children: [(0, jsx_runtime_32.jsxs)("button", { className: "section-toggle", onClick: () => setLiveOpen((value) => !value), children: [(0, jsx_runtime_32.jsxs)("span", { children: [(0, jsx_runtime_32.jsx)(LucideIcon_18.LucideIcon, { name: liveOpen ? 'chevron-down' : 'chevron-right', size: 13 }), " Live nodes"] }), (0, jsx_runtime_32.jsx)("small", { children: groups.live.length })] }), liveOpen && (groups.live.length
                             ? groups.live.map((node) => (0, jsx_runtime_32.jsx)(NodeCard_1.NodeCard, { node: node, onShowReferences: setReferences }, `live-${node.id}`))
                             : (0, jsx_runtime_32.jsx)("div", { className: "section-empty", children: "No live nodes match the normal filters." }))] })), filters.floating && ((0, jsx_runtime_32.jsxs)("section", { className: "node-section floating-section", children: [(0, jsx_runtime_32.jsxs)("button", { className: "section-toggle", onClick: () => setFloatingOpen((value) => !value), children: [(0, jsx_runtime_32.jsxs)("span", { children: [(0, jsx_runtime_32.jsx)(LucideIcon_18.LucideIcon, { name: floatingOpen ? 'chevron-down' : 'chevron-right', size: 13 }), " Floating / editor-only nodes"] }), (0, jsx_runtime_32.jsx)("small", { children: groups.floating.length })] }), floatingOpen && (groups.floating.length
                             ? groups.floating.map((node) => (0, jsx_runtime_32.jsx)(NodeCard_1.NodeCard, { node: node, onShowReferences: setReferences }, `floating-${node.id}`))
@@ -28467,7 +28887,7 @@ define("features/inspector/InspectorPane", ["require", "exports", "react/jsx-run
             }
             return [...groups.values()];
         }, [visibleMatches]);
-        return ((0, jsx_runtime_32.jsxs)(jsx_runtime_32.Fragment, { children: [(0, jsx_runtime_32.jsxs)("div", { className: "query-node-results", children: [grouped.map((group) => ((0, jsx_runtime_32.jsxs)("section", { className: "search-file-group", children: [(0, jsx_runtime_32.jsxs)("header", { children: [(0, jsx_runtime_32.jsxs)("div", { children: [(0, jsx_runtime_32.jsx)("strong", { children: group.file.name }), (0, jsx_runtime_32.jsx)("small", { children: group.file.path })] }), (0, jsx_runtime_32.jsxs)("div", { children: [(0, jsx_runtime_32.jsx)("span", { className: `workspace-badge ${(0, core_20.workspaceCssClass)(group.file.workspace)}`, children: (0, core_20.workspaceLabel)(group.file.workspace) }), (0, jsx_runtime_32.jsxs)("small", { children: [group.items.length, " shown"] })] })] }), group.items.map(({ node, match }) => ((0, jsx_runtime_32.jsx)(NodeCard_1.NodeCard, { node: node, onShowReferences: setReferences, matchedFieldPaths: match.matchedFieldPaths, matchedNodeMetadata: match.matchedNodeMetadata, matchedFieldLabel: matchedFieldLabel, matchedNodeLabel: matchedNodeLabel }, `${group.file.id}:${node.location}:${node.id}`)))] }, group.file.id))), !visibleMatches.length && ((0, jsx_runtime_32.jsxs)("div", { className: "search-empty-state", children: [(0, jsx_runtime_32.jsx)("h3", { children: emptyTitle }), (0, jsx_runtime_32.jsx)("p", { children: emptyText })] }))] }), references && (0, jsx_runtime_32.jsx)(ReferenceDrawerHost, { record: references, onClose: () => setReferences(undefined) })] }));
+        return ((0, jsx_runtime_32.jsxs)(jsx_runtime_32.Fragment, { children: [(0, jsx_runtime_32.jsxs)("div", { className: "query-node-results", children: [grouped.map((group) => ((0, jsx_runtime_32.jsxs)("section", { className: "search-file-group", children: [(0, jsx_runtime_32.jsxs)("header", { children: [(0, jsx_runtime_32.jsxs)("div", { children: [(0, jsx_runtime_32.jsx)("strong", { children: group.file.name }), (0, jsx_runtime_32.jsx)("small", { children: group.file.path })] }), (0, jsx_runtime_32.jsxs)("div", { children: [(0, jsx_runtime_32.jsx)("span", { className: `workspace-badge ${(0, core_21.workspaceCssClass)(group.file.workspace)}`, children: (0, core_21.workspaceLabel)(group.file.workspace) }), (0, jsx_runtime_32.jsxs)("small", { children: [group.items.length, " shown"] })] })] }), group.items.map(({ node, match }) => ((0, jsx_runtime_32.jsx)(NodeCard_1.NodeCard, { node: node, onShowReferences: setReferences, matchedFieldPaths: match.matchedFieldPaths, matchedNodeMetadata: match.matchedNodeMetadata, matchedFieldLabel: matchedFieldLabel, matchedNodeLabel: matchedNodeLabel }, `${group.file.id}:${node.location}:${node.id}`)))] }, group.file.id))), !visibleMatches.length && ((0, jsx_runtime_32.jsxs)("div", { className: "search-empty-state", children: [(0, jsx_runtime_32.jsx)("h3", { children: emptyTitle }), (0, jsx_runtime_32.jsx)("p", { children: emptyText })] }))] }), references && (0, jsx_runtime_32.jsx)(ReferenceDrawerHost, { record: references, onClose: () => setReferences(undefined) })] }));
     }
     function SnapshotStaleBanner({ tab }) {
         const projectVersion = (0, store_22.useWorkbenchStore)((state) => state.projectVersion);
@@ -28733,7 +29153,7 @@ define("workbench/workbenchLayoutPreferences", ["require", "exports"], function 
         };
     }
 });
-define("App", ["require", "exports", "react/jsx-runtime", "react", "commands/commandRegistry", "components/ChangePanel", "components/FolderOpenButton", "components/ProjectStartScreen", "components/QuickOpen", "components/WorkbenchRail", "components/LucideIcon", "components/WorkbenchSettings", "components/UniversalTooltip", "components/WorkbenchSidebar", "components/WorkbenchSplitter", "features/inspector/InspectorPane", "io/desktopBridge", "io/folderLoader", "store", "support/runtimeDiagnostics", "support/performanceTracing", "release/releaseIdentity", "workbench/appearancePreferences", "workbench/workbenchLayoutPreferences"], function (require, exports, jsx_runtime_33, react_29, commandRegistry_3, ChangePanel_1, FolderOpenButton_2, ProjectStartScreen_1, QuickOpen_1, WorkbenchRail_1, LucideIcon_19, WorkbenchSettings_1, UniversalTooltip_1, WorkbenchSidebar_1, WorkbenchSplitter_1, InspectorPane_1, desktopBridge_7, folderLoader_7, store_23, runtimeDiagnostics_10, performanceTracing_11, releaseIdentity_2, appearancePreferences_2, workbenchLayoutPreferences_1) {
+define("App", ["require", "exports", "react/jsx-runtime", "react", "commands/commandRegistry", "components/ChangePanel", "components/FolderOpenButton", "components/ProjectStartScreen", "components/QuickOpen", "components/WorkbenchRail", "components/LucideIcon", "components/WorkbenchSettings", "components/UniversalTooltip", "components/WorkbenchSidebar", "components/WorkbenchSplitter", "features/inspector/InspectorPane", "io/desktopBridge", "io/folderLoader", "store", "support/runtimeDiagnostics", "support/performanceTracing", "release/releaseIdentity", "workbench/appearancePreferences", "workbench/workbenchLayoutPreferences"], function (require, exports, jsx_runtime_33, react_29, commandRegistry_3, ChangePanel_1, FolderOpenButton_2, ProjectStartScreen_1, QuickOpen_1, WorkbenchRail_1, LucideIcon_19, WorkbenchSettings_1, UniversalTooltip_1, WorkbenchSidebar_1, WorkbenchSplitter_1, InspectorPane_1, desktopBridge_8, folderLoader_7, store_23, runtimeDiagnostics_10, performanceTracing_11, releaseIdentity_2, appearancePreferences_2, workbenchLayoutPreferences_1) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.default = App;
@@ -28766,7 +29186,8 @@ define("App", ["require", "exports", "react/jsx-runtime", "react", "commands/com
         const [splitRatio, setSplitRatio] = (0, react_29.useState)(() => (0, workbenchLayoutPreferences_1.readWorkbenchLayoutPreferences)().splitRatio);
         const [uiScale, setUiScale] = (0, react_29.useState)(() => (0, appearancePreferences_2.readWorkbenchAppearancePreferences)().uiScale);
         const worldgenToken = (0, store_23.useWorkbenchStore)((state) => state.tabs.find((tab) => tab.kind === 'worldgen-performance')?.selection?.token);
-        const desktop = (0, desktopBridge_7.hasDesktopBridge)();
+        const desktop = (0, desktopBridge_8.hasDesktopBridge)();
+        const projectRoot = workspace?.projectRoot;
         const publishWorkbenchLayoutSupport = (0, react_29.useCallback)((persisted, nextSidebarWidth = sidebarWidth, nextSplitRatio = splitRatio, splitEnabled = splitViewEnabled) => {
             (0, runtimeDiagnostics_10.setWorkbenchLayoutSupportSnapshot)({
                 version: 2,
@@ -28943,14 +29364,24 @@ define("App", ["require", "exports", "react/jsx-runtime", "react", "commands/com
             lastWorldgenToken.current = worldgenToken;
             if (!desktop || !previous || previous === worldgenToken)
                 return;
-            void (0, desktopBridge_7.desktopRevokeWorldgenLog)(previous).catch((error) => {
+            void (0, desktopBridge_8.desktopRevokeWorldgenLog)(previous).catch((error) => {
                 (0, runtimeDiagnostics_10.recordRuntimeError)('worldgen.log.revoke-failed', error);
             });
         }, [desktop, worldgenToken]);
         (0, react_29.useEffect)(() => {
+            if (watcherTimer.current) {
+                window.clearTimeout(watcherTimer.current);
+                watcherTimer.current = undefined;
+            }
+            watcherPaths.current.clear();
+            watcherReloadGeneration.current += 1;
+            clearExternalChangeNotice();
+            setWatcherError(undefined);
+        }, [clearExternalChangeNotice, projectRoot]);
+        (0, react_29.useEffect)(() => {
             if (!desktop)
                 return;
-            const unsubscribe = (0, desktopBridge_7.subscribeDesktopProjectChanges)((event) => {
+            const unsubscribe = (0, desktopBridge_8.subscribeDesktopProjectChanges)((event) => {
                 const current = store_23.useWorkbenchStore.getState().workspace;
                 if (!current?.desktopBridge || !current.projectRoot || current.projectRoot !== event.root)
                     return;
@@ -29008,21 +29439,40 @@ define("App", ["require", "exports", "react/jsx-runtime", "react", "commands/com
                                             }, onChange: (value) => setSplitRatio((0, workbenchLayoutPreferences_1.clampWorkbenchSplitRatio)(value)), onCommit: commitSplitRatio }), (0, jsx_runtime_33.jsx)("section", { className: `workbench-pane ${activePane === 'secondary' ? 'active' : ''}`, "data-workbench-pane": "secondary", onPointerDownCapture: () => activatePane('secondary'), onFocusCapture: () => activatePane('secondary'), children: (0, jsx_runtime_33.jsx)(InspectorPane_1.InspectorPane, { paneId: "secondary" }) })] }))] })] })), project && (0, jsx_runtime_33.jsx)(ChangePanel_1.ChangePanel, {}), quickOpen && project && (0, jsx_runtime_33.jsx)(QuickOpen_1.QuickOpen, { onClose: () => setQuickOpen(false), executeCommand: executeCommand }), settingsOpen && (0, jsx_runtime_33.jsx)(WorkbenchSettings_1.WorkbenchSettings, { onClose: () => setSettingsOpen(false), sidebarWidth: sidebarWidth, splitRatio: splitRatio, onResetLayout: resetWorkbenchLayout, uiScale: uiScale, onUiScaleChange: (next) => commitUiScale(next, 'settings'), onResetUiScale: resetUiScale }), (0, jsx_runtime_33.jsx)(UniversalTooltip_1.UniversalTooltip, {})] }));
     }
 });
-define("components/AppErrorBoundary", ["require", "exports", "react/jsx-runtime", "react", "support/runtimeDiagnostics"], function (require, exports, jsx_runtime_34, react_30, runtimeDiagnostics_11) {
+define("components/AppErrorBoundary", ["require", "exports", "react/jsx-runtime", "react", "support/runtimeDiagnostics", "support/userFacingError"], function (require, exports, jsx_runtime_34, react_30, runtimeDiagnostics_11, userFacingError_4) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.AppErrorBoundary = void 0;
     class AppErrorBoundary extends react_30.Component {
         state = {};
+        saveInFlight = false;
         static getDerivedStateFromError(error) {
-            return { error };
+            return { error, failed: true };
         }
         componentDidCatch(error, info) {
             (0, runtimeDiagnostics_11.recordRuntimeError)('runtime.react-error-boundary', error, { componentStack: info.componentStack ?? undefined });
         }
+        async saveReport() {
+            if (this.saveInFlight)
+                return;
+            this.saveInFlight = true;
+            this.setState({ saving: true, reportStatus: undefined });
+            try {
+                const outcome = await (0, runtimeDiagnostics_11.downloadDiagnosticReport)({ includeProjectPaths: false, includeLogs: true, includePerformance: true });
+                this.setState({ reportStatus: outcome === 'saved' ? 'Diagnostic report saved.' : outcome === 'cancelled' ? 'Save cancelled. No report was saved.' : 'Diagnostic download started.' });
+            }
+            catch (error) {
+                (0, runtimeDiagnostics_11.recordRuntimeError)('support.report.export-failed', error);
+                this.setState({ reportStatus: (0, userFacingError_4.userFacingError)(error) });
+            }
+            finally {
+                this.saveInFlight = false;
+                this.setState({ saving: false });
+            }
+        }
         render() {
-            if (this.state.error) {
-                return ((0, jsx_runtime_34.jsxs)("main", { className: "fatal-error-screen", children: [(0, jsx_runtime_34.jsx)("h1", { children: "Hytale Generator Workbench" }), (0, jsx_runtime_34.jsx)("h2", { children: "UI error" }), (0, jsx_runtime_34.jsx)("p", { children: "The app hit a runtime error. The project files have not been modified." }), (0, jsx_runtime_34.jsx)("pre", { children: this.state.error.stack ?? this.state.error.message }), (0, jsx_runtime_34.jsxs)("div", { className: "fatal-support-actions", children: [(0, jsx_runtime_34.jsx)("button", { onClick: () => window.location.reload(), children: "Reload" }), (0, jsx_runtime_34.jsx)("button", { onClick: () => (0, runtimeDiagnostics_11.downloadDiagnosticReport)({ includeProjectPaths: false, includeLogs: true, includePerformance: true }), children: "Save diagnostic report" })] })] }));
+            if (this.state.failed) {
+                return ((0, jsx_runtime_34.jsxs)("main", { className: "fatal-error-screen", children: [(0, jsx_runtime_34.jsx)("h1", { children: "Hytale Generator Workbench" }), (0, jsx_runtime_34.jsx)("h2", { children: "UI error" }), (0, jsx_runtime_34.jsx)("p", { children: "The app hit a runtime error. An earlier or in-progress operation may have written files. Check the project state after reopening." }), (0, jsx_runtime_34.jsx)("pre", { children: (0, userFacingError_4.userFacingError)(this.state.error, 'The interface could not be rendered.') }), (0, jsx_runtime_34.jsxs)("div", { className: "fatal-support-actions", children: [(0, jsx_runtime_34.jsx)("button", { disabled: this.state.saving, onClick: () => this.setState({ confirmReload: true }), children: "Reload" }), (0, jsx_runtime_34.jsx)("button", { disabled: this.state.saving, onClick: () => void this.saveReport(), children: "Save diagnostic report" })] }), this.state.reportStatus && (0, jsx_runtime_34.jsx)("p", { role: "status", children: this.state.reportStatus }), this.state.confirmReload && (0, jsx_runtime_34.jsxs)("div", { role: "alert", children: [(0, jsx_runtime_34.jsx)("p", { children: "Reload discards staged changes and Undo/Redo history. In-progress native writes may still finish. Save diagnostics first if needed." }), (0, jsx_runtime_34.jsx)("button", { onClick: () => this.setState({ confirmReload: false }), children: "Cancel reload" }), (0, jsx_runtime_34.jsx)("button", { disabled: this.state.saving, onClick: () => window.location.reload(), children: "Discard session & reload" })] })] }));
             }
             return this.props.children;
         }

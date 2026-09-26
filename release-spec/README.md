@@ -1,6 +1,6 @@
 # Release / updater contract
 
-**Applies to:** v0.11.36-rc.3-r1 Updater E2E Preview source line.
+**Applies to:** v0.11.36-rc.4-r1 Audited Updater Preview source line.
 
 `release-contract.json` is the canonical authoring source for release identity, update channels and publication policy. `npm run release:sync` synchronizes package/Tauri/Rust/build-helper mirrors and regenerates the shipped `tauri-ui/app.js` deterministically. `npm run release:check` validates the same identity mirrors without mutation and requires byte-for-byte embedded-bundle parity.
 
@@ -25,12 +25,16 @@ The Tauri v2 updater is integrated but remains fail-closed until public bootstra
 - The signed package is downloaded and verified first. Native authority then **rechecks pending project changes immediately before `install()`**. Any staged changes that appeared while downloading block installation/restart.
 - Installed Windows NSIS builds are the automatic-update route. Raw/development builds set `HGW_DISTRIBUTION_KIND=development`, so native updater configuration is refused.
 - Install/restart requires an explicit user action; update checks are not background polling.
+- A new check revokes the old native offer; superseded responses cannot restore it. One native install request may run at a time. The final install boundary also excludes active Apply/project transactions.
+- The native client accepts only the exact HTTPS versioned installer URL in its compiled repository. Check requests time out after 30 seconds; artifact downloads after 600 seconds. Signature-verified progress is emitted only after Tauri verification succeeds.
 
 Tauri signatures are mandatory. The private signing key must never be committed or packaged. Only the public verification key is committed after bootstrap.
 
 ## Publication boundary
 
-`release/public/` is the single allowlisted end-user publication boundary. The release workflow builds the signed NSIS artifact, stages it through `scripts/release-surface.mjs`, validates the surface, then uploads **only files from that directory**.
+`release/public/` is the single allowlisted end-user publication boundary. The release workflow builds the signed NSIS artifact, stages it through `scripts/release-surface.mjs`, validates the surface and cryptographically checks the installer through `scripts/verify-updater-signature.mjs`, then uploads **only files from that directory**. Each staging/check/verification failure stops its PowerShell step immediately.
+
+All publication tags share one concurrency group. `scripts/check-release-publication.mjs` confirms the version release is absent and rejects invalid or non-advancing channel publication. API/auth/network failures are not interpreted as absence. A stable hotfix advances Preview only if it is newer than the existing Preview version. Publication across releases is not atomic; a partial failure needs explicit operator recovery rather than same-version republishing. Repository-wide release immutability requires special care because rolling channel assets must remain replaceable.
 
 The surface contains, as applicable:
 

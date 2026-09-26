@@ -9,7 +9,8 @@ permissions:
   contents: read
 
 concurrency:
-  group: publish-windows-${{ github.ref }}
+  # All versions share rolling manifests; different tags must not publish concurrently.
+  group: publish-windows
   cancel-in-progress: false
 
 jobs:
@@ -104,7 +105,16 @@ jobs:
           HGW_GITHUB_REPOSITORY: ${{ github.repository }}
         run: |
           node scripts/release-surface.mjs --installer-dir src-tauri/target/release/bundle/nsis --repository $env:GITHUB_REPOSITORY
+          if ($LASTEXITCODE -ne 0) { throw 'Release surface staging failed.' }
           node scripts/release-surface.mjs --check
+          if ($LASTEXITCODE -ne 0) { throw 'Release surface validation failed.' }
+          node scripts/verify-updater-signature.mjs
+          if ($LASTEXITCODE -ne 0) { throw 'Staged updater signature verification failed.' }
+      - name: Verify immutable version and monotonic channel publication
+        id: publication
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node scripts/check-release-publication.mjs
       - name: Publish version release from release/public only
         shell: pwsh
         env:
@@ -115,29 +125,34 @@ jobs:
           gh release view $tag *> $null
           if ($LASTEXITCODE -eq 0) { throw "Release $tag already exists; same-SemVer republish is forbidden." }
           $assets = Get-ChildItem 'release/public' -File | ForEach-Object { $_.FullName }
-          $args = @('release', 'create', $tag) + $assets + @('--title', "Hytale Generator Workbench $tag", '--notes', "Signed Windows release generated from the checked allowlisted release surface.")
-          if ($contract.version.semver.Contains('-')) { $args += '--prerelease' }
+          $args = @('release', 'create', $tag) + $assets + @('--verify-tag', '--title', "Hytale Generator Workbench $tag", '--notes', "Signed Windows release generated from the checked allowlisted release surface.")
+          if ($contract.version.semver.Split('+')[0].Contains('-')) { $args += '--prerelease' }
           & gh @args
           if ($LASTEXITCODE -ne 0) { throw 'GitHub version release creation failed.' }
       - name: Publish rolling updater manifests with channel isolation
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
+          ADVANCE_PREVIEW: ${{ steps.publication.outputs.advance_preview }}
         run: |
           $contract = Get-Content 'release-spec/release-contract.json' -Raw | ConvertFrom-Json
-          $isPrerelease = $contract.version.semver.Contains('-')
+          $isPrerelease = $contract.version.semver.Split('+')[0].Contains('-')
 
-          gh release view updater-preview *> $null
-          if ($LASTEXITCODE -ne 0) {
-            gh release create updater-preview --prerelease --title 'Updater preview manifest' --notes 'Rolling signed Preview updater manifest.'
+          if ($env:ADVANCE_PREVIEW -eq 'true') {
+            gh release view updater-preview *> $null
+            if ($LASTEXITCODE -ne 0) {
+              gh release create updater-preview --prerelease --title 'Updater preview manifest' --notes 'Rolling signed Preview updater manifest.'
+              if ($LASTEXITCODE -ne 0) { throw 'Preview manifest release creation failed.' }
+            }
+            gh release upload updater-preview release/public/latest-preview.json --clobber
+            if ($LASTEXITCODE -ne 0) { throw 'Preview manifest publication failed.' }
           }
-          gh release upload updater-preview release/public/latest-preview.json --clobber
-          if ($LASTEXITCODE -ne 0) { throw 'Preview manifest publication failed.' }
 
           if (-not $isPrerelease) {
             gh release view updater-stable *> $null
             if ($LASTEXITCODE -ne 0) {
               gh release create updater-stable --prerelease --title 'Updater stable manifest' --notes 'Rolling signed Stable updater manifest.'
+              if ($LASTEXITCODE -ne 0) { throw 'Stable manifest release creation failed.' }
             }
             gh release upload updater-stable release/public/latest.json --clobber
             if ($LASTEXITCODE -ne 0) { throw 'Stable manifest publication failed.' }

@@ -143,7 +143,6 @@ export function hasDesktopBridge(): boolean {
   return window.__HYTALE_DESKTOP_BRIDGE__ === true;
 }
 
-const tracedRequestDurations = new Map<string, number>();
 
 export interface DesktopAppCloseRequested {
   pendingChanges: number;
@@ -176,7 +175,7 @@ export function subscribeDesktopAppCloseRequested(listener: (event: DesktopAppCl
   return () => window.removeEventListener('hgw:app-close-requested', handler);
 }
 
-async function jsonRequest<T>(path: string, init?: RequestInit, traceId?: string): Promise<T> {
+async function jsonRequest<T>(path: string, init?: RequestInit, traceId?: string, onDuration?: (durationMs: number) => void): Promise<T> {
   const started = performance.now();
   const response = await fetch(path, {
     ...init,
@@ -186,13 +185,14 @@ async function jsonRequest<T>(path: string, init?: RequestInit, traceId?: string
     },
   });
   const durationMs = performance.now() - started;
-  recordRuntimeMetric(`desktop.request:${path}`, durationMs);
-  if (traceId) tracedRequestDurations.set(traceId, durationMs);
+  onDuration?.(durationMs);
+  const endpoint = path.split(/[?#]/, 1)[0];
+  recordRuntimeMetric(`desktop.request:${endpoint}`, durationMs);
   recordRuntimeEvent('desktop.request.completed', {
     detailed: !traceId,
     traceId,
     durationMs,
-    data: { endpoint: path, status: response.status },
+    data: { endpoint, status: response.status },
   });
   if (response.status === 204) throw new DOMException('The user aborted a request.', 'AbortError');
   if (!response.ok) {
@@ -203,13 +203,13 @@ async function jsonRequest<T>(path: string, init?: RequestInit, traceId?: string
     } catch {
       // Keep the HTTP status when the launcher did not return JSON.
     }
-    recordRuntimeEvent('desktop.request.failed', { level: 'error', traceId, data: { endpoint: path, status: response.status, statusText: response.statusText } });
+    recordRuntimeEvent('desktop.request.failed', { level: 'error', traceId, data: { endpoint, status: response.status, statusText: response.statusText } });
     throw new Error(message);
   }
   return response.json() as Promise<T>;
 }
 
-function ingestNativeProjectTrace(scan: DesktopProjectScan, fallbackTraceId?: string): void {
+function ingestNativeProjectTrace(scan: DesktopProjectScan, fallbackTraceId?: string, requestMs?: number): void {
   const nativeTrace = scan.nativeTrace;
   if (!nativeTrace) return;
   const traceId = nativeTrace.traceId ?? fallbackTraceId;
@@ -221,7 +221,6 @@ function ingestNativeProjectTrace(scan: DesktopProjectScan, fallbackTraceId?: st
     });
   }
   if (traceId) {
-    const requestMs = tracedRequestDurations.get(traceId);
     const nativeTotalMs = nativeTrace.phases.find((phase) => phase.name === 'desktop.project.native-open.total')?.durationMs;
     if (requestMs !== undefined && nativeTotalMs !== undefined) {
       recordRuntimeEvent('desktop.project.bridge-overhead', {
@@ -230,26 +229,27 @@ function ingestNativeProjectTrace(scan: DesktopProjectScan, fallbackTraceId?: st
         data: { requestMs, nativeTotalMs },
       });
     }
-    tracedRequestDurations.delete(traceId);
   }
 }
 
 export async function desktopOpenProject(traceId?: string): Promise<DesktopProjectScan> {
+  let requestMs: number | undefined;
   const scan = await jsonRequest<DesktopProjectScan>('/api/project/open', {
     method: 'POST',
     body: JSON.stringify({ traceId }),
-  }, traceId);
-  ingestNativeProjectTrace(scan, traceId);
+  }, traceId, (durationMs) => { requestMs = durationMs; });
+  ingestNativeProjectTrace(scan, traceId, requestMs);
   return scan;
 }
 
 export async function desktopOpenProjectAt(root: string, traceId?: string): Promise<DesktopProjectScan> {
   try {
+    let requestMs: number | undefined;
     const scan = await jsonRequest<DesktopProjectScan>('/api/project/open-recent', {
       method: 'POST',
       body: JSON.stringify({ root, traceId }),
-    }, traceId);
-    ingestNativeProjectTrace(scan, traceId);
+    }, traceId, (durationMs) => { requestMs = durationMs; });
+    ingestNativeProjectTrace(scan, traceId, requestMs);
     return scan;
   } catch (error) {
     if (error instanceof Error && error.message.startsWith('REAUTHORIZE_RECENT:')) {
@@ -375,6 +375,7 @@ export async function desktopExportToDirectory(
   target: DesktopOutputDirectory,
   scope: 'full' | 'changed',
   changedTexts: Map<string, string>,
+  allowOverwrite = false,
 ): Promise<number> {
   const payload = await jsonRequest<{ written: number }>('/api/output/export', {
     method: 'POST',
@@ -382,9 +383,18 @@ export async function desktopExportToDirectory(
       token: target.token,
       scope,
       changedFiles: [...changedTexts].map(([path, text]) => ({ path, text })),
+      allowOverwrite,
     }),
   });
   return payload.written;
+}
+
+export async function desktopSaveZip(filename: string, blob: Blob): Promise<void> {
+  await jsonRequest<{ saved: boolean }>(`/api/output/save-zip?name=${encodeURIComponent(filename)}`, {
+    method: 'POST',
+    body: blob,
+    headers: { 'Content-Type': 'application/zip' },
+  });
 }
 
 export async function desktopSetPendingChangeCount(count: number): Promise<void> {

@@ -1,3 +1,5 @@
+import { readUpdateChannel, persistUpdateChannel } from '../release/updatePreferences';
+import { userFacingError } from '../support/userFacingError';
 import { useEffect, useRef, useState } from 'react';
 import { desktopCheckForUpdate, desktopInstallUpdate, hasDesktopBridge, type DesktopUpdateChannel, type DesktopUpdateCheckResult } from '../io/desktopBridge';
 import { RELEASE_DISPLAY_VERSION, UPDATER_DEFAULT_CHANNEL, UPDATER_ENABLED, UPDATER_PREPARED } from '../release/releaseIdentity';
@@ -62,12 +64,11 @@ export function WorkbenchSettings({
   const [includeLogs, setIncludeLogs] = useState(true);
   const [includePerformance, setIncludePerformance] = useState(true);
   const [reportStatus, setReportStatus] = useState<string>();
+  const [reportBusy, setReportBusy] = useState(false);
+  const reportInFlight = useRef(false);
   const [persistentLogStatus, setPersistentLogStatus] = useState<string>();
   const [persistentLogRevision, setPersistentLogRevision] = useState(0);
-  const [updateChannel, setUpdateChannel] = useState<DesktopUpdateChannel>(() => {
-    const stored = globalThis.localStorage?.getItem('hgw.update-channel');
-    return stored === 'preview' ? 'preview' : (UPDATER_DEFAULT_CHANNEL as DesktopUpdateChannel);
-  });
+  const [updateChannel, setUpdateChannel] = useState<DesktopUpdateChannel>(() => readUpdateChannel(UPDATER_DEFAULT_CHANNEL as DesktopUpdateChannel));
   const [updateCheck, setUpdateCheck] = useState<DesktopUpdateCheckResult>();
   const [updateStatus, setUpdateStatus] = useState<string>();
   const [updateBusy, setUpdateBusy] = useState(false);
@@ -111,7 +112,7 @@ export function WorkbenchSettings({
       setPersistentLogStatus('Persistent application logs cleared.');
     } catch (error) {
       recordRuntimeError('support.persistent-log.clear-failed', error);
-      setPersistentLogStatus(error instanceof Error ? error.message : String(error));
+      setPersistentLogStatus(userFacingError(error));
     }
   };
 
@@ -122,18 +123,24 @@ export function WorkbenchSettings({
       setReportStatus('Diagnostic report copied to the clipboard. Review it before sharing.');
     } catch (error) {
       recordRuntimeError('support.report.copy-failed', error);
-      setReportStatus(error instanceof Error ? error.message : String(error));
+      setReportStatus(userFacingError(error));
     }
   };
 
-  const saveReport = () => {
+  const saveReport = async () => {
+    if (reportInFlight.current) return;
+    reportInFlight.current = true;
+    setReportBusy(true);
     setReportStatus(undefined);
     try {
-      downloadDiagnosticReport(reportOptions);
-      setReportStatus(desktop ? 'Choose where to save the diagnostic JSON.' : 'Diagnostic JSON download started.');
+      const outcome = await downloadDiagnosticReport(reportOptions);
+      setReportStatus(outcome === 'saved' ? 'Diagnostic report saved. Review it before sharing.' : outcome === 'cancelled' ? 'Save cancelled. No report was saved.' : 'Diagnostic JSON download started.');
     } catch (error) {
       recordRuntimeError('support.report.export-failed', error);
-      setReportStatus(error instanceof Error ? error.message : String(error));
+      setReportStatus(userFacingError(error));
+    } finally {
+      reportInFlight.current = false;
+      setReportBusy(false);
     }
   };
 
@@ -141,10 +148,11 @@ export function WorkbenchSettings({
     setUpdateChannel(channel);
     setUpdateCheck(undefined);
     setUpdateStatus(undefined);
-    globalThis.localStorage?.setItem('hgw.update-channel', channel);
+    persistUpdateChannel(channel);
   };
 
   const checkForUpdates = async () => {
+    setUpdateCheck(undefined);
     setUpdateBusy(true);
     setUpdateStatus('Checking for updates…');
     try {
@@ -157,7 +165,7 @@ export function WorkbenchSettings({
           : `You are up to date on the ${updateChannel} channel.`);
     } catch (error) {
       recordRuntimeError('app.update.check-failed', error);
-      setUpdateStatus(error instanceof Error ? error.message : String(error));
+      setUpdateStatus(userFacingError(error));
     } finally {
       setUpdateBusy(false);
     }
@@ -175,7 +183,7 @@ export function WorkbenchSettings({
       await desktopInstallUpdate(updateChannel, updateCheck.version);
     } catch (error) {
       recordRuntimeError('app.update.install-failed', error);
-      setUpdateStatus(error instanceof Error ? error.message : String(error));
+      setUpdateStatus(userFacingError(error));
       setUpdateBusy(false);
     }
   };
@@ -306,7 +314,8 @@ export function WorkbenchSettings({
                   <div className="settings-row">
                     <div>
                       <strong>Persistent application log</strong>
-                      <small>{desktop ? `JSONL in the native app-log directory · ${persistentLog.retainedFiles} files max · ${Math.round(persistentLog.maxFileBytes / (1024 * 1024))} MiB each. Warnings, errors and lifecycle events are kept by default; Detailed logging adds the full structured event stream. Project paths are always redacted.` : 'Available in the Tauri desktop host. Browser/dev sessions keep the existing in-memory diagnostics only.'}</small>
+                      <small>{desktop ? `JSONL in the native app-log directory · ${persistentLog.retainedFiles} files max · ${Math.round(persistentLog.maxFileBytes / (1024 * 1024))} MiB each. Warnings, errors and lifecycle events are kept by default; Detailed logging adds the full structured event stream. Project paths are always redacted. Raw error text and stacks are omitted.` : 'Available in the Tauri desktop host. Browser/dev sessions keep the existing in-memory diagnostics only.'}</small>
+                      <small>Clear logs removes disk history. Current session events stay in memory until restart.</small>
                       {persistentLog.lastError && <small className="settings-warning">File sink unavailable for this session: {persistentLog.lastError}</small>}
                       {persistentLogStatus && <small className="support-report-status" role="status">{persistentLogStatus}</small>}
                     </div>
@@ -326,7 +335,7 @@ export function WorkbenchSettings({
                   <div className="support-report-intro">
                     <div>
                       <strong>Create diagnostic report</strong>
-                      <small>Creates a local JSON report that can be attached to a bug report. Workbench does not add project file contents and does not upload the report.</small>
+                      <small>Creates a local JSON report that can be attached to a bug report. Reports contain operation metadata and error categories, with raw error text and stacks omitted. Workbench does not add project file contents and does not upload the report.</small>
                     </div>
                     <div className="support-report-counters" aria-label="Current diagnostic session summary">
                       <span><strong>{summary.eventCount}</strong> events</span>
@@ -343,7 +352,7 @@ export function WorkbenchSettings({
                   <div className="support-report-privacy"><LucideIcon name="circle-check" size={16} /><span><strong>Private by default.</strong> No automatic upload, no project file contents, and project-path fields are redacted unless you opt in. Review the JSON before sharing it.</span></div>
                   <div className="support-report-actions">
                     <button onClick={() => void copyReport()}><LucideIcon name="file-text" size={14} /> Copy report</button>
-                    <button className="primary" onClick={saveReport}><LucideIcon name="corner-down-left" size={14} /> Save diagnostic JSON</button>
+                    <button className="primary" disabled={reportBusy} onClick={() => void saveReport()}><LucideIcon name="corner-down-left" size={14} /> Save diagnostic JSON</button>
                   </div>
                   {reportStatus && <small className="support-report-status" role="status">{reportStatus}</small>}
                 </section>

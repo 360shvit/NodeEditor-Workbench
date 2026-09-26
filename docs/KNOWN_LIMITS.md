@@ -16,7 +16,8 @@ The Rust desktop host currently enforces:
 - maximum JSON nesting depth: **512**;
 - maximum files in one Apply transaction: **10,000**;
 - semantic discovery probes: **10,000 files**, **8 MiB per file**, **128 MiB total**;
-- source-text preview: **4 MiB**.
+- source-text preview: **4 MiB**;
+- binary reads into the WebView: **256 MiB per file**; larger binary assets use native folder-copy output.
 
 Crossing a safety boundary is an explicit error; the Workbench should not silently truncate a project into a misleading semantic model.
 
@@ -28,6 +29,8 @@ Crossing a safety boundary is an explicit error; the Workbench should not silent
 - folder mode selects one source: lexicographically newest regular top-level `.log` filename;
 - single-file picker accepts `.log` and `.txt`; folder auto-selection only considers `.log`;
 - reverse scanning uses **1 MiB chunks**; one malformed report candidate is capped at **8 MiB** while whole-file scanning remains unlimited;
+- report candidates are additionally capped at **65,536 lines**; repeated markers on a malformed line do not trigger repeated full-line parsing;
+- one native WorldGen scan runs at a time; changing/revoking the selection or exiting signals cooperative cancellation at read/seek boundaries. A replacement request can require retrying Refresh now while the previous worker finishes;
 - there is **no artificial total-byte/line cutoff**, so a very large log with no performance report can require substantial disk I/O;
 - the performance block is considered complete only when `Missed/Total Ratio:` has been reached;
 - `Material (Sum)` is derived; other displayed report values are not recomputed/reconciled.
@@ -46,23 +49,41 @@ ProjectSession persistence is convenience state, not project-content storage. St
 
 Recent-project/session data is sanitized on read and may fall back to defaults when old/corrupt values are invalid.
 
+## Error recovery limits
+
+A fatal UI exception does not undo earlier writes or stop an in-progress native write. Reload requires confirmation because it discards staged edits and Undo/Redo; there is no crash-session restoration. Interrupted Apply remains subject to journal recovery. Recoverable layout, project-close and update-check failures show an error and permit retry; a failed native close does not clear frontend project state.
+
+Diagnostic save reports success only after native write completion and distinguishes cancellation from failure. It is best effort when the native host or OS dialog is unavailable; there is no timeout that can safely claim a native write was cancelled. Local error displays may contain paths or project-derived messages, while diagnostic storage excludes raw exception text. A failed WorldGen refresh can retain the last successful report alongside the error.
+
 ## Diagnostics limits
 
 - in-memory runtime events: **500**;
+- each renderer event: **4,000 UTF-16 JSON units** (at most **12,000 UTF-8 bytes**); oversized metadata is replaced by `diagnosticDataOmitted`;
+- diagnostic metadata: reviewed fields only, at most **4 object levels**, **40 keys per object**, **80 visited fields/items** and **30 paths per array**;
+- persistent queue: **1,000 events**, plus at most **50 in flight**; oldest queued events are dropped under backpressure;
 - metric samples per metric: **96**;
+- retained metric names: **256**, up to **120 characters** each; recently used names survive eviction, and the summary reports the eviction count;
 - trace summaries: **20**;
 - slow-operation list: **20**;
 - persistent Workbench log: **2 MiB per file**, **4 retained files**;
 - persistent batch: up to **100 entries / 1 MiB**, individual entry up to **16 KiB**.
 
-Support reports do not include project contents. Project-relative path fields are opt-in in the report UI; persistent log paths are scrubbed.
+Support reports do not include project contents. Raw exception messages/stacks, component stacks, search text, arbitrary symbol types and shortcut text are omitted because they can contain user data. Error categories, operation identifiers, counters and reviewed enum metadata remain available. Absolute/unsafe path fields are redacted even when project-relative paths are enabled. Project-relative path fields are opt-in in the report UI; persistent log paths are always removed/redacted, including at the native sink.
+
+Diagnostics are local and have no automatic upload. Report copy/save requires an explicit action; review the resulting JSON before sharing. Reports contain the current memory ring, not historical disk logs. Detailed logging widens event selection without bypassing privacy filters. Clear logs removes the four managed disk files and queued events; it waits for an in-flight append and suppresses writes during clearing. Current in-memory events remain until restart. Previously written logs are not retroactively sanitized; use Clear logs to remove that disk history. Log files are bounded, unencrypted diagnostic data under the current user's OS profile, not a protected secret store. Filesystem failure can leave partial JSONL output or a partially completed rotation/clear; the sink then reports unavailable instead of repeatedly retrying.
 
 ## ZIP/output limits
 
-The internal browser-side ZIP writer uses classic ZIP32/STORE records and does **not** implement Zip64. Therefore archives at or beyond classic ZIP limits (for example more than 65,535 entries, individual stored sizes/offsets around 4 GiB, or equivalent central-directory overflow) are unsupported. The current project safety envelope is normally far below the entry-count ceiling, but very large binary project copies can still approach ZIP32 size/offset limits. Release/large-project workflows should be validated against representative project sizes.
+The embedded frontend ZIP writer uses classic ZIP32/STORE records and does **not** implement Zip64. It rejects more than **65,534 entries**, filenames longer than **65,535 UTF-8 bytes**, and sizes/offsets requiring Zip64. A separate **512 MiB serialized-archive limit** includes headers and the central directory; this is not a guarantee that process memory stays below 512 MiB because the WebView/IPC may hold additional copies. Larger copies use native folder output. Absolute, traversal, Windows-device/stream and conflicting archive paths are rejected instead of silently rewritten.
+
+Native project-copy output must be outside the source tree. Changed text is limited to **10,000 files**, **64 MiB per file** and **512 MiB total**; the complete output plan is limited to **100,000 files**. Overwriting requires the UI's explicit overwrite choice, which is carried to native authority. A destination appearing after preflight also fails if overwrite was not approved. Binary assets are copied without decoding and without the WebView binary-read limit.
+
+Each folder-output or selected-save file is staged beside its destination and committed only after the write succeeds. Existing hard-linked files are replaced rather than truncated through their shared storage. A multi-file folder copy is **not an all-or-nothing transaction**: if a later file fails, earlier completed output files remain and the error reports their count. No automatic deletion of the user's existing output folder is attempted. A source modified externally during copying is not a supported consistent snapshot; detected size changes fail the current file. Filesystem/storage failure guarantees remain bounded by Windows and the underlying device.
+
+ZIP success is reported after native save completion; cancelling the picker reports cancellation. ZIP import/extraction and the browser-only snapshot fallback are not exposed by the supported native desktop UI.
 
 ## Distribution / updater limits
 
-v0.11.35 contains the native updater implementation and GitHub release pipeline, but the current source candidate is deliberately **not publicly deployable yet**. Publication remains blocked while the GitHub repository is not connected, `src-tauri/updater.pubkey` contains the `UNCONFIGURED` sentinel, `package-lock.json` or `src-tauri/Cargo.lock` is absent, or `updater.publication.publishable` is false. In that unconfigured state the native update check returns a local not-configured result without making a network request.
+The audit source is based on the already-published `0.11.36-rc.3` Preview release. Its configured public key and committed lockfiles do not approve another release of the same version. A fresh SemVer, protected candidate build and installed-client positive/negative update evidence remain required; Track 14 records the current release blockers. Bootstrap still fails closed when repository/key/locks are missing or `updater.publication.publishable` is false. An unconfigured native client returns a local not-configured result without making a network request.
 
-Installed NSIS builds are the automatic-update target once bootstrap is complete. Signed artifacts and updater manifests are required. A staged-change gate runs before download and native authority rechecks again after download/signature verification immediately before installation. Raw/development builds are not publication artifacts and set `HGW_DISTRIBUTION_KIND=development`, so native updater configuration is refused. Stable and Preview have separate rolling manifest endpoints, and prerelease publication is prevented from writing the Stable manifest; real endpoint behavior still cannot be claimed until repository/signing bootstrap and the Windows installed-update test are complete.
+Installed NSIS builds are the automatic-update target once bootstrap is complete. Signed artifacts and updater manifests are required. A staged-change gate runs before download and native authority rechecks after signature verification immediately before installation, while holding the project transaction lock. Concurrent installs are refused; failed or superseded checks cannot retain an older offer. HTTP check/download timeouts are 30/600 seconds, respectively. Raw/development builds set `HGW_DISTRIBUTION_KIND=development`, so native check/install authority is refused. Stable and Preview use separate rolling endpoints; prerelease publication never writes Stable, and a stable hotfix preserves a newer Preview. Real installed update/restart and bad-signature behavior remain unverified pending the Track 14/18 matrix.

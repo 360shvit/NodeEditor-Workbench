@@ -17,6 +17,13 @@ use tauri::{ipc::InvokeBody, ipc::Request, ipc::Response, AppHandle, Emitter, Ma
 use tauri_plugin_dialog::DialogExt;
 use tauri_plugin_window_state::StateFlags;
 use tauri_plugin_updater::{Update, UpdaterExt};
+mod diagnostic_privacy;
+mod worldgen_scan_control;
+mod update_session;
+#[cfg(test)]
+mod updater_safety_tests;
+use update_session::UpdateSession;
+use worldgen_scan_control::{CancellableReader, WorldgenScanControl};
 
 const MAX_PROJECT_ENTRIES: usize = 100_000;
 const MAX_JSON_FILES: usize = 50_000;
@@ -32,6 +39,8 @@ const MAX_DISCOVERY_PROBE_FILES: usize = 10_000;
 const MAX_DISCOVERY_PROBE_FILE_BYTES: u64 = 8 * 1024 * 1024;
 const MAX_DISCOVERY_PROBE_TOTAL_BYTES: u64 = 128 * 1024 * 1024;
 const MAX_SOURCE_PREVIEW_BYTES: u64 = 4 * 1024 * 1024;
+const MAX_BINARY_READ_BYTES: u64 = 256 * 1024 * 1024;
+const MAX_ZIP_SAVE_BYTES: usize = 512 * 1024 * 1024;
 const PERSISTENT_LOG_FILE: &str = "workbench-current.jsonl";
 const PERSISTENT_LOG_ROTATED_PREFIX: &str = "workbench";
 const PERSISTENT_LOG_MAX_FILE_BYTES: u64 = 2 * 1024 * 1024;
@@ -41,6 +50,7 @@ const PERSISTENT_LOG_MAX_ENTRY_BYTES: usize = 16 * 1024;
 const PERSISTENT_LOG_MAX_BATCH_BYTES: usize = 1024 * 1024;
 const WORLDGEN_LOG_SCAN_CHUNK_BYTES: u64 = 1024 * 1024;
 const WORLDGEN_REPORT_CANDIDATE_MAX_BYTES: u64 = 8 * 1024 * 1024;
+const WORLDGEN_REPORT_CANDIDATE_MAX_LINES: usize = 65_536;
 const WORLDGEN_PERFORMANCE_MARKER: &str = "[HytaleGenerator] Performance Report";
 const UPDATER_PUBLIC_KEY: &str = include_str!("../updater.pubkey");
 const UPDATER_REPOSITORY: &str = match option_env!("HGW_GITHUB_REPOSITORY") {
@@ -90,10 +100,7 @@ struct PendingUpdate {
     update: Update,
 }
 
-#[derive(Default)]
-struct PendingUpdateState {
-    update: Mutex<Option<PendingUpdate>>,
-}
+type PendingUpdateState = UpdateSession<PendingUpdate>;
 
 #[derive(Default)]
 struct DesktopState {
@@ -101,6 +108,7 @@ struct DesktopState {
     output_roots: Mutex<HashMap<String, PathBuf>>,
     save_targets: Mutex<HashMap<String, RegisteredSaveTarget>>,
     worldgen_logs: Mutex<HashMap<String, WorldgenLogSource>>,
+    worldgen_scan: Arc<WorldgenScanControl>,
     recent_grants: Mutex<HashSet<PathBuf>>,
     next_token: AtomicU64,
     watcher: Mutex<Option<RecommendedWatcher>>,
@@ -200,6 +208,8 @@ struct ExportPayload {
     token: String,
     scope: String,
     changed_files: Vec<TextFile>,
+    #[serde(default)]
+    allow_overwrite: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -677,7 +687,7 @@ fn parse_worldgen_report(lines: &[&str], marker_index: usize) -> Option<Worldgen
     })
 }
 
-fn worldgen_line_start(file: &mut File, position: u64) -> Result<u64, String> {
+fn worldgen_line_start(file: &mut (impl Read + Seek), position: u64) -> Result<u64, String> {
     const SEARCH_BYTES: usize = 4096;
     let mut cursor = position;
     let mut buffer = vec![0u8; SEARCH_BYTES];
@@ -694,8 +704,7 @@ fn worldgen_line_start(file: &mut File, position: u64) -> Result<u64, String> {
     Ok(0)
 }
 
-fn read_worldgen_report_at(file: &mut File, marker_position: u64) -> Result<Option<WorldgenPerformanceReport>, String> {
-    let line_start = worldgen_line_start(file, marker_position)?;
+fn read_worldgen_report_at(file: &mut (impl Read + Seek), line_start: u64) -> Result<Option<WorldgenPerformanceReport>, String> {
     file.seek(SeekFrom::Start(line_start)).map_err(|error| io_error("Cannot seek selected WorldGen log", error))?;
     // The whole log remains unbounded and is still searched back to BOF. Only one
     // malformed report candidate is bounded so a missing terminator cannot materialize
@@ -706,6 +715,7 @@ fn read_worldgen_report_at(file: &mut File, marker_position: u64) -> Result<Opti
     let mut found_marker = false;
     let mut candidate_bytes = 0u64;
     loop {
+        if lines.len() >= WORLDGEN_REPORT_CANDIDATE_MAX_LINES { return Ok(None); }
         let mut line = String::new();
         let read = reader.read_line(&mut line).map_err(|error| io_error("Cannot read selected WorldGen log", error))?;
         if read == 0 { break; }
@@ -721,7 +731,7 @@ fn read_worldgen_report_at(file: &mut File, marker_position: u64) -> Result<Opti
             lines.push(line);
             continue;
         }
-        if payload.starts_with('[') && !payload.contains(WORLDGEN_PERFORMANCE_MARKER) {
+        if payload.starts_with('[') || payload.contains(WORLDGEN_PERFORMANCE_MARKER) {
             break;
         }
         let complete = payload.trim().starts_with("Missed/Total Ratio:");
@@ -733,15 +743,21 @@ fn read_worldgen_report_at(file: &mut File, marker_position: u64) -> Result<Opti
     Ok(parse_worldgen_report(&refs, 0))
 }
 
+#[cfg(test)]
 fn read_worldgen_performance_log(path: &Path) -> Result<(u64, usize, bool, Option<WorldgenPerformanceReport>), String> {
     let mut file = File::open(path).map_err(|error| io_error("Cannot open selected WorldGen log", error))?;
     let file_len = file.metadata().map_err(|error| io_error("Cannot inspect selected WorldGen log", error))?.len();
+    read_worldgen_performance_reader(&mut file, file_len)
+}
+
+fn read_worldgen_performance_reader(file: &mut (impl Read + Seek), file_len: u64) -> Result<(u64, usize, bool, Option<WorldgenPerformanceReport>), String> {
     let marker = WORLDGEN_PERFORMANCE_MARKER.as_bytes();
     let overlap_len = marker.len().saturating_sub(1);
     let mut cursor = file_len;
     let mut later_prefix = Vec::new();
     let mut bytes_scanned = 0u64;
     let mut newline_count = 0usize;
+    let mut candidate_ceiling = file_len;
 
     while cursor > 0 {
         let start = cursor.saturating_sub(WORLDGEN_LOG_SCAN_CHUNK_BYTES);
@@ -755,18 +771,22 @@ fn read_worldgen_performance_log(path: &Path) -> Result<(u64, usize, bool, Optio
         let mut search = Vec::with_capacity(chunk.len() + later_prefix.len());
         search.extend_from_slice(&chunk);
         search.extend_from_slice(&later_prefix);
-        let mut search_end = search.len();
+        let mut search_end = search.len().min(candidate_ceiling.saturating_sub(start) as usize);
         while search_end >= marker.len() {
             let Some(index) = search[..search_end].windows(marker.len()).rposition(|window| window == marker) else { break; };
             if index < chunk.len() {
                 let marker_position = start + index as u64;
-                if let Some(report) = read_worldgen_report_at(&mut file, marker_position)? {
+                let line_start = worldgen_line_start(file, marker_position)?;
+                // A malformed line can contain thousands of marker strings. Parse
+                // that line once, including when it spans multiple scan chunks.
+                candidate_ceiling = line_start;
+                if let Some(report) = read_worldgen_report_at(file, line_start)? {
                     let lines_scanned = newline_count.saturating_add(usize::from(bytes_scanned > 0));
                     return Ok((bytes_scanned, lines_scanned, false, Some(report)));
                 }
             }
             if index == 0 { break; }
-            search_end = index;
+            search_end = index.min(candidate_ceiling.saturating_sub(start) as usize);
         }
 
         later_prefix = chunk[..chunk.len().min(overlap_len)].to_vec();
@@ -783,11 +803,12 @@ fn relative_display(root: &Path, path: &Path) -> Result<String, String> {
         .map_err(|_| "Path escaped the selected project root.".to_string())?;
     Ok(relative
         .components()
-        .filter_map(|component| match component {
-            Component::Normal(value) => Some(value.to_string_lossy().to_string()),
-            _ => None,
+        .map(|component| match component {
+            Component::Normal(value) => value.to_str().map(str::to_owned)
+                .ok_or_else(|| "Project filename cannot be represented as UTF-8; refusing a lossy inventory.".to_string()),
+            _ => Err("Invalid project-relative path component.".to_string()),
         })
-        .collect::<Vec<_>>()
+        .collect::<Result<Vec<_>, String>>()?
         .join("/"))
 }
 
@@ -798,6 +819,17 @@ fn safe_relative(raw: &str) -> Result<PathBuf, String> {
     let normalized = raw.replace('\\', "/");
     if normalized.starts_with('/') || normalized.is_empty() {
         return Err(format!("Invalid relative path: {raw}"));
+    }
+    for segment in normalized.split('/') {
+        let stem = segment.split('.').next().unwrap_or("").to_ascii_uppercase();
+        let device = matches!(stem.as_str(), "CON" | "PRN" | "AUX" | "NUL")
+            || ["COM", "LPT"].iter().any(|prefix| stem.strip_prefix(prefix)
+                .map(|suffix| matches!(suffix, "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9" | "¹" | "²" | "³"))
+                .unwrap_or(false));
+        if segment.is_empty() || segment == "." || segment == ".." || segment.ends_with(['.', ' '])
+            || segment.chars().any(|value| value.is_control() || "<>:\"|?*".contains(value)) || device {
+            return Err(format!("Unsafe relative path rejected: {raw}"));
+        }
     }
     let mut result = PathBuf::new();
     for component in Path::new(&normalized).components() {
@@ -812,11 +844,14 @@ fn safe_relative(raw: &str) -> Result<PathBuf, String> {
     Ok(result)
 }
 
-fn sorted_directory_entries(directory: &Path) -> Result<Vec<fs::DirEntry>, String> {
-    let mut entries = fs::read_dir(directory)
-        .map_err(|error| io_error(&format!("Cannot read {}", directory.display()), error))?
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(|error| io_error(&format!("Cannot enumerate {}", directory.display()), error))?;
+fn sorted_directory_entries(directory: &Path, remaining: usize) -> Result<Vec<fs::DirEntry>, String> {
+    let mut entries = Vec::new();
+    for entry in fs::read_dir(directory).map_err(|error| io_error("Cannot read project directory", error))? {
+        if entries.len() >= remaining {
+            return Err(format!("Project safety limit exceeded: more than {MAX_PROJECT_ENTRIES} files/directories."));
+        }
+        entries.push(entry.map_err(|error| io_error("Cannot enumerate project directory", error))?);
+    }
     entries.sort_by_key(|entry| entry.file_name().to_string_lossy().to_lowercase());
     Ok(entries)
 }
@@ -846,6 +881,8 @@ struct ApplyRecoveryJournal {
     project_root: String,
     txn_id: u64,
     files: Vec<String>,
+    #[serde(default)]
+    intended_fingerprints: HashMap<String, u64>,
 }
 
 fn app_data_file(app: &AppHandle, name: &str) -> Result<PathBuf, String> {
@@ -856,12 +893,17 @@ fn app_data_file(app: &AppHandle, name: &str) -> Result<PathBuf, String> {
 
 fn persistent_log_directory(app: &AppHandle) -> Result<PathBuf, String> {
     let directory = app.path().app_log_dir().map_err(|error| io_error("Cannot resolve app-log directory", error))?;
-    fs::create_dir_all(&directory).map_err(|error| io_error("Cannot create app-log directory", error))?;
-    let metadata = fs::symlink_metadata(&directory).map_err(|error| io_error("Cannot inspect app-log directory", error))?;
-    if metadata.file_type().is_symlink() || !metadata.is_dir() {
+    prepare_persistent_log_directory(&directory)?;
+    Ok(directory)
+}
+
+fn prepare_persistent_log_directory(directory: &Path) -> Result<(), String> {
+    fs::create_dir_all(directory).map_err(|error| io_error("Cannot create app-log directory", error))?;
+    let metadata = fs::symlink_metadata(directory).map_err(|error| io_error("Cannot inspect app-log directory", error))?;
+    if metadata.file_type().is_symlink() || metadata_is_reparse_point(&metadata) || !metadata.is_dir() {
         return Err("Refusing unsafe app-log directory.".to_string());
     }
-    Ok(directory)
+    Ok(())
 }
 
 fn persistent_log_path(directory: &Path, generation: usize) -> PathBuf {
@@ -873,15 +915,20 @@ fn persistent_log_path(directory: &Path, generation: usize) -> PathBuf {
 }
 
 fn inspect_persistent_log_file(path: &Path) -> Result<u64, String> {
-    if !path.exists() { return Ok(0); }
-    let metadata = fs::symlink_metadata(path).map_err(|error| io_error("Cannot inspect persistent log", error))?;
-    if metadata.file_type().is_symlink() || !metadata.is_file() {
+    let metadata = match fs::symlink_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(0),
+        Err(error) => return Err(io_error("Cannot inspect persistent log", error)),
+    };
+    if metadata.file_type().is_symlink() || metadata_is_reparse_point(&metadata) || !metadata.is_file() {
         return Err("Refusing unsafe persistent log target.".to_string());
     }
     Ok(metadata.len())
 }
 
 fn rotate_persistent_logs(directory: &Path) -> Result<(), String> {
+    // Validate every managed target before deleting or moving any generation.
+    for generation in 0..PERSISTENT_LOG_RETAINED_FILES { inspect_persistent_log_file(&persistent_log_path(directory, generation))?; }
     let last = persistent_log_path(directory, PERSISTENT_LOG_RETAINED_FILES.saturating_sub(1));
     if last.exists() {
         inspect_persistent_log_file(&last)?;
@@ -921,6 +968,18 @@ fn sync_write(path: &Path, bytes: &[u8], context: &str) -> Result<(), String> {
     file.sync_all().map_err(|error| io_error(context, error))
 }
 
+fn apply_content_fingerprint(bytes: &[u8]) -> u64 {
+    // Stable FNV-1a identity fingerprint for crash/race disambiguation. This is not
+    // a cryptographic trust primitive; it distinguishes Workbench's own intended
+    // bytes from later ordinary filesystem writes without persisting project content.
+    let mut hash = 0xcbf29ce484222325u64;
+    for byte in bytes {
+        hash ^= *byte as u64;
+        hash = hash.wrapping_mul(0x100000001b3);
+    }
+    hash
+}
+
 fn recovery_journal_path(app: &AppHandle) -> Result<PathBuf, String> {
     app_data_file(app, TRANSACTION_JOURNAL_FILE)
 }
@@ -929,9 +988,20 @@ fn recovery_commit_path(app: &AppHandle) -> Result<PathBuf, String> {
     app_data_file(app, TRANSACTION_COMMIT_FILE)
 }
 
+fn read_optional_utf8_file(path: &Path, context: &str) -> Result<Option<String>, String> {
+    match fs::read_to_string(path) {
+        Ok(raw) => Ok(Some(raw)),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(io_error(context, error)),
+    }
+}
+
 fn read_recovery_journal(app: &AppHandle) -> Result<Option<ApplyRecoveryJournal>, String> {
     let path = recovery_journal_path(app)?;
-    let Ok(raw) = fs::read_to_string(&path) else { return Ok(None); };
+    let Some(raw) = read_optional_utf8_file(
+        &path,
+        "Cannot read Apply recovery journal; refusing Apply until recovery metadata is readable",
+    )? else { return Ok(None); };
     let journal = serde_json::from_str::<ApplyRecoveryJournal>(&raw)
         .map_err(|error| io_error("Cannot parse Apply recovery journal; no project files were modified", error))?;
     Ok(Some(journal))
@@ -994,39 +1064,89 @@ fn journal_matches_root(journal: &ApplyRecoveryJournal, root: &Path) -> bool {
     fs::canonicalize(&journal.project_root).map(|value| value == root).unwrap_or(false)
 }
 
-fn recover_journal_for_root(app: &AppHandle, root: &Path, journal: &ApplyRecoveryJournal) -> Result<(), String> {
-    let commit_path = recovery_commit_path(app)?;
-    let committed = fs::read_to_string(&commit_path)
-        .ok()
-        .and_then(|value| value.trim().parse::<u64>().ok())
-        .map(|id| id == journal.txn_id)
-        .unwrap_or(false);
+fn parse_recovery_commit_marker(raw: &str, txn_id: u64) -> Result<bool, String> {
+    let id = raw.trim().parse::<u64>()
+        .map_err(|error| io_error("Cannot parse Apply commit marker; refusing recovery", error))?;
+    if id != txn_id {
+        return Err(format!(
+            "Apply commit marker belongs to transaction {id}, but the recovery journal expects {txn_id}; refusing recovery."
+        ));
+    }
+    Ok(true)
+}
 
+fn recovery_commit_state(app: &AppHandle, txn_id: u64) -> Result<bool, String> {
+    let commit_path = recovery_commit_path(app)?;
+    let Some(raw) = read_optional_utf8_file(
+        &commit_path,
+        "Cannot read Apply commit marker; refusing recovery",
+    )? else { return Ok(false); };
+    parse_recovery_commit_marker(&raw, txn_id)
+}
+
+fn recover_journal_for_root(app: &AppHandle, root: &Path, journal: &ApplyRecoveryJournal) -> Result<(), String> {
+    let committed = recovery_commit_state(app, journal.txn_id)?;
+
+    // Removing staged temp files is always safe: they are transaction-owned and are
+    // never the user-visible target. Do this even if a later ambiguity forces us to
+    // preserve both the current target and its backup for manual reconciliation.
     for raw in journal.files.iter().rev() {
         let target = recovery_target(root, raw)?;
         let temp = transaction_file(&target, journal.txn_id, "tmp")?;
+        remove_recovery_artifact(&temp)?;
+    }
+
+    if !committed {
+        // Preflight every target before restoring any backup. A crash can occur after
+        // Workbench replaced a target but before it wrote the commit marker. If another
+        // process then writes newer content, recovery must never overwrite that newer
+        // file. Older journals without fingerprints are therefore ambiguous only when
+        // both target and backup exist, and fail closed in that state.
+        for raw in &journal.files {
+            let target = recovery_target(root, raw)?;
+            let backup = transaction_file(&target, journal.txn_id, "bak")?;
+            if !backup.exists() || !target.exists() { continue; }
+
+            let backup_metadata = fs::symlink_metadata(&backup)
+                .map_err(|error| io_error("Cannot inspect Apply backup", error))?;
+            if backup_metadata.file_type().is_symlink() || metadata_is_reparse_point(&backup_metadata) || !backup_metadata.is_file() {
+                return Err(format!("Refusing unsafe Apply backup: {}", backup.display()));
+            }
+            let target_metadata = fs::symlink_metadata(&target)
+                .map_err(|error| io_error("Cannot inspect recovery target", error))?;
+            if target_metadata.file_type().is_symlink() || metadata_is_reparse_point(&target_metadata) || !target_metadata.is_file() {
+                return Err(format!("Refusing unsafe Apply recovery target: {}", target.display()));
+            }
+            let expected = journal.intended_fingerprints.get(raw).ok_or_else(|| format!(
+                "Apply recovery for {raw} is ambiguous because this older journal has no intended-content fingerprint. Current file and backup were preserved."
+            ))?;
+            let current = fs::read(&target)
+                .map_err(|error| io_error(&format!("Cannot inspect recovery target {raw}"), error))?;
+            if apply_content_fingerprint(&current) != *expected {
+                return Err(format!(
+                    "Apply recovery refused to overwrite a newer external edit for {raw}. Current file and backup were preserved."
+                ));
+            }
+        }
+    }
+
+    for raw in journal.files.iter().rev() {
+        let target = recovery_target(root, raw)?;
         let backup = transaction_file(&target, journal.txn_id, "bak")?;
         if committed {
-            remove_recovery_artifact(&temp)?;
             remove_recovery_artifact(&backup)?;
             continue;
         }
-
-        remove_recovery_artifact(&temp)?;
-        if backup.exists() {
-            let metadata = fs::symlink_metadata(&backup).map_err(|error| io_error("Cannot inspect Apply backup", error))?;
-            if metadata.file_type().is_symlink() || !metadata.is_file() {
-                return Err(format!("Refusing unsafe Apply backup: {}", backup.display()));
-            }
-            if target.exists() {
-                let target_metadata = fs::symlink_metadata(&target).map_err(|error| io_error("Cannot inspect recovery target", error))?;
-                if target_metadata.file_type().is_symlink() || !target_metadata.is_file() {
-                    return Err(format!("Refusing unsafe Apply recovery target: {}", target.display()));
-                }
-                fs::remove_file(&target).map_err(|error| io_error(&format!("Cannot roll back {}", target.display()), error))?;
-            }
-            fs::rename(&backup, &target).map_err(|error| io_error(&format!("Cannot restore {}", target.display()), error))?;
+        if !backup.exists() { continue; }
+        let metadata = fs::symlink_metadata(&backup).map_err(|error| io_error("Cannot inspect Apply backup", error))?;
+        if metadata.file_type().is_symlink() || metadata_is_reparse_point(&metadata) || !metadata.is_file() {
+            return Err(format!("Refusing unsafe Apply backup: {}", backup.display()));
         }
+        if target.exists() {
+            // Preflight above proved this is still Workbench's intended replacement.
+            fs::remove_file(&target).map_err(|error| io_error(&format!("Cannot roll back {}", target.display()), error))?;
+        }
+        fs::rename(&backup, &target).map_err(|error| io_error(&format!("Cannot restore {}", target.display()), error))?;
     }
 
     clear_recovery_journal(app)?;
@@ -1250,15 +1370,34 @@ fn detect_semantic_file(path: &str, text: &str, allow_default_fallback: bool, di
 
 fn read_probe_text(path: &Path, relative: &str, size: u64, total_probe_bytes: &mut u64) -> Result<Option<String>, String> {
     if size > MAX_DISCOVERY_PROBE_FILE_BYTES { return Ok(None); }
-    *total_probe_bytes = total_probe_bytes.saturating_add(size);
-    if *total_probe_bytes > MAX_DISCOVERY_PROBE_TOTAL_BYTES {
-        return Err(format!("Semantic discovery safety limit exceeded: probed text is larger than {} MiB.", MAX_DISCOVERY_PROBE_TOTAL_BYTES / (1024 * 1024)));
-    }
-    let bytes = fs::read(path).map_err(|error| io_error(&format!("Cannot probe {relative}"), error))?;
+    let limit = MAX_DISCOVERY_PROBE_FILE_BYTES.min(MAX_DISCOVERY_PROBE_TOTAL_BYTES.saturating_sub(*total_probe_bytes));
+    let bytes = read_bounded_file(path, limit, &format!("Semantic discovery probe {relative}"))?;
+    *total_probe_bytes += bytes.len() as u64;
     let Ok(text) = String::from_utf8(bytes) else { return Ok(None); };
     let first = text.trim_start().chars().next();
     if !matches!(first, Some('{') | Some('[')) { return Ok(None); }
     Ok(Some(text))
+}
+
+fn read_bounded_bytes(reader: impl Read, limit: u64, context: &str) -> Result<Vec<u8>, String> {
+    let mut bytes = Vec::new();
+    reader.take(limit.saturating_add(1)).read_to_end(&mut bytes)
+        .map_err(|error| io_error(context, error))?;
+    if bytes.len() as u64 > limit {
+        return Err(format!("{context}: safety limit of {limit} bytes exceeded; nothing was truncated."));
+    }
+    Ok(bytes)
+}
+
+fn read_bounded_file(path: &Path, limit: u64, context: &str) -> Result<Vec<u8>, String> {
+    let file = File::open(path).map_err(|error| io_error(context, error))?;
+    let metadata = file.metadata().map_err(|error| io_error(context, error))?;
+    if !metadata.is_file() { return Err(format!("{context}: expected a regular file.")); }
+    if metadata.len() > limit {
+        return Err(format!("{context}: safety limit of {limit} bytes exceeded; nothing was truncated."));
+    }
+    // Metadata is only an early rejection. Bound the actual read even if the file grows.
+    read_bounded_bytes(file, limit, context)
 }
 
 fn trace_duration_ms(duration: Duration) -> f64 {
@@ -1332,7 +1471,7 @@ fn scan_tree_traced(root: &Path, discovery_roots: &[String], trace_id: Option<St
         }
         visited_directories += 1;
         let directory_enumerate_started = Instant::now();
-        let directory_entries = sorted_directory_entries(&canonical_directory)?;
+        let directory_entries = sorted_directory_entries(&canonical_directory, MAX_PROJECT_ENTRIES.saturating_sub(visited_entries))?;
         directory_enumerate_duration += directory_enumerate_started.elapsed();
         for entry in directory_entries {
             visited_entries += 1;
@@ -1355,7 +1494,7 @@ fn scan_tree_traced(root: &Path, discovery_roots: &[String], trace_id: Option<St
                 let child_canonicalize_started = Instant::now();
                 let canonical = fs::canonicalize(&path);
                 directory_canonicalize_duration += child_canonicalize_started.elapsed();
-                let Ok(canonical) = canonical else { continue; };
+                let canonical = canonical.map_err(|error| io_error("Cannot resolve project directory; refusing an incomplete inventory", error))?;
                 if canonical.starts_with(&canonical_root) { stack.push(canonical); }
                 continue;
             }
@@ -1487,16 +1626,18 @@ fn scan_tree_traced(root: &Path, discovery_roots: &[String], trace_id: Option<St
                     size / (1024 * 1024), MAX_JSON_FILE_BYTES / (1024 * 1024),
                 ));
             }
-            total_semantic_bytes = total_semantic_bytes.saturating_add(*size);
-            if total_semantic_bytes > MAX_TOTAL_JSON_BYTES {
-                return Err(format!("Project JSON safety limit exceeded: semantic input is larger than {} MiB.", MAX_TOTAL_JSON_BYTES / (1024 * 1024)));
-            }
-            Some(fs::read_to_string(canonical_file).map_err(|error| io_error(&format!("Cannot read semantic JSON file {relative}"), error))?)
+            let limit = MAX_JSON_FILE_BYTES.min(MAX_TOTAL_JSON_BYTES.saturating_sub(total_semantic_bytes));
+            let bytes = read_bounded_file(canonical_file, limit, &format!("Semantic JSON file {relative}"))?;
+            Some(String::from_utf8(bytes).map_err(|_| format!("Semantic JSON file {relative} is not valid UTF-8."))?)
         } else {
             read_probe_text(canonical_file, relative, *size, &mut total_probe_bytes)?
         };
         semantic_read_duration += semantic_read_started.elapsed();
         let Some(text) = text else { continue; };
+        total_semantic_bytes = total_semantic_bytes.saturating_add(text.len() as u64);
+        if total_semantic_bytes > MAX_TOTAL_JSON_BYTES {
+            return Err(format!("Project JSON safety limit exceeded: semantic input is larger than {} MiB.", MAX_TOTAL_JSON_BYTES / (1024 * 1024)));
+        }
         if relative.to_ascii_lowercase().ends_with(".json") { validate_json_nesting(&text, relative)?; }
 
         let source = if manual_candidate && !default_candidate { "manual-probe" } else if instance_descriptor_path(relative) { "detector" } else { "default" };
@@ -1627,12 +1768,30 @@ fn clear_active_project(state: &State<'_, DesktopState>) -> Result<(), String> {
     Ok(())
 }
 
+fn revalidate_authorized_directory(path: &Path, expected_canonical: &Path, label: &str) -> Result<(), String> {
+    let metadata = fs::symlink_metadata(path)
+        .map_err(|error| io_error(&format!("Cannot revalidate {label}"), error))?;
+    if metadata.file_type().is_symlink() || metadata_is_reparse_point(&metadata) || !metadata.is_dir() {
+        return Err(format!("{label} changed after native authorization; select/open it again."));
+    }
+    let canonical = fs::canonicalize(path)
+        .map_err(|error| io_error(&format!("Cannot canonicalize {label}"), error))?;
+    if canonical != expected_canonical {
+        return Err(format!("{label} changed after native authorization; select/open it again."));
+    }
+    Ok(())
+}
+
 fn active_project(state: &State<'_, DesktopState>) -> Result<ProjectState, String> {
-    state.project.lock().map_err(|_| "Project state lock is poisoned.".to_string())?.clone()
-        .ok_or_else(|| "No project is currently open.".to_string())
+    let project = state.project.lock().map_err(|_| "Project state lock is poisoned.".to_string())?.clone()
+        .ok_or_else(|| "No project is currently open.".to_string())?;
+    revalidate_authorized_directory(&project.root, &project.canonical_root, "Active project root")?;
+    Ok(project)
 }
 
 fn set_active_project(app: &AppHandle, state: &State<'_, DesktopState>, root: PathBuf, trace_id: Option<String>) -> Result<ProjectScan, String> {
+    let _transaction_guard = state.apply_transaction_lock.lock()
+        .map_err(|_| "Apply transaction lock is poisoned.".to_string())?;
     let native_open_started = Instant::now();
     let canonical_started = Instant::now();
     let canonical_root = fs::canonicalize(&root)
@@ -1726,6 +1885,7 @@ fn commit_discovery_roots(
     project: &ProjectState,
     mut discovery_roots: Vec<String>,
 ) -> Result<ProjectScan, String> {
+    revalidate_authorized_directory(&project.root, &project.canonical_root, "Active project root")?;
     discovery_roots.retain(|raw| safe_relative(raw).is_ok());
     discovery_roots.sort();
     discovery_roots.dedup();
@@ -1845,16 +2005,22 @@ fn ensure_output_path(root: &Path, raw: &str) -> Result<PathBuf, String> {
     let target = root.join(relative);
     if target.exists() {
         let metadata = fs::symlink_metadata(&target).map_err(|error| io_error("Cannot inspect output file", error))?;
-        if metadata.file_type().is_symlink() || metadata.is_dir() {
+        if metadata.file_type().is_symlink() || metadata_is_reparse_point(&metadata) || metadata.is_dir() {
             return Err(format!("Unsafe output target: {}", target.display()));
+        }
+        let canonical = fs::canonicalize(&target).map_err(|error| io_error("Cannot canonicalize output target", error))?;
+        if !canonical.starts_with(root) {
+            return Err(format!("Output path escaped the selected output root: {raw}"));
         }
     }
     Ok(target)
 }
 
 fn output_root(state: &State<'_, DesktopState>, token: &str) -> Result<PathBuf, String> {
-    state.output_roots.lock().map_err(|_| "Output state lock is poisoned.".to_string())?.get(token).cloned()
-        .ok_or_else(|| "The selected output folder is no longer registered.".to_string())
+    let root = state.output_roots.lock().map_err(|_| "Output state lock is poisoned.".to_string())?.get(token).cloned()
+        .ok_or_else(|| "The selected output folder is no longer registered.".to_string())?;
+    revalidate_authorized_directory(&root, &root, "Selected output folder")?;
+    Ok(root)
 }
 
 #[tauri::command]
@@ -1891,6 +2057,8 @@ fn revoke_recent_project(payload: RootPayload, app: AppHandle, state: State<'_, 
 
 #[tauri::command]
 async fn reload_project(app: AppHandle, state: State<'_, DesktopState>) -> Result<ProjectScan, String> {
+    let _transaction_guard = state.apply_transaction_lock.lock()
+        .map_err(|_| "Apply transaction lock is poisoned.".to_string())?;
     let project = active_project(&state)?;
     recover_project_transaction(&app, &project.root)?;
     scan_tree(&project.root, &project.discovery_roots)
@@ -1970,6 +2138,8 @@ async fn reset_project_probe_paths(app: AppHandle, state: State<'_, DesktopState
 
 #[tauri::command]
 fn close_project(state: State<'_, DesktopState>) -> Result<ClosedResult, String> {
+    let _transaction_guard = state.apply_transaction_lock.lock()
+        .map_err(|_| "Apply transaction lock is poisoned.".to_string())?;
     clear_active_project(&state)?;
     Ok(ClosedResult { closed: true })
 }
@@ -2034,11 +2204,9 @@ async fn check_for_update(
     app: AppHandle,
     pending: State<'_, PendingUpdateState>,
 ) -> Result<UpdateCheckResult, String> {
+    let generation = pending.begin_check()?;
     let current_version = app.package_info().version.to_string();
     if !updater_configured() {
-        if let Ok(mut slot) = pending.update.lock() {
-            *slot = None;
-        }
         return Ok(UpdateCheckResult {
             configured: false,
             channel: payload.channel,
@@ -2058,6 +2226,7 @@ async fn check_for_update(
         .endpoints(vec![endpoint])
         .map_err(|error| format!("Cannot configure updater endpoint: {error}"))?
         .pubkey(UPDATER_PUBLIC_KEY.trim())
+        .timeout(Duration::from_secs(30))
         .restart_after_install(true)
         .build()
         .map_err(|error| format!("Cannot initialize updater: {error}"))?;
@@ -2066,20 +2235,13 @@ async fn check_for_update(
         .await
         .map_err(|error| format!("Update check failed: {error}"))?;
 
-    if let Some(update) = update {
+    if let Some(mut update) = update {
+        update.timeout = Some(Duration::from_secs(600));
         let version = update.version.clone();
-        if payload.channel == "stable" && version.to_string().contains('-') {
-            if let Ok(mut slot) = pending.update.lock() {
-                *slot = None;
-            }
-            return Err(format!(
-                "Stable update channel rejected prerelease version {version}. Check repository channel publication before retrying."
-            ));
-        }
+        validate_update_target(&payload.channel, &version, update.download_url.as_str(), UPDATER_REPOSITORY)?;
         let notes = update.body.clone();
         let pub_date = update.date.map(|date| date.to_string());
-        let mut slot = pending.update.lock().map_err(|_| "Pending update state is unavailable.".to_string())?;
-        *slot = Some(PendingUpdate { channel: payload.channel.clone(), update });
+        pending.finish_check(generation, Some(PendingUpdate { channel: payload.channel.clone(), update }))?;
         Ok(UpdateCheckResult {
             configured: true,
             channel: payload.channel,
@@ -2091,8 +2253,7 @@ async fn check_for_update(
             reason: None,
         })
     } else {
-        let mut slot = pending.update.lock().map_err(|_| "Pending update state is unavailable.".to_string())?;
-        *slot = None;
+        pending.finish_check(generation, None)?;
         Ok(UpdateCheckResult {
             configured: true,
             channel: payload.channel,
@@ -2106,6 +2267,24 @@ async fn check_for_update(
     }
 }
 
+fn validate_update_target(channel: &str, version: &str, url: &str, repository: &str) -> Result<(), String> {
+    if !matches!(channel, "stable" | "preview") { return Err("Unknown update channel.".into()); }
+    // Tauri has already parsed SemVer. A hyphen in build metadata is not a prerelease.
+    if channel == "stable" && version.split('+').next().unwrap_or_default().contains('-') {
+        return Err(format!("Stable update channel rejected prerelease version {version}."));
+    }
+    let expected = format!("https://github.com/{repository}/releases/download/v{version}/Hytale-Generator-Workbench_{version}_x64-setup.exe");
+    if !valid_github_repository(repository) || url != expected {
+        return Err("Update URL must identify this repository's immutable versioned installer.".into());
+    }
+    Ok(())
+}
+
+fn lock_update_install(desktop: &DesktopState) -> Result<std::sync::MutexGuard<'_, ()>, String> {
+    desktop.apply_transaction_lock.try_lock()
+        .map_err(|_| "Update installation is blocked while a project transaction is active or unavailable. Retry after it completes.".into())
+}
+
 #[tauri::command]
 async fn install_update(
     payload: InstallUpdatePayload,
@@ -2113,6 +2292,7 @@ async fn install_update(
     desktop: State<'_, DesktopState>,
     pending: State<'_, PendingUpdateState>,
 ) -> Result<UpdateInstallResult, String> {
+    if !updater_configured() { return Err(updater_unconfigured_reason()); }
     let pending_changes = desktop.pending_change_count.load(Ordering::Relaxed);
     if pending_changes > 0 {
         return Err(format!(
@@ -2120,22 +2300,19 @@ async fn install_update(
         ));
     }
 
-    let selected = {
-        let slot = pending.update.lock().map_err(|_| "Pending update state is unavailable.".to_string())?;
-        slot.clone()
-    }.ok_or_else(|| "No checked update is ready to install. Check for updates again.".to_string())?;
-
-    if selected.channel != payload.channel || selected.update.version != payload.expected_version {
-        return Err("The checked update changed. Check for updates again before installing.".to_string());
-    }
+    let lease = pending.begin_install(|selected| {
+        if selected.channel != payload.channel || selected.update.version != payload.expected_version {
+            return Err("The checked update changed. Check for updates again before installing.".to_string());
+        }
+        validate_update_target(&payload.channel, &selected.update.version, selected.update.download_url.as_str(), UPDATER_REPOSITORY)
+    })?;
+    let selected = &lease.selected;
 
     let version = selected.update.version.clone();
     let progress_app = app.clone();
-    let finish_app = app.clone();
     let progress_version = version.clone();
-    let finish_version = version.clone();
     let mut downloaded: u64 = 0;
-    let update = selected.update.restart_after_install(true);
+    let update = selected.update.clone().restart_after_install(true);
     let bytes = update
         .download(
             move |chunk_length, content_length| {
@@ -2147,20 +2324,21 @@ async fn install_update(
                     total_bytes: content_length,
                 });
             },
-            move || {
-                let _ = finish_app.emit("app-update-progress", AppUpdateProgress {
-                    phase: "downloaded".to_string(),
-                    version: finish_version,
-                    downloaded_bytes: 0,
-                    total_bytes: None,
-                });
-            },
+            || {}, // Tauri calls this BEFORE verifying the signature. Do not report verified yet.
         )
         .await
         .map_err(|error| format!("Update download or signature verification failed: {error}"))?;
 
+    let _ = app.emit("app-update-progress", AppUpdateProgress {
+        phase: "downloaded".to_string(),
+        version: version.clone(),
+        downloaded_bytes: bytes.len() as u64,
+        total_bytes: Some(bytes.len() as u64),
+    });
+
     // Final native write/restart boundary: staged changes may have appeared while the
     // signed package was downloading. Do not trust the earlier UI/native pre-check.
+    let _transaction_guard = lock_update_install(&desktop)?;
     let pending_changes = desktop.pending_change_count.load(Ordering::Relaxed);
     if pending_changes > 0 {
         let _ = app.emit("app-update-progress", AppUpdateProgress {
@@ -2188,7 +2366,10 @@ async fn install_update(
 }
 
 #[tauri::command]
-fn exit_application(app: AppHandle) -> Result<ExitingResult, String> {
+fn exit_application(app: AppHandle, state: State<'_, DesktopState>) -> Result<ExitingResult, String> {
+    let _transaction_guard = state.apply_transaction_lock.lock()
+        .map_err(|_| "Apply transaction lock is poisoned.".to_string())?;
+    state.worldgen_scan.cancel(None)?;
     app.exit(0);
     Ok(ExitingResult { exiting: true })
 }
@@ -2197,7 +2378,7 @@ fn exit_application(app: AppHandle) -> Result<ExitingResult, String> {
 fn read_project_file(payload: ProjectPathPayload, state: State<'_, DesktopState>) -> Result<Response, String> {
     let project = active_project(&state)?;
     let path = resolve_existing_project_file(&project, &payload.path)?;
-    let data = fs::read(path).map_err(|error| io_error(&format!("Cannot read {}", payload.path), error))?;
+    let data = read_bounded_file(&path, MAX_BINARY_READ_BYTES, "Project binary read (use native folder output for larger files)")?;
     Ok(Response::new(data))
 }
 
@@ -2205,15 +2386,20 @@ fn read_project_file(payload: ProjectPathPayload, state: State<'_, DesktopState>
 fn read_project_text_preview(payload: ProjectPathPayload, state: State<'_, DesktopState>) -> Result<ProjectTextPreview, String> {
     let project = active_project(&state)?;
     let path = resolve_existing_project_file(&project, &payload.path)?;
-    let metadata = fs::metadata(&path).map_err(|error| io_error(&format!("Cannot inspect {}", payload.path), error))?;
+    project_text_preview(&path, payload.path)
+}
+
+fn project_text_preview(path: &Path, display: String) -> Result<ProjectTextPreview, String> {
+    let metadata = fs::metadata(path).map_err(|error| io_error("Cannot inspect source preview", error))?;
     let size = metadata.len();
     if size > MAX_SOURCE_PREVIEW_BYTES {
-        return Ok(ProjectTextPreview { path: payload.path, size, kind: "too-large".to_string(), text: None });
+        return Ok(ProjectTextPreview { path: display, size, kind: "too-large".to_string(), text: None });
     }
-    let bytes = fs::read(&path).map_err(|error| io_error(&format!("Cannot preview {}", payload.path), error))?;
+    let bytes = read_bounded_file(path, MAX_SOURCE_PREVIEW_BYTES, "Source preview")?;
+    let size = bytes.len() as u64;
     match String::from_utf8(bytes) {
-        Ok(text) => Ok(ProjectTextPreview { path: payload.path, size, kind: "text".to_string(), text: Some(text) }),
-        Err(_) => Ok(ProjectTextPreview { path: payload.path, size, kind: "binary".to_string(), text: None }),
+        Ok(text) => Ok(ProjectTextPreview { path: display, size, kind: "text".to_string(), text: Some(text) }),
+        Err(_) => Ok(ProjectTextPreview { path: display, size, kind: "binary".to_string(), text: None }),
     }
 }
 
@@ -2236,40 +2422,92 @@ async fn check_conflicts(payload: FilesPayload, state: State<'_, DesktopState>) 
     Ok(ConflictsResult { conflicts })
 }
 
+#[derive(Debug)]
+struct PreparedApplyFile {
+    target: PathBuf,
+    temp: PathBuf,
+    backup: PathBuf,
+    display: String,
+    expected: String,
+    text: String,
+}
+
 fn transaction_file(path: &Path, txn_id: u64, kind: &str) -> Result<PathBuf, String> {
     let name = path.file_name().and_then(|value| value.to_str()).ok_or_else(|| "Project file name is not valid UTF-8.".to_string())?;
     Ok(path.with_file_name(format!(".{name}.hgw-txn-{txn_id}.{kind}")))
 }
 
-fn rollback_prepared(prepared: &[(PathBuf, PathBuf, PathBuf, String)]) -> Result<(), String> {
+fn secure_original_for_apply(entry: &PreparedApplyFile) -> Result<bool, String> {
+    fs::rename(&entry.target, &entry.backup)
+        .map_err(|error| io_error(&format!("Cannot secure original before apply: {}", entry.target.display()), error))?;
+    let current = fs::read_to_string(&entry.backup)
+        .map_err(|error| io_error(&format!("Cannot revalidate apply source: {}", entry.display), error))?;
+    Ok(current == entry.expected)
+}
+
+fn sync_committed_apply_target(entry: &PreparedApplyFile) -> Result<(), String> {
+    // The atomic rename installed Workbench's staged file. Do not compare content and
+    // roll back here: a later external writer is newer authority and must be allowed to
+    // win. The watcher will surface a differing post-Apply write.
+    fs::File::open(&entry.target)
+        .and_then(|file| file.sync_all())
+        .map_err(|error| io_error(&format!("Cannot sync applied target: {}", entry.display), error))
+}
+
+fn rollback_prepared(prepared: &[PreparedApplyFile]) -> Result<(), String> {
     let mut failures = Vec::new();
-    for (target, temp, backup, _) in prepared.iter().rev() {
-        if temp.exists() {
-            if let Err(error) = fs::remove_file(temp) {
-                failures.push(io_error(&format!("Cannot remove staged Apply file {}", temp.display()), error));
-            }
-        }
-        if backup.exists() {
-            let mut target_ready = true;
-            if target.exists() {
-                if let Err(error) = fs::remove_file(target) {
-                    failures.push(io_error(&format!("Cannot remove partially committed Apply target {}", target.display()), error));
-                    target_ready = false;
-                }
-            }
-            if target_ready {
-                if let Err(error) = fs::rename(backup, target) {
-                    failures.push(io_error(&format!("Cannot restore Apply backup {}", backup.display()), error));
-                }
+
+    // Temp files are transaction-owned, so they may always be removed independently.
+    for entry in prepared.iter().rev() {
+        if entry.temp.exists() {
+            if let Err(error) = fs::remove_file(&entry.temp) {
+                failures.push(io_error(&format!("Cannot remove staged Apply file {}", entry.temp.display()), error));
             }
         }
     }
-    if failures.is_empty() { Ok(()) } else { Err(failures.join(" | ")) }
+
+    // Before restoring any backup, prove every currently visible target is still the
+    // replacement Workbench wrote. This prevents partial rollback and, critically,
+    // prevents deleting a newer external edit that arrived after Workbench's rename.
+    for entry in prepared.iter().rev() {
+        if !entry.backup.exists() || !entry.target.exists() { continue; }
+        let metadata = match fs::symlink_metadata(&entry.target) {
+            Ok(metadata) => metadata,
+            Err(error) => {
+                failures.push(io_error(&format!("Cannot inspect partially committed Apply target {}", entry.target.display()), error));
+                continue;
+            }
+        };
+        if metadata.file_type().is_symlink() || metadata_is_reparse_point(&metadata) || !metadata.is_file() {
+            failures.push(format!("Refusing to overwrite unsafe or newer Apply target {}", entry.target.display()));
+            continue;
+        }
+        match fs::read_to_string(&entry.target) {
+            Ok(current) if current == entry.text => {}
+            Ok(_) => failures.push(format!(
+                "Refusing to overwrite a newer external edit at {}; current file and backup were preserved.",
+                entry.display
+            )),
+            Err(error) => failures.push(io_error(&format!("Cannot inspect partially committed Apply target {}", entry.target.display()), error)),
+        }
+    }
+    if !failures.is_empty() { return Err(failures.join(" | ")); }
+
+    for entry in prepared.iter().rev() {
+        if !entry.backup.exists() { continue; }
+        if entry.target.exists() {
+            fs::remove_file(&entry.target)
+                .map_err(|error| io_error(&format!("Cannot remove partially committed Apply target {}", entry.target.display()), error))?;
+        }
+        fs::rename(&entry.backup, &entry.target)
+            .map_err(|error| io_error(&format!("Cannot restore Apply backup {}", entry.backup.display()), error))?;
+    }
+    Ok(())
 }
 
 fn rollback_apply_failure(
     app: &AppHandle,
-    prepared: &[(PathBuf, PathBuf, PathBuf, String)],
+    prepared: &[PreparedApplyFile],
     primary_error: String,
 ) -> String {
     match rollback_prepared(prepared) {
@@ -2283,6 +2521,20 @@ fn rollback_apply_failure(
             "{primary_error} Automatic rollback was incomplete: {rollback_error}. Recovery journal and backups were retained; reopen this project to retry recovery before applying more changes."
         ),
     }
+}
+
+fn rollback_apply_conflict(
+    app: &AppHandle,
+    prepared: &[PreparedApplyFile],
+    display: &str,
+) -> Result<ApplyResult, String> {
+    rollback_prepared(prepared).map_err(|rollback_error| format!(
+        "Apply detected a concurrent external change for {display}, but automatic rollback was incomplete: {rollback_error}. Recovery metadata and backups were retained; reopen this project before applying more changes."
+    ))?;
+    clear_recovery_journal(app).map_err(|metadata_error| format!(
+        "Apply detected a concurrent external change for {display} and rolled back safely, but recovery metadata could not be cleared: {metadata_error}. Reopen this project before applying more changes."
+    ))?;
+    Ok(ApplyResult { conflicts: vec![display.to_string()], written: 0 })
 }
 
 #[tauri::command]
@@ -2312,7 +2564,7 @@ fn apply_project_files(payload: ApplyPayload, app: AppHandle, state: State<'_, D
             Err(_) => { conflicts.push(file.path); continue; }
         };
         match fs::read_to_string(&path) {
-            Ok(current) if current == file.expected => resolved.push((path, file.path, file.text)),
+            Ok(current) if current == file.expected => resolved.push((path, file.path, file.expected, file.text)),
             _ => conflicts.push(file.path),
         }
     }
@@ -2326,12 +2578,15 @@ fn apply_project_files(payload: ApplyPayload, app: AppHandle, state: State<'_, D
     let journal = ApplyRecoveryJournal {
         project_root: project.canonical_root.to_string_lossy().to_string(),
         txn_id,
-        files: resolved.iter().map(|(_, display, _)| display.clone()).collect(),
+        files: resolved.iter().map(|(_, display, _, _)| display.clone()).collect(),
+        intended_fingerprints: resolved.iter()
+            .map(|(_, display, _, text)| (display.clone(), apply_content_fingerprint(text.as_bytes())))
+            .collect(),
     };
     write_recovery_journal(&app, &journal)?;
-    let mut prepared: Vec<(PathBuf, PathBuf, PathBuf, String)> = Vec::with_capacity(resolved.len());
+    let mut prepared: Vec<PreparedApplyFile> = Vec::with_capacity(resolved.len());
 
-    for (target, display, text) in resolved {
+    for (target, display, expected, text) in resolved {
         let temp = transaction_file(&target, txn_id, "tmp")?;
         let backup = transaction_file(&target, txn_id, "bak")?;
         if temp.exists() || backup.exists() {
@@ -2341,22 +2596,20 @@ fn apply_project_files(payload: ApplyPayload, app: AppHandle, state: State<'_, D
                 format!("Apply transaction artifact already exists for {display}. Reopen the project to recover it safely."),
             ));
         }
-        // Register the current artifacts before I/O starts. fs::copy/fs::write can fail
-        // after creating a partial temp file; recovery must still know to remove it.
-        prepared.push((target, temp, backup, text));
-        let (target, temp, _, text) = prepared.last().expect("prepared Apply entry");
-        if let Err(error) = fs::copy(target, temp) {
-            let primary = io_error(&format!("Cannot prepare apply transaction for {display}"), error);
+        prepared.push(PreparedApplyFile { target, temp, backup, display, expected, text });
+        let entry = prepared.last().expect("prepared Apply entry");
+        if let Err(error) = fs::copy(&entry.target, &entry.temp) {
+            let primary = io_error(&format!("Cannot prepare apply transaction for {}", entry.display), error);
             return Err(rollback_apply_failure(&app, &prepared, primary));
         }
-        if let Err(error) = fs::write(temp, text.as_bytes()) {
-            let primary = io_error(&format!("Cannot stage apply transaction for {display}"), error);
+        if let Err(error) = fs::write(&entry.temp, entry.text.as_bytes()) {
+            let primary = io_error(&format!("Cannot stage apply transaction for {}", entry.display), error);
             return Err(rollback_apply_failure(&app, &prepared, primary));
         }
-        match fs::File::open(temp).and_then(|file| file.sync_all()) {
+        match fs::File::open(&entry.temp).and_then(|file| file.sync_all()) {
             Ok(()) => {}
             Err(error) => {
-                let primary = io_error(&format!("Cannot sync staged apply transaction for {display}"), error);
+                let primary = io_error(&format!("Cannot sync staged apply transaction for {}", entry.display), error);
                 return Err(rollback_apply_failure(&app, &prepared, primary));
             }
         }
@@ -2364,19 +2617,31 @@ fn apply_project_files(payload: ApplyPayload, app: AppHandle, state: State<'_, D
 
     {
         let mut active = state.active_write_paths.lock().map_err(|_| "Active-write state lock is poisoned.".to_string())?;
-        for (target, _, _, _) in &prepared { active.insert(target.clone()); }
+        for entry in &prepared { active.insert(entry.target.clone()); }
     }
 
-    for index in 0..prepared.len() {
-        let (target, temp, backup, _) = &prepared[index];
-        if let Err(error) = fs::rename(target, backup) {
+    for entry in &prepared {
+        match secure_original_for_apply(entry) {
+            Ok(true) => {}
+            Ok(false) => {
+                if let Ok(mut active) = state.active_write_paths.lock() { active.clear(); }
+                return rollback_apply_conflict(&app, &prepared, &entry.display);
+            }
+            Err(primary) => {
+                if let Ok(mut active) = state.active_write_paths.lock() { active.clear(); }
+                return Err(rollback_apply_failure(&app, &prepared, primary));
+            }
+        }
+        if let Err(error) = fs::rename(&entry.temp, &entry.target) {
             if let Ok(mut active) = state.active_write_paths.lock() { active.clear(); }
-            let primary = io_error(&format!("Cannot secure original before apply: {}", target.display()), error);
+            let primary = io_error(&format!("Cannot commit apply transaction: {}", entry.target.display()), error);
             return Err(rollback_apply_failure(&app, &prepared, primary));
         }
-        if let Err(error) = fs::rename(temp, target) {
+    }
+
+    for entry in &prepared {
+        if let Err(primary) = sync_committed_apply_target(entry) {
             if let Ok(mut active) = state.active_write_paths.lock() { active.clear(); }
-            let primary = io_error(&format!("Cannot commit apply transaction: {}", target.display()), error);
             return Err(rollback_apply_failure(&app, &prepared, primary));
         }
     }
@@ -2391,16 +2656,16 @@ fn apply_project_files(payload: ApplyPayload, app: AppHandle, state: State<'_, D
     }
 
     if let Ok(mut suppression) = state.watch_suppression.lock() {
-        for (target, _, _, text) in &prepared {
-            suppression.insert(target.clone(), SuppressedWrite { expected: text.clone(), until: Instant::now() + Duration::from_secs(2) });
+        for entry in &prepared {
+            suppression.insert(entry.target.clone(), SuppressedWrite { expected: entry.text.clone(), until: Instant::now() + Duration::from_secs(2) });
         }
     }
     if let Ok(mut active) = state.active_write_paths.lock() { active.clear(); }
 
     let mut cleanup_complete = true;
-    for (_, temp, backup, _) in &prepared {
-        if temp.exists() && fs::remove_file(temp).is_err() { cleanup_complete = false; }
-        if backup.exists() && fs::remove_file(backup).is_err() { cleanup_complete = false; }
+    for entry in &prepared {
+        if entry.temp.exists() && fs::remove_file(&entry.temp).is_err() { cleanup_complete = false; }
+        if entry.backup.exists() && fs::remove_file(&entry.backup).is_err() { cleanup_complete = false; }
     }
     if cleanup_complete { clear_recovery_journal(&app)?; }
 
@@ -2408,6 +2673,11 @@ fn apply_project_files(payload: ApplyPayload, app: AppHandle, state: State<'_, D
 }
 
 fn select_worldgen_log_from_folder(folder: &Path) -> Result<PathBuf, String> {
+    let canonical_folder = fs::canonicalize(folder)
+        .map_err(|error| io_error("Cannot canonicalize selected WorldGen log folder", error))?;
+    if !canonical_folder.is_dir() {
+        return Err("Selected WorldGen log folder is no longer a directory.".to_string());
+    }
     let mut newest: Option<(std::time::SystemTime, String, PathBuf)> = None;
     for entry in fs::read_dir(folder)
         .map_err(|error| io_error("Cannot read selected WorldGen log folder", error))?
@@ -2429,10 +2699,14 @@ fn select_worldgen_log_from_folder(folder: &Path) -> Result<PathBuf, String> {
         .map(|(_, _, path)| path)
         .ok_or_else(|| "No .log file was found in the selected folder.".to_string())?;
     let metadata = fs::symlink_metadata(&selected).map_err(|error| io_error("Cannot inspect resolved WorldGen log", error))?;
-    if metadata.file_type().is_symlink() || !metadata.is_file() {
+    if metadata.file_type().is_symlink() || metadata_is_reparse_point(&metadata) || !metadata.is_file() {
         return Err("Resolved WorldGen log must be a regular local file.".to_string());
     }
-    fs::canonicalize(selected).map_err(|error| io_error("Cannot canonicalize resolved WorldGen log", error))
+    let canonical = fs::canonicalize(selected).map_err(|error| io_error("Cannot canonicalize resolved WorldGen log", error))?;
+    if !canonical.starts_with(&canonical_folder) {
+        return Err("Resolved WorldGen log escaped the selected log folder; choose the folder again.".to_string());
+    }
+    Ok(canonical)
 }
 
 #[tauri::command]
@@ -2444,12 +2718,13 @@ async fn select_worldgen_log(app: AppHandle, state: State<'_, DesktopState>) -> 
     let Some(selected) = selected else { return Ok(None); };
     let raw = selected.into_path().map_err(|_| "The selected log is not a local filesystem path.".to_string())?;
     let metadata = fs::symlink_metadata(&raw).map_err(|error| io_error("Cannot inspect selected WorldGen log", error))?;
-    if metadata.file_type().is_symlink() || !metadata.is_file() {
+    if metadata.file_type().is_symlink() || metadata_is_reparse_point(&metadata) || !metadata.is_file() {
         return Err("Selected WorldGen log must be a regular local file, not a symlink, junction or directory.".to_string());
     }
     let path = fs::canonicalize(&raw).map_err(|error| io_error("Cannot canonicalize selected WorldGen log", error))?;
     let token = format!("worldgen-log-{}", state.next_token.fetch_add(1, Ordering::Relaxed));
     let mut logs = state.worldgen_logs.lock().map_err(|_| "WorldGen-log state lock is poisoned.".to_string())?;
+    state.worldgen_scan.cancel(None)?;
     logs.clear();
     logs.insert(token.clone(), WorldgenLogSource::File(path.clone()));
     Ok(Some(WorldgenLogSelection { token, name: path_label(&path), source_kind: "file".to_string() }))
@@ -2463,12 +2738,13 @@ async fn select_worldgen_log_folder(app: AppHandle, state: State<'_, DesktopStat
     let Some(selected) = selected else { return Ok(None); };
     let raw = selected.into_path().map_err(|_| "The selected log folder is not a local filesystem path.".to_string())?;
     let metadata = fs::symlink_metadata(&raw).map_err(|error| io_error("Cannot inspect selected WorldGen log folder", error))?;
-    if metadata.file_type().is_symlink() || !metadata.is_dir() {
+    if metadata.file_type().is_symlink() || metadata_is_reparse_point(&metadata) || !metadata.is_dir() {
         return Err("Selected WorldGen log folder must be a regular local directory, not a symlink or junction.".to_string());
     }
     let path = fs::canonicalize(&raw).map_err(|error| io_error("Cannot canonicalize selected WorldGen log folder", error))?;
     let token = format!("worldgen-folder-{}", state.next_token.fetch_add(1, Ordering::Relaxed));
     let mut logs = state.worldgen_logs.lock().map_err(|_| "WorldGen-log state lock is poisoned.".to_string())?;
+    state.worldgen_scan.cancel(None)?;
     logs.clear();
     logs.insert(token.clone(), WorldgenLogSource::Folder(path.clone()));
     Ok(Some(WorldgenLogSelection { token, name: path_label(&path), source_kind: "folder".to_string() }))
@@ -2476,24 +2752,39 @@ async fn select_worldgen_log_folder(app: AppHandle, state: State<'_, DesktopStat
 
 #[tauri::command]
 fn revoke_worldgen_log(payload: WorldgenLogPayload, state: State<'_, DesktopState>) -> Result<(), String> {
-    state.worldgen_logs.lock().map_err(|_| "WorldGen-log state lock is poisoned.".to_string())?.remove(&payload.token);
+    let mut logs = state.worldgen_logs.lock().map_err(|_| "WorldGen-log state lock is poisoned.".to_string())?;
+    logs.remove(&payload.token);
+    state.worldgen_scan.cancel(Some(&payload.token))?;
     Ok(())
 }
 
 #[tauri::command]
 async fn read_worldgen_performance(payload: WorldgenLogPayload, state: State<'_, DesktopState>) -> Result<WorldgenPerformanceResult, String> {
-    let source = state.worldgen_logs.lock().map_err(|_| "WorldGen-log state lock is poisoned.".to_string())?
-        .get(&payload.token).cloned().ok_or_else(|| "The selected WorldGen log source is no longer registered. Choose it again.".to_string())?;
-    let path = match source {
-        WorldgenLogSource::File(path) => path,
-        WorldgenLogSource::Folder(folder) => select_worldgen_log_from_folder(&folder)?
+    let (source, scan) = {
+        let logs = state.worldgen_logs.lock().map_err(|_| "WorldGen-log state lock is poisoned.".to_string())?;
+        let source = logs.get(&payload.token).cloned().ok_or_else(|| "The selected WorldGen log source is no longer registered. Choose it again.".to_string())?;
+        (source, state.worldgen_scan.begin(&payload.token)?)
     };
-    let metadata = fs::symlink_metadata(&path).map_err(|error| io_error("Cannot inspect selected WorldGen log", error))?;
-    if metadata.file_type().is_symlink() || !metadata.is_file() {
-        return Err("The selected WorldGen log is no longer a regular local file. Choose it again.".to_string());
-    }
-    let (bytes_scanned, lines_scanned, truncated, report) = read_worldgen_performance_log(&path)?;
-    Ok(WorldgenPerformanceResult { name: path_label(&path), bytes_scanned, lines_scanned, truncated, report })
+    tauri::async_runtime::spawn_blocking(move || {
+        if scan.cancelled.load(Ordering::Relaxed) { return Err("WorldGen scan cancelled.".to_string()); }
+        let path = match source {
+            WorldgenLogSource::File(path) => path,
+            WorldgenLogSource::Folder(folder) => {
+                revalidate_authorized_directory(&folder, &folder, "Selected WorldGen log folder")?;
+                select_worldgen_log_from_folder(&folder)?
+            }
+        };
+        let metadata = fs::symlink_metadata(&path).map_err(|error| io_error("Cannot inspect selected WorldGen log", error))?;
+        if metadata.file_type().is_symlink() || metadata_is_reparse_point(&metadata) || !metadata.is_file() {
+            return Err("The selected WorldGen log is no longer a regular local file. Choose it again.".to_string());
+        }
+        let file = File::open(&path).map_err(|error| io_error("Cannot open selected WorldGen log", error))?;
+        let file_len = file.metadata().map_err(|error| io_error("Cannot inspect selected WorldGen log", error))?.len();
+        let mut reader = CancellableReader { inner: file, cancelled: scan.cancelled.clone() };
+        let (bytes_scanned, lines_scanned, truncated, report) = read_worldgen_performance_reader(&mut reader, file_len)?;
+        drop(scan);
+        Ok(WorldgenPerformanceResult { name: path_label(&path), bytes_scanned, lines_scanned, truncated, report })
+    }).await.map_err(|error| format!("WorldGen scan worker failed: {error}"))?
 }
 
 #[tauri::command]
@@ -2517,6 +2808,7 @@ async fn select_output_directory(app: AppHandle, state: State<'_, DesktopState>)
 
 #[tauri::command]
 async fn existing_output_files(payload: OutputPathsPayload, state: State<'_, DesktopState>) -> Result<ExistingResult, String> {
+    if payload.paths.len() > MAX_PROJECT_ENTRIES { return Err("Output path-count safety limit exceeded.".to_string()); }
     let root = output_root(&state, &payload.token)?;
     let mut existing = Vec::new();
     for raw in payload.paths {
@@ -2529,33 +2821,137 @@ async fn existing_output_files(payload: OutputPathsPayload, state: State<'_, Des
 
 #[tauri::command]
 async fn export_output(payload: ExportPayload, state: State<'_, DesktopState>) -> Result<WrittenResult, String> {
+    let _transaction_guard = state.apply_transaction_lock.lock()
+        .map_err(|_| "Apply transaction lock is poisoned.".to_string())?;
     let project = active_project(&state)?;
     let output = output_root(&state, &payload.token)?;
-    let changed: HashMap<String, String> = payload.changed_files.into_iter().map(|file| (file.path, file.text)).collect();
-    let mut paths = if payload.scope == "full" {
+    export_project_files(&project, &output, &payload.scope, payload.changed_files, payload.allow_overwrite)
+}
+
+fn export_project_files(project: &ProjectState, output: &Path, scope: &str, changed_files: Vec<TextFile>, allow_overwrite: bool) -> Result<WrittenResult, String> {
+    let output = fs::canonicalize(output).map_err(|error| io_error("Cannot revalidate output root", error))?;
+    if output.starts_with(&project.canonical_root) || project.canonical_root.starts_with(&output) {
+        return Err("Folder export must be outside the source project tree. Use Apply to Project for source changes.".to_string());
+    }
+    if changed_files.len() > MAX_APPLY_FILES { return Err("Output changed-file count safety limit exceeded.".to_string()); }
+    let mut changed = HashMap::new();
+    let mut changed_identities = HashSet::new();
+    let mut changed_bytes = 0u64;
+    for file in changed_files {
+        let path = safe_relative(&file.path)?.to_string_lossy().replace('\\', "/");
+        changed_bytes = changed_bytes.saturating_add(file.text.len() as u64);
+        if file.text.len() as u64 > MAX_JSON_FILE_BYTES || changed_bytes > MAX_TOTAL_JSON_BYTES {
+            return Err("Output changed-text safety limit exceeded.".to_string());
+        }
+        if !changed_identities.insert(path.to_lowercase()) { return Err(format!("Duplicate output path: {path}")); }
+        changed.insert(path, file.text);
+    }
+    let mut paths = if scope == "full" {
         scan_tree(&project.root, &project.discovery_roots)?.entries
-    } else if payload.scope == "changed" {
+    } else if scope == "changed" {
         changed.keys().cloned().collect()
     } else {
-        return Err(format!("Unknown output scope: {}", payload.scope));
+        return Err(format!("Unknown output scope: {scope}"));
     };
-    if payload.scope == "full" { paths.extend(changed.keys().cloned()); }
+    if scope == "full" { paths.extend(changed.keys().cloned()); }
     let mut unique = HashSet::new();
     paths.retain(|path| unique.insert(path.clone()));
     paths.sort();
+    if paths.len() > MAX_PROJECT_ENTRIES { return Err("Output path-count safety limit exceeded.".to_string()); }
+
+    // Validate the entire plan before creating directories or replacing any file.
+    let mut identities = HashSet::new();
+    let mut parents = HashSet::new();
+    for raw in &paths {
+        let identity = raw.to_lowercase();
+        if !identities.insert(identity.clone()) || parents.contains(&identity) {
+            return Err(format!("Conflicting output path: {raw}"));
+        }
+        let mut parent = Path::new(&identity).parent();
+        while let Some(directory) = parent.filter(|value| !value.as_os_str().is_empty()) {
+            let key = directory.to_string_lossy().replace('\\', "/");
+            if identities.contains(&key) { return Err(format!("Conflicting output path: {raw}")); }
+            parents.insert(key);
+            parent = directory.parent();
+        }
+        let target = inspect_output_path(&output, raw)?;
+        if target.exists() && !allow_overwrite { return Err(format!("Output already exists; confirm overwrite first: {raw}")); }
+        if !changed.contains_key(raw) { resolve_existing_project_file(project, raw)?; }
+    }
 
     let mut written = 0usize;
     for raw in paths {
-        let target = ensure_output_path(&output, &raw)?;
-        if let Some(text) = changed.get(&raw) {
-            fs::write(&target, text.as_bytes()).map_err(|error| io_error(&format!("Cannot write output {raw}"), error))?;
-        } else {
-            let source = resolve_existing_project_file(&project, &raw)?;
-            fs::copy(&source, &target).map_err(|error| io_error(&format!("Cannot copy output {raw}"), error))?;
+        let result = (|| {
+            let target = ensure_output_path(&output, &raw)?;
+            stage_file_replacement(&target, allow_overwrite, |file| {
+                if let Some(text) = changed.get(&raw) {
+                    file.write_all(text.as_bytes()).map_err(|error| io_error("Cannot stage output text", error))?;
+                } else {
+                    let source = resolve_existing_project_file(project, &raw)?;
+                    let input = File::open(&source).map_err(|error| io_error("Cannot open output source", error))?;
+                    let size = input.metadata().map_err(|error| io_error("Cannot inspect output source", error))?.len();
+                    let copied = std::io::copy(&mut input.take(size.saturating_add(1)), file)
+                        .map_err(|error| io_error("Cannot stage binary output", error))?;
+                    if copied != size { return Err(format!("Source size changed while copying: {raw}")); }
+                }
+                Ok(())
+            }, || { inspect_output_path(&output, &raw)?; Ok(()) })
+        })();
+        if let Err(error) = result {
+            return Err(format!("Export stopped after {written} completed file(s). Earlier output files remain; the source project was not written. {error}"));
         }
         written += 1;
     }
     Ok(WrittenResult { written })
+}
+
+#[cfg(windows)]
+fn commit_staged_file(staged: &Path, target: &Path, allow_overwrite: bool) -> Result<(), String> {
+    use std::os::windows::ffi::OsStrExt;
+    #[link(name = "kernel32")]
+    extern "system" {
+        fn MoveFileExW(existing: *const u16, destination: *const u16, flags: u32) -> i32;
+    }
+    let from: Vec<u16> = staged.as_os_str().encode_wide().chain(Some(0)).collect();
+    let to: Vec<u16> = target.as_os_str().encode_wide().chain(Some(0)).collect();
+    // Same-directory move: WRITE_THROUGH, with REPLACE_EXISTING only after approval.
+    // Without REPLACE_EXISTING a late collision also fails atomically.
+    let flags = 0x8 | if allow_overwrite { 0x1 } else { 0 };
+    // SAFETY: both buffers are NUL-terminated and remain alive for the synchronous call.
+    if unsafe { MoveFileExW(from.as_ptr(), to.as_ptr(), flags) } == 0 {
+        return Err(io_error("Cannot commit output (target may exist or be locked)", std::io::Error::last_os_error()));
+    }
+    Ok(())
+}
+
+#[cfg(not(windows))]
+fn commit_staged_file(staged: &Path, target: &Path, allow_overwrite: bool) -> Result<(), String> {
+    if allow_overwrite { return fs::rename(staged, target).map_err(|error| io_error("Cannot commit output", error)); }
+    fs::hard_link(staged, target).map_err(|error| io_error("Cannot commit new output", error))?;
+    fs::remove_file(staged).map_err(|error| io_error("Cannot clean committed output staging file", error))
+}
+
+fn stage_file_replacement(
+    target: &Path,
+    allow_overwrite: bool,
+    write: impl FnOnce(&mut File) -> Result<(), String>,
+    validate: impl FnOnce() -> Result<(), String>,
+) -> Result<(), String> {
+    static NEXT_OUTPUT: AtomicU64 = AtomicU64::new(1);
+    let name = target.file_name().and_then(|value| value.to_str()).ok_or_else(|| "Invalid output filename.".to_string())?;
+    let staged = target.with_file_name(format!(".{name}.hgw-export-{}-{}.tmp", std::process::id(), NEXT_OUTPUT.fetch_add(1, Ordering::Relaxed)));
+    let mut file = OpenOptions::new().write(true).create_new(true).open(&staged)
+        .map_err(|error| io_error("Cannot create output staging file", error))?;
+    let staged_result = write(&mut file).and_then(|_| file.sync_all().map_err(|error| io_error("Cannot sync output staging file", error)));
+    drop(file);
+    let result = staged_result.and_then(|_| validate()).and_then(|_| commit_staged_file(&staged, target, allow_overwrite));
+    if let Err(error) = result {
+        if let Err(cleanup) = fs::remove_file(&staged) {
+            return Err(format!("{error} Staging cleanup failed: {cleanup}"));
+        }
+        return Err(error);
+    }
+    Ok(())
 }
 
 
@@ -2659,8 +3055,13 @@ fn write_registered_binary(request: Request<'_>, state: State<'_, DesktopState>)
     let target = state.save_targets.lock().map_err(|_| "Save-target state lock is poisoned.".to_string())?.remove(token)
         .ok_or_else(|| "Native save token is no longer valid.".to_string())?;
     let InvokeBody::Raw(bytes) = request.body() else { return Err("Expected binary export data.".to_string()); };
+    if matches!(target.kind, SaveTargetKind::Zip) && bytes.len() > MAX_ZIP_SAVE_BYTES {
+        return Err("ZIP export exceeds the 512 MiB in-memory safety limit. Use folder output.".to_string());
+    }
     revalidate_registered_save_target(&target)?;
-    fs::write(&target.path, bytes).map_err(|error| io_error(&format!("Cannot save {}", target.path.display()), error))?;
+    stage_file_replacement(&target.path, true,
+        |file| file.write_all(bytes).map_err(|error| io_error("Cannot stage selected save file", error)),
+        || revalidate_registered_save_target(&target))?;
     Ok(())
 }
 
@@ -2672,15 +3073,18 @@ fn persistent_log_status(app: AppHandle, state: State<'_, DesktopState>) -> Resu
 
 #[tauri::command]
 fn append_persistent_log_batch(payload: PersistentLogBatchPayload, app: AppHandle, state: State<'_, DesktopState>) -> Result<PersistentLogStatus, String> {
-    if payload.entries.is_empty() { return persistent_log_status_for(&app); }
-    if payload.entries.len() > PERSISTENT_LOG_MAX_BATCH_ENTRIES {
-        return Err("Persistent-log batch is too large.".to_string());
-    }
     let _guard = state.persistent_log_lock.lock().map_err(|_| "Persistent-log state lock is poisoned.".to_string())?;
     let directory = persistent_log_directory(&app)?;
-    let mut encoded = Vec::with_capacity(payload.entries.len());
+    append_persistent_entries(&directory, payload.entries)?;
+    persistent_log_status_for(&app)
+}
+
+fn append_persistent_entries(directory: &Path, entries: Vec<serde_json::Value>) -> Result<(), String> {
+    if entries.len() > PERSISTENT_LOG_MAX_BATCH_ENTRIES { return Err("Persistent-log batch is too large.".to_string()); }
+    if entries.is_empty() { return Ok(()); }
+    let mut encoded = Vec::with_capacity(entries.len());
     let mut batch_bytes = 0usize;
-    for entry in payload.entries {
+    for entry in entries {
         let bytes = serde_json::to_vec(&entry).map_err(|error| io_error("Cannot serialize persistent-log entry", error))?;
         if bytes.len() > PERSISTENT_LOG_MAX_ENTRY_BYTES {
             return Err("Persistent-log entry exceeds the size limit.".to_string());
@@ -2689,8 +3093,10 @@ fn append_persistent_log_batch(payload: PersistentLogBatchPayload, app: AppHandl
         if batch_bytes > PERSISTENT_LOG_MAX_BATCH_BYTES {
             return Err("Persistent-log batch exceeds the byte limit.".to_string());
         }
-        encoded.push(bytes);
+        let entry = diagnostic_privacy::persistent_entry(&entry)?;
+        encoded.push(serde_json::to_vec(&entry).map_err(|error| io_error("Cannot serialize private persistent-log entry", error))?);
     }
+    for generation in 0..PERSISTENT_LOG_RETAINED_FILES { inspect_persistent_log_file(&persistent_log_path(directory, generation))?; }
     let current = persistent_log_path(&directory, 0);
     let current_bytes = inspect_persistent_log_file(&current)?;
     if current_bytes > 0 && current_bytes.saturating_add(batch_bytes as u64) > PERSISTENT_LOG_MAX_FILE_BYTES {
@@ -2705,27 +3111,104 @@ fn append_persistent_log_batch(payload: PersistentLogBatchPayload, app: AppHandl
         file.write_all(b"\n").map_err(|error| io_error("Cannot append persistent log newline", error))?;
     }
     file.flush().map_err(|error| io_error("Cannot flush persistent log", error))?;
-    persistent_log_status_for(&app)
+    Ok(())
 }
 
 #[tauri::command]
 fn clear_persistent_logs(app: AppHandle, state: State<'_, DesktopState>) -> Result<PersistentLogStatus, String> {
     let _guard = state.persistent_log_lock.lock().map_err(|_| "Persistent-log state lock is poisoned.".to_string())?;
     let directory = persistent_log_directory(&app)?;
+    clear_persistent_log_directory(&directory)?;
+    persistent_log_status_for(&app)
+}
+
+fn clear_persistent_log_directory(directory: &Path) -> Result<(), String> {
+    for generation in 0..PERSISTENT_LOG_RETAINED_FILES { inspect_persistent_log_file(&persistent_log_path(directory, generation))?; }
     for generation in 0..PERSISTENT_LOG_RETAINED_FILES {
         let path = persistent_log_path(&directory, generation);
         if !path.exists() { continue; }
         inspect_persistent_log_file(&path)?;
         fs::remove_file(&path).map_err(|error| io_error("Cannot clear persistent log", error))?;
     }
-    persistent_log_status_for(&app)
+    Ok(())
 }
+
+#[cfg(all(test, windows))]
+mod diagnostic_privacy_tests;
+
+#[cfg(all(test, windows))]
+mod io_safety_tests;
+
+#[cfg(all(test, windows))]
+mod performance_safety_tests;
 
 #[cfg(all(test, windows))]
 mod windows_scan_safety_tests {
     use super::*;
     use std::process::Command;
     use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[test]
+    fn authorized_directory_retarget_is_rejected() {
+        let unique = SystemTime::now().duration_since(UNIX_EPOCH).expect("clock").as_nanos();
+        let base = std::env::temp_dir().join(format!("hgw-authority-retarget-{unique}"));
+        let authorized = base.join("authorized");
+        let moved = base.join("authorized-original");
+        let outside = base.join("outside");
+        fs::create_dir_all(&authorized).expect("create authorized fixture");
+        fs::create_dir_all(&outside).expect("create outside fixture");
+        let expected = fs::canonicalize(&authorized).expect("canonicalize authorized fixture");
+        fs::rename(&authorized, &moved).expect("move authorized fixture");
+        let status = Command::new("cmd").arg("/C").arg("mklink").arg("/J").arg(&authorized).arg(&outside)
+            .status().expect("run mklink /J");
+        assert!(status.success());
+        revalidate_authorized_directory(&authorized, &expected, "Fixture authority")
+            .expect_err("retargeted authority must be rejected");
+        fs::remove_dir(&authorized).expect("remove authority junction");
+        fs::remove_dir_all(&base).expect("clean authority fixture");
+    }
+
+    #[test]
+    fn output_authority_retarget_is_rejected_before_write() {
+        let unique = SystemTime::now().duration_since(UNIX_EPOCH).expect("clock").as_nanos();
+        let base = std::env::temp_dir().join(format!("hgw-output-retarget-{unique}"));
+        let output = base.join("output");
+        let moved = base.join("output-original");
+        let outside = base.join("outside");
+        fs::create_dir_all(&output).expect("create output fixture");
+        fs::create_dir_all(&outside).expect("create outside fixture");
+        let expected = fs::canonicalize(&output).expect("canonicalize output fixture");
+        fs::rename(&output, &moved).expect("move output fixture");
+        let status = Command::new("cmd").arg("/C").arg("mklink").arg("/J").arg(&output).arg(&outside)
+            .status().expect("run mklink /J");
+        assert!(status.success());
+        revalidate_authorized_directory(&output, &expected, "Selected output folder")
+            .expect_err("retargeted output authority must be rejected");
+        assert!(!outside.join("escape.json").exists());
+        fs::remove_dir(&output).expect("remove output junction");
+        fs::remove_dir_all(&base).expect("clean output fixture");
+    }
+
+    #[test]
+    fn worldgen_folder_authority_retarget_is_rejected() {
+        let unique = SystemTime::now().duration_since(UNIX_EPOCH).expect("clock").as_nanos();
+        let base = std::env::temp_dir().join(format!("hgw-worldgen-retarget-{unique}"));
+        let folder = base.join("logs");
+        let moved = base.join("logs-original");
+        let outside = base.join("outside");
+        fs::create_dir_all(&folder).expect("create log folder fixture");
+        fs::create_dir_all(&outside).expect("create outside fixture");
+        fs::write(outside.join("outside.log"), b"outside").expect("write outside log");
+        let expected = fs::canonicalize(&folder).expect("canonicalize log folder fixture");
+        fs::rename(&folder, &moved).expect("move log folder fixture");
+        let status = Command::new("cmd").arg("/C").arg("mklink").arg("/J").arg(&folder).arg(&outside)
+            .status().expect("run mklink /J");
+        assert!(status.success());
+        revalidate_authorized_directory(&folder, &expected, "Selected WorldGen log folder")
+            .expect_err("retargeted WorldGen authority must be rejected");
+        fs::remove_dir(&folder).expect("remove WorldGen junction");
+        fs::remove_dir_all(&base).expect("clean WorldGen fixture");
+    }
 
     #[test]
     fn project_scan_rejects_external_junction_and_reports_reparse() {
@@ -2907,6 +3390,101 @@ Total: 1 ms
     }
 
     #[test]
+    fn optional_recovery_metadata_read_fails_closed_on_non_file() {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system clock before UNIX epoch")
+            .as_nanos();
+        let base = std::env::temp_dir().join(format!("hgw-recovery-metadata-{unique}"));
+        fs::create_dir_all(&base).expect("create recovery metadata fixture");
+        let missing = base.join("missing.json");
+        assert!(read_optional_utf8_file(&missing, "read optional metadata").expect("missing is allowed").is_none());
+        let not_a_file = base.join("journal.json");
+        fs::create_dir(&not_a_file).expect("create directory at journal path");
+        let error = read_optional_utf8_file(&not_a_file, "read recovery metadata")
+            .expect_err("non-file recovery metadata must fail closed");
+        assert!(error.contains("read recovery metadata"));
+        fs::remove_dir_all(&base).expect("clean recovery metadata fixture");
+    }
+
+    #[test]
+    fn recovery_commit_marker_requires_exact_transaction_identity() {
+        assert!(parse_recovery_commit_marker("42
+", 42).expect("matching marker"));
+        assert!(parse_recovery_commit_marker("41", 42).expect_err("mismatch must fail closed").contains("expects 42"));
+        assert!(parse_recovery_commit_marker("not-a-number", 42).expect_err("invalid marker must fail closed").contains("Cannot parse Apply commit marker"));
+    }
+
+    #[test]
+    fn late_apply_conflict_preserves_external_change_for_rollback() {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system clock before UNIX epoch")
+            .as_nanos();
+        let base = std::env::temp_dir().join(format!("hgw-apply-late-conflict-{unique}"));
+        fs::create_dir_all(&base).expect("create late-conflict fixture");
+        let target = base.join("target.json");
+        let temp = base.join("temp.json");
+        let backup = base.join("backup.json");
+        fs::write(&target, br#"{"value":2}"#).expect("write external edit");
+        fs::write(&temp, br#"{"value":3}"#).expect("write staged edit");
+        let prepared = vec![PreparedApplyFile {
+            target: target.clone(),
+            temp: temp.clone(),
+            backup: backup.clone(),
+            display: "target.json".to_string(),
+            expected: r#"{"value":1}"#.to_string(),
+            text: r#"{"value":3}"#.to_string(),
+        }];
+
+        assert!(!secure_original_for_apply(&prepared[0]).expect("secure current file"));
+        assert!(backup.exists(), "external edit must be captured as the backup");
+        rollback_prepared(&prepared).expect("rollback late conflict");
+        assert_eq!(fs::read_to_string(&target).expect("restored target"), r#"{"value":2}"#);
+        assert!(!temp.exists());
+        assert!(!backup.exists());
+
+        fs::remove_dir_all(&base).expect("clean late-conflict fixture");
+    }
+
+    #[test]
+    fn rollback_preserves_newer_external_target_and_backup() {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system clock before UNIX epoch")
+            .as_nanos();
+        let base = std::env::temp_dir().join(format!("hgw-apply-late-writer-{unique}"));
+        fs::create_dir_all(&base).expect("create late-writer fixture");
+        let target = base.join("target.json");
+        let temp = base.join("temp.json");
+        let backup = base.join("backup.json");
+        fs::write(&target, br#"{"value":4}"#).expect("write newer external target");
+        fs::write(&temp, br#"{"value":3}"#).expect("write stale transaction temp");
+        fs::write(&backup, br#"{"value":1}"#).expect("write original backup");
+        let prepared = vec![PreparedApplyFile {
+            target: target.clone(),
+            temp: temp.clone(),
+            backup: backup.clone(),
+            display: "target.json".to_string(),
+            expected: r#"{"value":1}"#.to_string(),
+            text: r#"{"value":3}"#.to_string(),
+        }];
+
+        let error = rollback_prepared(&prepared).expect_err("newer external target must make rollback fail closed");
+        assert!(error.contains("newer external edit"));
+        assert_eq!(fs::read_to_string(&target).expect("newer target preserved"), r#"{"value":4}"#);
+        assert_eq!(fs::read_to_string(&backup).expect("backup preserved"), r#"{"value":1}"#);
+        assert!(!temp.exists(), "transaction-owned temp may still be cleaned");
+        fs::remove_dir_all(&base).expect("clean late-writer fixture");
+    }
+
+    #[test]
+    fn apply_content_fingerprint_is_stable_and_content_sensitive() {
+        assert_eq!(apply_content_fingerprint(b"same"), apply_content_fingerprint(b"same"));
+        assert_ne!(apply_content_fingerprint(b"same"), apply_content_fingerprint(b"different"));
+    }
+
+    #[test]
     fn rollback_prepared_surfaces_restore_failure_and_retains_backup() {
         let unique = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -2921,10 +3499,17 @@ Total: 1 ms
         fs::create_dir(&target).expect("create non-file rollback target");
         fs::write(&temp, b"new").expect("write staged temp");
         fs::write(&backup, b"old").expect("write backup");
-        let prepared = vec![(target.clone(), temp.clone(), backup.clone(), "new".to_string())];
+        let prepared = vec![PreparedApplyFile {
+            target: target.clone(),
+            temp: temp.clone(),
+            backup: backup.clone(),
+            display: "target.json".to_string(),
+            expected: "old".to_string(),
+            text: "new".to_string(),
+        }];
 
         let error = rollback_prepared(&prepared).expect_err("rollback failure must be surfaced");
-        assert!(error.contains("Cannot remove partially committed Apply target"));
+        assert!(error.contains("Refusing to overwrite unsafe or newer Apply target"));
         assert!(!temp.exists(), "independent staged temp cleanup should still be attempted");
         assert!(backup.exists(), "backup must be retained when restore cannot complete");
 

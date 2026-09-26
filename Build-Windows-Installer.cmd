@@ -3,7 +3,7 @@ setlocal EnableDelayedExpansion
 cd /d "%~dp0"
 
 set "TAURI_CLI_VERSION=2.11.0"
-echo Hytale Generator Workbench v0.11.36-rc.3-r1 - Windows NSIS Setup
+echo Hytale Generator Workbench v0.11.36-rc.4-r1 - Windows NSIS Setup
 
 if not exist "src-tauri\icons\icon.ico" (
   echo.
@@ -126,7 +126,7 @@ if not exist "!SIGNATURE_SOURCE!" (
 )
 
 if not exist release mkdir release
-set "SETUP_OUT=release\Hytale-Generator-Workbench_0.11.36-rc.3_x64-setup.exe"
+set "SETUP_OUT=release\Hytale-Generator-Workbench_0.11.36-rc.4_x64-setup.exe"
 copy /y "!SETUP_SOURCE!" "%SETUP_OUT%" >nul
 if errorlevel 1 (
   echo.
@@ -145,7 +145,7 @@ if errorlevel 1 (
 set "SETUPHASH="
 for /f "skip=1 tokens=* delims=" %%H in ('certutil -hashfile "%SETUP_OUT%" SHA256 ^| findstr /v /c:"CertUtil"') do if not defined SETUPHASH set "SETUPHASH=%%H"
 set "SETUPHASH=!SETUPHASH: =!"
-> "%SETUP_OUT%.sha256" echo !SETUPHASH!  Hytale-Generator-Workbench_0.11.36-rc.3_x64-setup.exe
+> "%SETUP_OUT%.sha256" echo !SETUPHASH!  Hytale-Generator-Workbench_0.11.36-rc.4_x64-setup.exe
 
 echo.
 echo Finished installer:

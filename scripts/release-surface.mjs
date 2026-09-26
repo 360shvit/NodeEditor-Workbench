@@ -2,6 +2,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { parseSemver } from './release-version.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const contract = JSON.parse(fs.readFileSync(path.join(ROOT, 'release-spec', 'release-contract.json'), 'utf8'));
@@ -15,7 +16,7 @@ function render(pattern) {
 
 const canonicalInstaller = render(publication.installerAssetPattern);
 const canonicalSignature = render(publication.installerSignaturePattern);
-const isPrerelease = contract.version.semver.includes('-');
+const isPrerelease = parseSemver(contract.version.semver).prerelease.length > 0;
 const requiredManifestNames = isPrerelease ? ['latest-preview.json'] : ['latest.json', 'latest-preview.json'];
 const canonicalNames = new Set([
   canonicalInstaller,

@@ -27,7 +27,7 @@ assert.match(runtime, /runtimeTraceSummaries/);
 assert.match(runtime, /workbenchRuntime: summary/);
 assert.match(runtime, /projectDiagnostics/);
 assert.match(runtime, /pathLikeField\(key\) && typeof item === 'string'/);
-assert.match(runtime, /typeof value === 'boolean'/, 'booleans must remain supported as scalars');
+assert.match(read('src/support/diagnosticPrivacy.ts'), /typeof raw === 'boolean'/, 'booleans must remain supported as scalars in the bounded privacy policy');
 assert.doesNotMatch(runtime, /fetch\(/, 'support module must not upload reports');
 
 assert.match(folderOpen, /createRuntimeTraceId\('project-open'\)/);

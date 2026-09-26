@@ -6,8 +6,8 @@ function valueKey(value: JsonPrimitive): string {
 }
 
 export function fieldMatchKey(nodeKind: string, field: ProjectField): string | undefined {
-  if (field.refactorBehavior === 'literal') return `literal|${field.key}|${valueKey(field.value)}`;
-  if (field.refactorBehavior === 'field') return `field|${nodeKind}|${field.key}|${valueKey(field.value)}`;
+  if (field.refactorBehavior === 'literal') return JSON.stringify(['literal', field.key, valueKey(field.value)]);
+  if (field.refactorBehavior === 'field') return JSON.stringify(['field', nodeKind, field.key, valueKey(field.value)]);
   return undefined;
 }
 

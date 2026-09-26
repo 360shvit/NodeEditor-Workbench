@@ -1,3 +1,4 @@
+import { userFacingError } from '../../support/userFacingError';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   buildLayoutProposal,
@@ -56,6 +57,7 @@ export function VisualLayoutTab() {
   const [proposalKey, setProposalKey] = useState('');
   const [proposalSettings, setProposalSettings] = useState<ProposalSettingsSnapshot>();
   const [stageStatus, setStageStatus] = useState<string>();
+  const [operationError, setOperationError] = useState<string>();
   const [filePickerOpen, setFilePickerOpen] = useState(false);
   const lastGenerateRequestRef = useRef(generateRequest);
   const lastFilePickerRequestRef = useRef(filePickerRequest);
@@ -97,6 +99,7 @@ export function VisualLayoutTab() {
   const generateProposal = () => {
     if (!selectedFiles.length) return;
     setStageStatus(undefined);
+    setOperationError(undefined);
     const operation = beginPerformanceOperation('layout.generate', {
       data: {
         strategy: settings.strategy,
@@ -132,11 +135,13 @@ export function VisualLayoutTab() {
       operation.end({ patchCount: next.patches.length, resultFiles: next.files.length, blocked: next.blocked });
     } catch (error) {
       operation.fail(error);
-      throw error;
+      setOperationError(userFacingError(error));
+      setProposal(undefined);
     }
   };
   const stageProposal = () => {
     if (!proposal || proposal.blocked || stale || !editing) return;
+    setOperationError(undefined);
     const operation = beginPerformanceOperation('layout.stage', { data: { patchCount: proposal.patches.length, fileCount: proposal.files.length } });
     try {
       const next = operation.phase('changeset.apply', () => stageLayoutProposal(changeSet, proposal));
@@ -145,7 +150,8 @@ export function VisualLayoutTab() {
       operation.end();
     } catch (error) {
       operation.fail(error);
-      throw error;
+      setOperationError(userFacingError(error));
+      setProposal(undefined);
     }
   };
 
@@ -203,6 +209,7 @@ export function VisualLayoutTab() {
             <button className="primary" disabled={!proposal || proposal.blocked || stale || !editing || proposal.patches.length === 0} onClick={stageProposal}>{stagedLayoutInScope ? 'Replace staged layout' : 'Stage proposal'}</button>
           </div>
         </header>
+        {operationError && <div className="source-parse-error" role="alert">{operationError}</div>}
         {!proposal && <div className="visual-foundation-note"><strong>Ready</strong><span>Choose scope and settings in the Layout sidebar, then generate a read-only proposal. Turn Editing On only when you want to stage the result.</span></div>}
         {proposal && (
           <>

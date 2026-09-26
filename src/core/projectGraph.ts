@@ -145,6 +145,23 @@ export function buildProjectGraph(project: ProjectModel, rootFileId?: string, de
   const selectedFile = project.fileMap.get(root.fileId);
   if (!selectedFile) return empty(['Selected flow root is unavailable.']);
 
+  // Per-build indexes avoid scanning every relationship for each expanded node.
+  // Their lifetime ends with this build, so changed project data cannot reuse stale entries.
+  const referencesByFile = new Map<string, SemanticReference[]>();
+  const densityDependencies = new Map<string, SemanticReference[]>();
+  for (const reference of project.semanticReferences) {
+    const fileId = reference.source.fileId;
+    const fromFile = referencesByFile.get(fileId) ?? [];
+    fromFile.push(reference);
+    referencesByFile.set(fileId, fromFile);
+    const owner = reference.source.ownerSymbol;
+    if (reference.relation === 'symbol-import' && owner?.symbolType === 'Density' && reference.target.symbolType === 'Density') {
+      const dependencies = densityDependencies.get(owner.name) ?? [];
+      dependencies.push(reference);
+      densityDependencies.set(owner.name, dependencies);
+    }
+  }
+
   let worldStructure: ProjectFile | undefined;
   let worldNodeId: string;
   let worldDepth = 0;
@@ -152,7 +169,7 @@ export function buildProjectGraph(project: ProjectModel, rootFileId?: string, de
   if (root.kind === 'instance') {
     const instanceId = `instance:${selectedFile.id}`;
     nodes.set(instanceId, { id: instanceId, kind: 'instance', label: root.label, subtitle: selectedFile.path, fileId: selectedFile.id, depth: 0 });
-    const reference = semanticReferencesFromFile(project.semanticReferences, selectedFile.id, 'instance-worldstructure')[0];
+    const reference = semanticReferencesFromFile(referencesByFile.get(selectedFile.id) ?? [], selectedFile.id, 'instance-worldstructure')[0];
     worldDepth = 1;
     if (!reference) {
       notes.push('The selected Instance has no semantic Instance → WorldStructure reference.');
@@ -229,7 +246,7 @@ export function buildProjectGraph(project: ProjectModel, rootFileId?: string, de
   };
 
   const worldFlowDepth = worldDepth + 1;
-  const worldDensityReferences = semanticReferencesFromFile(project.semanticReferences, worldStructure.id, 'worldstructure-density');
+  const worldDensityReferences = semanticReferencesFromFile(referencesByFile.get(worldStructure.id) ?? [], worldStructure.id, 'worldstructure-density');
   if (worldDensityReferences.length) {
     const densityFieldId = `world-density:${worldStructure.id}`;
     const worldLabel = semanticRootName(worldStructure) ?? semanticFileStem(worldStructure);
@@ -244,7 +261,7 @@ export function buildProjectGraph(project: ProjectModel, rootFileId?: string, de
   }
 
   const linkedBiomeIds = new Set<string>();
-  const biomeReferences = semanticReferencesFromFile(project.semanticReferences, worldStructure.id, 'worldstructure-biome');
+  const biomeReferences = semanticReferencesFromFile(referencesByFile.get(worldStructure.id) ?? [], worldStructure.id, 'worldstructure-biome');
   for (const reference of biomeReferences) {
     const biome = firstResolvedFile(project, reference);
     let biomeId: string;
@@ -267,7 +284,7 @@ export function buildProjectGraph(project: ProjectModel, rootFileId?: string, de
       nodes.set(biomeId, { id: biomeId, kind: 'biome', label: biomeLabel, subtitle: biome.path, fileId: biome.id, depth: worldFlowDepth });
 
       if (includeResources) {
-        const environmentReferences = semanticReferencesFromFile(project.semanticReferences, biome.id, 'biome-environment');
+        const environmentReferences = semanticReferencesFromFile(referencesByFile.get(biome.id) ?? [], biome.id, 'biome-environment');
         for (const environmentReference of environmentReferences) {
           const resourceKey = environmentReference.target.resourcePath ?? environmentReference.target.name;
           const resourceId = `environment:${resourceKey.toLowerCase()}`;
@@ -287,7 +304,7 @@ export function buildProjectGraph(project: ProjectModel, rootFileId?: string, de
         }
       }
 
-      const densityReferences = semanticReferencesFromFile(project.semanticReferences, biome.id, 'biome-density');
+      const densityReferences = semanticReferencesFromFile(referencesByFile.get(biome.id) ?? [], biome.id, 'biome-density');
       if (densityReferences.length) {
         const densityId = `biome-density:${biome.id}`;
         nodes.set(densityId, { id: densityId, kind: 'biome-density', label: `${biomeLabel} Density`, subtitle: 'Biome Terrain.Density', fileId: biome.id, depth: worldFlowDepth + 1 });
@@ -312,7 +329,7 @@ export function buildProjectGraph(project: ProjectModel, rootFileId?: string, de
     const { symbol, depth } = densityQueue[index];
     if (depth >= densityExpansionStart + Math.max(0, densityDepthLimit)) continue;
     const sourceKey: SymbolKey = { symbolType: 'Density', name: symbol };
-    const dependencies = semanticSymbolDependencies(project.semanticReferences, sourceKey, 'Density');
+    const dependencies = semanticSymbolDependencies(densityDependencies.get(symbol) ?? [], sourceKey, 'Density');
     const sourceId = `density:${symbol.toLowerCase()}`;
     for (const reference of dependencies) {
       if (reference.target.name.toLowerCase() === symbol.toLowerCase()) continue;

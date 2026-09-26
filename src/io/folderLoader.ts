@@ -464,8 +464,9 @@ export async function writeOutputDirectory(
   changedTexts: Map<string, string>,
   scope: 'full' | 'changed',
   browserEntries?: Map<string, Blob | string>,
+  allowOverwrite = false,
 ): Promise<number> {
-  if (isDesktopOutputDirectory(target)) return desktopExportToDirectory(target, scope, changedTexts);
+  if (isDesktopOutputDirectory(target)) return desktopExportToDirectory(target, scope, changedTexts, allowOverwrite);
   if (!browserEntries) throw new Error('Browser output entries were not prepared.');
   await writeBlobsToDirectory(target, browserEntries);
   return browserEntries.size;

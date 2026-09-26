@@ -1,3 +1,4 @@
+import { editorLayoutNumber } from '../numericLimits.js';
 import type { JsonObject, JsonPrimitive, JsonValue, ProjectFile, ProjectNode } from '../types.js';
 
 export interface EditorNodePosition {
@@ -73,10 +74,10 @@ function rectMetadata(
   if (!isObject(value)) return undefined;
   const jsonPath: Array<string | number> = ['$NodeEditorMetadata', kind === 'group' ? '$Groups' : '$Comments', index];
   const positionValue = isObject(value.$Position) ? value.$Position : undefined;
-  const x = numberValue(positionValue?.$x);
-  const y = numberValue(positionValue?.$y);
-  const width = numberValue(value.$width);
-  const height = numberValue(value.$height);
+  const x = editorLayoutNumber(positionValue?.$x);
+  const y = editorLayoutNumber(positionValue?.$y);
+  const width = editorLayoutNumber(value.$width);
+  const height = editorLayoutNumber(value.$height);
   const common: EditorRectMetadata = {
     fileId: file.id,
     id: `${file.id}:${kind}:${index}`,
@@ -113,13 +114,13 @@ export function buildEditorMetadataForFile(file: ProjectFile): EditorMetadataFil
     for (const [nodeId, entry] of Object.entries(nodeMap)) {
       if (!isObject(entry)) continue;
       const position = isObject(entry.$Position) ? entry.$Position : undefined;
-      const x = position?.$x;
-      const y = position?.$y;
+      const x = editorLayoutNumber(position?.$x);
+      const y = editorLayoutNumber(position?.$y);
       nodes.set(nodeId, {
         fileId: file.id,
         nodeId,
         title: typeof entry.$Title === 'string' ? entry.$Title : undefined,
-        position: typeof x === 'number' && typeof y === 'number' ? {
+        position: x !== undefined && y !== undefined ? {
           x,
           y,
           xPath: ['$NodeEditorMetadata', '$Nodes', nodeId, '$Position', '$x'],

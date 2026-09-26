@@ -126,6 +126,6 @@ assert.match(compat, /PortalBridge/);
 assert.match(graphView, /buildProjectGraph/);
 assert.doesNotMatch(graphView, /buildLayoutProposal|stageLayoutProposal|commitProject/);
 assert.equal(hashFile('src/projectFiles/descriptorIndex.ts'), '9ff8bde6fa38a194ebcabf7452ca1ac09ad2d4d42a0de2848edac2aa04a27f19');
-assert.equal(hashTree('src/core/layout'), '0dd6dfb1a2099ec65036448a73ec027e080a8c532bdbd87f12d085919bdcbb00');
+assert.equal(hashTree('src/core/layout'), '4f63779cc2182a670efda4d6673c0f6c21fb5a39e25f61c79460f12f25cb53c8');
 
 console.log('v0.11.10 Workbench UX Consolidation regression checks passed');

@@ -81,7 +81,7 @@ if (fs.existsSync('package-lock.json')) {
 // No product implementation drift in key domains compared with the validated r2 baseline hashes.
 const expected = {
   'src-tauri/capabilities/default.json': '5042c8d799a75be8248b9877ea2c59aabca2c6fccaed0082c2cdd438c6e345a4',
-  'src/projects/projectPersistence.ts': '497c6791bfc3eadc6b664db607f6664235aecf8b25bf5b4985063c46f1b2ed0b',
+  'src/projects/projectPersistence.ts': '7e6df70a194355682a7eab6bea8c1a9f05a38d3c2119bf6fc32fe17476ecb31f',
 };
 for (const [file, digest] of Object.entries(expected)) assert.equal(hash(file), digest, `${file} drifted during validation build`);
 

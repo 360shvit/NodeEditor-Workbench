@@ -1,8 +1,11 @@
 const SEMVER_RE = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?(?:\+([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?$/;
 
 export function parseSemver(value) {
+  if (typeof value !== 'string') throw new Error('SemVer must be a string');
   const match = SEMVER_RE.exec(value);
   if (!match) throw new Error(`Invalid SemVer: ${value}`);
+  if (match.slice(1, 4).some(part => !Number.isSafeInteger(Number(part)))) throw new Error(`SemVer core exceeds safe integer range: ${value}`);
+  if (match[4]?.split('.').some(part => /^0\d+$/.test(part))) throw new Error(`Invalid numeric prerelease identifier: ${value}`);
   return {
     major: Number(match[1]),
     minor: Number(match[2]),
@@ -19,7 +22,7 @@ export function isValidSemver(value) {
 function compareIdentifier(left, right) {
   const leftNumeric = /^\d+$/.test(left);
   const rightNumeric = /^\d+$/.test(right);
-  if (leftNumeric && rightNumeric) return Number(left) - Number(right);
+  if (leftNumeric && rightNumeric) return left.length !== right.length ? left.length - right.length : left < right ? -1 : left > right ? 1 : 0;
   if (leftNumeric) return -1;
   if (rightNumeric) return 1;
   return left < right ? -1 : left > right ? 1 : 0;

@@ -42,7 +42,8 @@ for (const token of ['check_for_update', 'install_update', 'pending_change_count
   assert.ok(rust.includes(token), `native updater missing ${token}`);
 }
 assert.ok(!rust.includes('.download_and_install('), 'install path must split verified download from final native install gate');
-assert.ok(rust.includes("payload.channel == \"stable\" && version.to_string().contains('-')"), 'Stable client must reject prerelease SemVer even if its manifest is mispublished');
+assert.match(rust, /validate_update_target\(&payload.channel, &version, update.download_url.as_str\(\), UPDATER_REPOSITORY\)\?/, 'native check must validate channel and immutable installer authority');
+assert.match(rust, /channel == "stable" && version.split\('\+'\).next\(\).unwrap_or_default\(\).contains\('-'\)/, 'Stable must reject prereleases independently of build metadata; native Track 14 fixtures execute this policy');
 assert.ok(rust.includes('UPDATER_DISTRIBUTION_KIND == "installed"'), 'native updater must fail closed outside the installed NSIS distribution class');
 assert.ok(read('Build-Windows.cmd').includes('HGW_DISTRIBUTION_KIND=development'), 'raw Windows builds must compile as development/non-installed');
 assert.ok(read('Build-Windows-Installer.cmd').includes('HGW_DISTRIBUTION_KIND=installed'), 'local NSIS builds must compile as installed');
