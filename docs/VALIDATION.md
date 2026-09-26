@@ -63,7 +63,7 @@ Manual smoke should cover project open/reopen, Explorer/Search, Project Graph, L
 
 This workflow must never create or modify a GitHub Release, tag or rolling updater manifest. Its purpose is to prove the exact candidate build path before publication. The Actions artifact is validation evidence, not a public distribution channel.
 
-Tauri updater signatures are cryptographically enforced by the installed updater client. Because the pinned Tauri CLI does not provide a standalone updater-signature verification command, the final candidate additionally requires an installed-client positive signature test and negative bad-signature test before public publication.
+Tauri updater signatures are cryptographically enforced by the installed updater client. RC/publish workflows additionally run `node scripts/verify-updater-signature.mjs` against the staged installer, signature and committed public key, verifying the payload and trusted-comment signatures. This uses Node's cryptographic primitives and public Minisign verification fixtures without creating a private key. The final candidate still requires installed-client positive signature and negative bad-signature tests before public publication; pipeline verification does not prove installer launch/restart behavior. The current Track 14 evidence and unrun matrix are in `docs/audits/PRE_1_0_14_UPDATER_RELEASE.md`.
 
 ## Updater publication gates
 

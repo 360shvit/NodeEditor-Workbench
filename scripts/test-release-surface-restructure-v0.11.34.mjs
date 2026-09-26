@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
+import { parseSemver } from './release-version.mjs';
 
 const read = (file) => fs.readFileSync(file, 'utf8');
 const contract = JSON.parse(read('release-spec/release-contract.json'));
@@ -50,7 +51,7 @@ try {
   const stage = spawnSync(process.execPath, ['scripts/release-surface.mjs', '--input', fixture.input, '--out', fixture.output, '--repository', 'example/hgw'], { encoding: 'utf8' });
   assert.equal(stage.status, 0, `${stage.stdout}\n${stage.stderr}`);
   const names = fs.readdirSync(fixture.output).sort();
-  const isPrerelease = contract.version.semver.includes('-');
+  const isPrerelease = parseSemver(contract.version.semver).prerelease.length > 0;
   const expectedNames = [
     'RELEASE_SURFACE.json',
     'THIRD_PARTY_NOTICES.txt',
@@ -99,6 +100,7 @@ try {
   fs.mkdirSync(path.join(prereleaseRoot, 'scripts'), { recursive: true });
   fs.mkdirSync(path.join(prereleaseRoot, 'release-spec'), { recursive: true });
   fs.copyFileSync('scripts/release-surface.mjs', path.join(prereleaseRoot, 'scripts/release-surface.mjs'));
+  fs.copyFileSync('scripts/release-version.mjs', path.join(prereleaseRoot, 'scripts/release-version.mjs'));
   fs.copyFileSync('THIRD_PARTY_NOTICES.txt', path.join(prereleaseRoot, 'THIRD_PARTY_NOTICES.txt'));
   const previewContract = structuredClone(contract);
   previewContract.version.semver = '0.11.36-rc.1';

@@ -88,7 +88,11 @@ jobs:
           HGW_GITHUB_REPOSITORY: ${{ github.repository }}
         run: |
           node scripts/release-surface.mjs --installer-dir src-tauri/target/release/bundle/nsis --repository $env:GITHUB_REPOSITORY
+          if ($LASTEXITCODE -ne 0) { throw 'Release surface staging failed.' }
           node scripts/release-surface.mjs --check
+          if ($LASTEXITCODE -ne 0) { throw 'Release surface validation failed.' }
+          node scripts/verify-updater-signature.mjs
+          if ($LASTEXITCODE -ne 0) { throw 'Staged updater signature verification failed.' }
           New-Item -ItemType Directory -Force -Path evidence | Out-Null
           Get-ChildItem release/public -File | Sort-Object Name | ForEach-Object {
             $hash = (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant()

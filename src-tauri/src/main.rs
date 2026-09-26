@@ -19,6 +19,10 @@ use tauri_plugin_window_state::StateFlags;
 use tauri_plugin_updater::{Update, UpdaterExt};
 mod diagnostic_privacy;
 mod worldgen_scan_control;
+mod update_session;
+#[cfg(test)]
+mod updater_safety_tests;
+use update_session::UpdateSession;
 use worldgen_scan_control::{CancellableReader, WorldgenScanControl};
 
 const MAX_PROJECT_ENTRIES: usize = 100_000;
@@ -96,10 +100,7 @@ struct PendingUpdate {
     update: Update,
 }
 
-#[derive(Default)]
-struct PendingUpdateState {
-    update: Mutex<Option<PendingUpdate>>,
-}
+type PendingUpdateState = UpdateSession<PendingUpdate>;
 
 #[derive(Default)]
 struct DesktopState {
@@ -2203,11 +2204,9 @@ async fn check_for_update(
     app: AppHandle,
     pending: State<'_, PendingUpdateState>,
 ) -> Result<UpdateCheckResult, String> {
+    let generation = pending.begin_check()?;
     let current_version = app.package_info().version.to_string();
     if !updater_configured() {
-        if let Ok(mut slot) = pending.update.lock() {
-            *slot = None;
-        }
         return Ok(UpdateCheckResult {
             configured: false,
             channel: payload.channel,
@@ -2227,6 +2226,7 @@ async fn check_for_update(
         .endpoints(vec![endpoint])
         .map_err(|error| format!("Cannot configure updater endpoint: {error}"))?
         .pubkey(UPDATER_PUBLIC_KEY.trim())
+        .timeout(Duration::from_secs(30))
         .restart_after_install(true)
         .build()
         .map_err(|error| format!("Cannot initialize updater: {error}"))?;
@@ -2235,20 +2235,13 @@ async fn check_for_update(
         .await
         .map_err(|error| format!("Update check failed: {error}"))?;
 
-    if let Some(update) = update {
+    if let Some(mut update) = update {
+        update.timeout = Some(Duration::from_secs(600));
         let version = update.version.clone();
-        if payload.channel == "stable" && version.to_string().contains('-') {
-            if let Ok(mut slot) = pending.update.lock() {
-                *slot = None;
-            }
-            return Err(format!(
-                "Stable update channel rejected prerelease version {version}. Check repository channel publication before retrying."
-            ));
-        }
+        validate_update_target(&payload.channel, &version, update.download_url.as_str(), UPDATER_REPOSITORY)?;
         let notes = update.body.clone();
         let pub_date = update.date.map(|date| date.to_string());
-        let mut slot = pending.update.lock().map_err(|_| "Pending update state is unavailable.".to_string())?;
-        *slot = Some(PendingUpdate { channel: payload.channel.clone(), update });
+        pending.finish_check(generation, Some(PendingUpdate { channel: payload.channel.clone(), update }))?;
         Ok(UpdateCheckResult {
             configured: true,
             channel: payload.channel,
@@ -2260,8 +2253,7 @@ async fn check_for_update(
             reason: None,
         })
     } else {
-        let mut slot = pending.update.lock().map_err(|_| "Pending update state is unavailable.".to_string())?;
-        *slot = None;
+        pending.finish_check(generation, None)?;
         Ok(UpdateCheckResult {
             configured: true,
             channel: payload.channel,
@@ -2275,6 +2267,24 @@ async fn check_for_update(
     }
 }
 
+fn validate_update_target(channel: &str, version: &str, url: &str, repository: &str) -> Result<(), String> {
+    if !matches!(channel, "stable" | "preview") { return Err("Unknown update channel.".into()); }
+    // Tauri has already parsed SemVer. A hyphen in build metadata is not a prerelease.
+    if channel == "stable" && version.split('+').next().unwrap_or_default().contains('-') {
+        return Err(format!("Stable update channel rejected prerelease version {version}."));
+    }
+    let expected = format!("https://github.com/{repository}/releases/download/v{version}/Hytale-Generator-Workbench_{version}_x64-setup.exe");
+    if !valid_github_repository(repository) || url != expected {
+        return Err("Update URL must identify this repository's immutable versioned installer.".into());
+    }
+    Ok(())
+}
+
+fn lock_update_install(desktop: &DesktopState) -> Result<std::sync::MutexGuard<'_, ()>, String> {
+    desktop.apply_transaction_lock.try_lock()
+        .map_err(|_| "Update installation is blocked while a project transaction is active or unavailable. Retry after it completes.".into())
+}
+
 #[tauri::command]
 async fn install_update(
     payload: InstallUpdatePayload,
@@ -2282,6 +2292,7 @@ async fn install_update(
     desktop: State<'_, DesktopState>,
     pending: State<'_, PendingUpdateState>,
 ) -> Result<UpdateInstallResult, String> {
+    if !updater_configured() { return Err(updater_unconfigured_reason()); }
     let pending_changes = desktop.pending_change_count.load(Ordering::Relaxed);
     if pending_changes > 0 {
         return Err(format!(
@@ -2289,22 +2300,19 @@ async fn install_update(
         ));
     }
 
-    let selected = {
-        let slot = pending.update.lock().map_err(|_| "Pending update state is unavailable.".to_string())?;
-        slot.clone()
-    }.ok_or_else(|| "No checked update is ready to install. Check for updates again.".to_string())?;
-
-    if selected.channel != payload.channel || selected.update.version != payload.expected_version {
-        return Err("The checked update changed. Check for updates again before installing.".to_string());
-    }
+    let lease = pending.begin_install(|selected| {
+        if selected.channel != payload.channel || selected.update.version != payload.expected_version {
+            return Err("The checked update changed. Check for updates again before installing.".to_string());
+        }
+        validate_update_target(&payload.channel, &selected.update.version, selected.update.download_url.as_str(), UPDATER_REPOSITORY)
+    })?;
+    let selected = &lease.selected;
 
     let version = selected.update.version.clone();
     let progress_app = app.clone();
-    let finish_app = app.clone();
     let progress_version = version.clone();
-    let finish_version = version.clone();
     let mut downloaded: u64 = 0;
-    let update = selected.update.restart_after_install(true);
+    let update = selected.update.clone().restart_after_install(true);
     let bytes = update
         .download(
             move |chunk_length, content_length| {
@@ -2316,20 +2324,21 @@ async fn install_update(
                     total_bytes: content_length,
                 });
             },
-            move || {
-                let _ = finish_app.emit("app-update-progress", AppUpdateProgress {
-                    phase: "downloaded".to_string(),
-                    version: finish_version,
-                    downloaded_bytes: 0,
-                    total_bytes: None,
-                });
-            },
+            || {}, // Tauri calls this BEFORE verifying the signature. Do not report verified yet.
         )
         .await
         .map_err(|error| format!("Update download or signature verification failed: {error}"))?;
 
+    let _ = app.emit("app-update-progress", AppUpdateProgress {
+        phase: "downloaded".to_string(),
+        version: version.clone(),
+        downloaded_bytes: bytes.len() as u64,
+        total_bytes: Some(bytes.len() as u64),
+    });
+
     // Final native write/restart boundary: staged changes may have appeared while the
     // signed package was downloading. Do not trust the earlier UI/native pre-check.
+    let _transaction_guard = lock_update_install(&desktop)?;
     let pending_changes = desktop.pending_change_count.load(Ordering::Relaxed);
     if pending_changes > 0 {
         let _ = app.emit("app-update-progress", AppUpdateProgress {

@@ -101,6 +101,7 @@
     "test:pre1-apply-transaction-recovery": "node scripts/test-pre1-apply-transaction-recovery.mjs",
     "test:pre1-io-zip-export": "node scripts/test-pre1-io-zip-export.mjs",
     "test:pre1-error-resilience": "node scripts/test-pre1-error-resilience.mjs",
+    "test:pre1-updater-release": "node scripts/test-pre1-updater-release.mjs",
     "test:pre1-diagnostics-privacy": "node scripts/test-pre1-diagnostics-privacy.mjs",
     "test:pre1-performance-resources": "npm run typecheck:core && node scripts/test-pre1-performance-resources.mjs"
   },
