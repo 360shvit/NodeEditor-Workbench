@@ -1,8 +1,8 @@
 # Pre-1.0 Audit 14 — Updater, signing & release pipeline
 
-**Status:** BLOCKED — source remediation is implemented; installed-client E2E and repository-admin confirmation remain open. PR CI pending.
+**Status:** BLOCKED — source remediation and Windows PR CI pass; installed-client E2E and repository release controls remain open.
 **Reviewed baseline:** PR #25 after Track 13, `3618efb4aa6f77882e3776c64c0ceb9bbec39218`.
-**Review date:** 2026-09-25.
+**Review dates:** 2026-09-25–26.
 
 This track must not be marked PASS from source tests alone. The owner confirmed that there are no reliable recorded installed-client positive-update / negative-signature results. No release, tag, merge, signing-key generation, secret change or installed update was performed during this audit.
 
@@ -26,7 +26,8 @@ Native update authority remains unavailable to renderer plugin calls (`updater:d
 
 - `test:pre1-updater-release` executes public signature fixtures, real SemVer/publication-planning functions, HTTP error/404 and token-forwarding fixtures, plus native/workflow integration assertions. It does not access a network, signing key or installed application.
 - Five native tests execute the new session, channel/URL and transaction-lock boundaries; the complete locked local Rust suite passed **39/39**.
-- The local registered matrix passed **79/87** suites; eight existing subprocess-dependent suites hit this host's `EPERM` restriction. Full normal Windows PR CI is still required. Later targeted runs covered the final timeout and SemVer classification changes.
+- The local registered matrix passed **79/87** suites; eight existing subprocess-dependent suites hit this host's `EPERM` restriction. Later targeted runs covered the final timeout and SemVer classification changes. Normal Windows CI below covers the complete matrix without that local limitation.
+- On implementation commit `7c07a5115c490743caf6c99e6e3a37c666c46581`, [Windows validation run 36225556783](https://github.com/360shvit/NodeEditor-Workbench/actions/runs/36225556783) passed **87/87** registered suites, **250** runtime-soak cycles, **39/39** locked native tests, strict application TypeScript, release contract, embedded-bundle parity, license/notice gates and zero unused source carry. [Dependency Approval run 36225554804](https://github.com/360shvit/NodeEditor-Workbench/actions/runs/36225554804) also passed. These runs do not build or exercise an installed signed candidate.
 - The pinned Tauri updater source was reviewed to confirm that signature verification precedes the successful return of `download()`, and that Windows `install()` launches the installer and exits. The additional pipeline verifier supplements this native enforcement; it does not replace it. See the [Tauri updater documentation](https://v2.tauri.app/plugin/updater/).
 
 ## Repository and release gate snapshot
@@ -39,10 +40,10 @@ Native update authority remains unavailable to renderer plugin calls (`updater:d
 | Main protection | Active ruleset `23139129`: no deletion/force push, linear history, PR requirement and strict `validate` / `dependency-approval` checks; no bypass actors. |
 | Version-tag protection | A `v*` tag ruleset was prepared with update/deletion/force-push restrictions and no bypass actors. GitHub requested Confirm access at save; owner confirmation is pending, so the new rule is **not yet verified active**. Rolling `updater-*` tags are outside its scope. |
 | GitHub release immutability | Disabled in repository Settings; the existing version release reports `immutable:false`. The workflow prevents version replacement, but that is not a provider-enforced asset immutability guarantee. Do not blindly enable repository-wide immutability: newly created rolling updater releases must remain mutable. Resolve the version-asset governance policy before stable promotion. |
-| Actions | Normal PR validation pending for this change. Signing/build/publication steps remain confined to protected workflows; the current audit does not dispatch them. |
-| Release environment | Both signed workflows reference `environment: release`. Its current reviewer and deployment restrictions have not been reverified in this audit. |
+| Actions | Windows validation and Dependency Approval passed on implementation commit `7c07a511`; run links and scope are above. Signing/build/publication steps remain confined to protected workflows; the current audit does not dispatch them. |
+| Release environment | Settings inspected on 2026-09-26: `release` exists, requires reviewer `360shvit`, and allows selected branch `main` plus tags `v*`. Self-review is allowed; administrator bypass is also enabled. The latter remains an open release-control decision because an administrator can bypass the configured approval gate. Both signed workflows reference this environment. |
 | Signing key / public key | Existing public key is configured and matches the installer config. Public-key file SHA-256: `33374e88c5b4f66546b789e0b20ea568b695364b4a1c84ab64bb25a585b1cc62`. Private key was neither read nor changed. |
-| Required secrets | `TAURI_SIGNING_PRIVATE_KEY`, and `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` if the key is password protected. Current secret availability was not reverified. No secret values belong in audit evidence. |
+| Required secrets | The release environment lists `TAURI_SIGNING_PRIVATE_KEY` and `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`; presence was verified from Settings on 2026-09-26. Secret values were neither read nor changed. Presence does not verify key/password correctness or correspondence to the public key; an approved signed candidate build must prove that. |
 | License / notices | Existing MIT license retained; no license decision or dependency change. Existing notice generation/classification gates remain required. Full dependency/compliance review is Track 16. |
 | Prior installer/updater build | The existing [rc.3 release workflow](https://github.com/360shvit/NodeEditor-Workbench/actions/runs/35151183129) succeeded on main `8cda1880`, including signed NSIS build, surface staging and publication. The public release contains installer, signature, hash sidecar, Preview manifest, surface inventory and notices. This proves the older build path, not this audit branch or installed-client behavior. |
 | Current installer/updater E2E | **NOT VERIFIED.** No signed build of these changes or installed-client positive/negative test has been run. The owner confirmed that reliable prior E2E evidence is absent. |
