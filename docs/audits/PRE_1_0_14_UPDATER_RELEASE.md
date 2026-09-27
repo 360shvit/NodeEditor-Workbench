@@ -4,6 +4,8 @@
 **Reviewed baseline:** PR #25 after Track 13, `3618efb4aa6f77882e3776c64c0ceb9bbec39218`.
 **Review dates:** 2026-09-25–26.
 
+**Follow-up, 2026-09-27:** rc.4 is published through the protected release workflow. The owner reports that the update was available and installed, followed by a Preview check returning no newer version. The running installed executable, Windows version entry, license/notices, public installer signature and rolling manifest were independently verified. See [rc.4 installed-update evidence](UPDATER_E2E_RC4.md) for source/run/hash provenance and the distinction between owner reports and direct observations. The repository snapshot below records the earlier audit baseline. Track 14 remains BLOCKED: rc.3-to-rc.4 uses the old updater; a subsequent newer signed candidate and the remaining negative/concurrency/channel cases are still required, along with the open repository release controls.
+
 This track must not be marked PASS from source tests alone. The owner confirmed that there are no reliable recorded installed-client positive-update / negative-signature results. No release, tag, merge, signing-key generation, secret change or installed update was performed during this audit.
 
 ## Trust boundaries and findings
@@ -54,10 +56,10 @@ Run on an isolated Windows test machine using an approved, newly versioned signe
 
 | Scenario | Required result | Status |
 |---|---|---|
-| Valid signed update | Installed older version checks, downloads, verifies, installs and restarts at the candidate version; installed license/notices present. | NOT RUN |
+| Valid signed update | Installed older version checks, downloads, verifies, installs and restarts at the candidate version; installed license/notices present. | PARTIAL: owner-confirmed rc.3-to-rc.4 update; installed rc.4 and resources independently verified. Automatic restart was not directly observed. A newer target from installed rc.4 is still required to exercise the new updater. See [rc.4 evidence](UPDATER_E2E_RC4.md). |
 | Tampered installer / wrong signature or key | Verification fails before installer launch; current app remains usable; retry is possible. | NOT RUN |
 | Offline / HTTP error / interrupted download | No install or restart, useful error, retry succeeds after connectivity returns. | NOT RUN |
-| Stable versus Preview | Stable refuses a prerelease; Preview accepts a newer approved prerelease; neither downgrades/equal-version reinstalls. | NOT RUN |
+| Stable versus Preview | Stable refuses a prerelease; Preview accepts a newer approved prerelease; neither downgrades/equal-version reinstalls. | PARTIAL: owner reports the Preview update and no same-version offer after installation. Stable isolation and downgrade cases remain unrun. |
 | Staged edits before/during download | Installation is blocked, staged edits retained; resolving them and checking again permits the approved update. | NOT RUN |
 | Apply overlapping the final install boundary | Installer does not launch while Apply owns the transaction lock; no interrupted project transaction. | NOT RUN |
 | Development/raw build | No updater network configuration or install authority. | NOT RUN on installed test host; source/native boundary reviewed |
