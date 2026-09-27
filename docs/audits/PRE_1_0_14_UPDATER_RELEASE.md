@@ -52,6 +52,8 @@ Native update authority remains unavailable to renderer plugin calls (`updater:d
 
 ## Required installed-client evidence before PASS / public promotion
 
+The next production-positive step is planned in [rc.5 installed updater validation](UPDATER_E2E_RC5.md). It targets the installed rc.4 updater and keeps negative fixtures outside production feeds. Its test results remain unrun until explicitly recorded.
+
 Run on an isolated Windows test machine using an approved, newly versioned signed candidate from the protected non-publishing RC workflow. Record source commit, artifact SHA-256, public-key fingerprint, starting/target installed versions, channel, actual result and relevant screenshots/sanitized diagnostics. Keep signed test fixtures and tampered copies outside public release surfaces. Do not alter production rolling manifests for negative tests.
 
 | Scenario | Required result | Status |
