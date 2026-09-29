@@ -1,1 +1,1 @@
-v0.11.36-rc.4-r1-audited-updater-preview
+v0.11.36-rc.5-r1-installed-updater-validation
