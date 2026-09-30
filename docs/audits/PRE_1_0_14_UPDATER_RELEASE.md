@@ -4,9 +4,11 @@
 **Reviewed baseline:** PR #25 after Track 13, `3618efb4aa6f77882e3776c64c0ceb9bbec39218`.
 **Review dates:** 2026-09-25–26.
 
+**Follow-up, 2026-09-30:** [rc.5 installed-update evidence](UPDATER_E2E_RC5.md) records successful protected candidate/publication runs, independently verified public artifacts and the owner's confirmation that installed rc.4 blocked installation with a staged change, updated to rc.5 after discarding it, restarted automatically and offered no newer version on a repeat check. Installed rc.5 metadata, Windows registration and license/notices were independently verified. This exercises the updater shipped in rc.4. Signature-negative, network/interruption, download-time edit/Apply concurrency, Stable/downgrade and repository release-control cases remain open; Track 14 is still BLOCKED.
+
 **Follow-up, 2026-09-27:** rc.4 is published through the protected release workflow. The owner reports that the update was available and installed, followed by a Preview check returning no newer version. The running installed executable, Windows version entry, license/notices, public installer signature and rolling manifest were independently verified. See [rc.4 installed-update evidence](UPDATER_E2E_RC4.md) for source/run/hash provenance and the distinction between owner reports and direct observations. The repository snapshot below records the earlier audit baseline. Track 14 remains BLOCKED: rc.3-to-rc.4 uses the old updater; a subsequent newer signed candidate and the remaining negative/concurrency/channel cases are still required, along with the open repository release controls.
 
-This track must not be marked PASS from source tests alone. The owner confirmed that there are no reliable recorded installed-client positive-update / negative-signature results. No release, tag, merge, signing-key generation, secret change or installed update was performed during this audit.
+This track must not be marked PASS from source tests alone. At the original September 25–26 audit baseline, reliable installed-client results were absent and no release, tag, merge, signing-key generation, secret change or installed update was performed during that audit. Later rc.4/rc.5 publication and test evidence is recorded in the dated follow-ups; installed signature-negative evidence remains absent.
 
 ## Trust boundaries and findings
 
@@ -52,17 +54,17 @@ Native update authority remains unavailable to renderer plugin calls (`updater:d
 
 ## Required installed-client evidence before PASS / public promotion
 
-The next production-positive step is planned in [rc.5 installed updater validation](UPDATER_E2E_RC5.md). It targets the installed rc.4 updater and keeps negative fixtures outside production feeds. Its test results remain unrun until explicitly recorded.
+The completed rc.4-to-rc.5 production-positive test is recorded in [rc.5 installed updater validation](UPDATER_E2E_RC5.md), distinguishing owner reports from independent checks. Negative fixtures must remain outside production feeds.
 
 Run on an isolated Windows test machine using an approved, newly versioned signed candidate from the protected non-publishing RC workflow. Record source commit, artifact SHA-256, public-key fingerprint, starting/target installed versions, channel, actual result and relevant screenshots/sanitized diagnostics. Keep signed test fixtures and tampered copies outside public release surfaces. Do not alter production rolling manifests for negative tests.
 
 | Scenario | Required result | Status |
 |---|---|---|
-| Valid signed update | Installed older version checks, downloads, verifies, installs and restarts at the candidate version; installed license/notices present. | PARTIAL: owner-confirmed rc.3-to-rc.4 update; installed rc.4 and resources independently verified. Automatic restart was not directly observed. A newer target from installed rc.4 is still required to exercise the new updater. See [rc.4 evidence](UPDATER_E2E_RC4.md). |
+| Valid signed update | Installed older version checks, downloads, verifies, installs and restarts at the candidate version; installed license/notices present. | PASS by owner report for rc.4-to-rc.5 installation and automatic restart; installed rc.5 registration, executable and license/notices independently verified. Intermediate UI transitions were not captured. See [rc.5 evidence](UPDATER_E2E_RC5.md). |
 | Tampered installer / wrong signature or key | Verification fails before installer launch; current app remains usable; retry is possible. | NOT RUN |
 | Offline / HTTP error / interrupted download | No install or restart, useful error, retry succeeds after connectivity returns. | NOT RUN |
-| Stable versus Preview | Stable refuses a prerelease; Preview accepts a newer approved prerelease; neither downgrades/equal-version reinstalls. | PARTIAL: owner reports the Preview update and no same-version offer after installation. Stable isolation and downgrade cases remain unrun. |
-| Staged edits before/during download | Installation is blocked, staged edits retained; resolving them and checking again permits the approved update. | NOT RUN |
+| Stable versus Preview | Stable refuses a prerelease; Preview accepts a newer approved prerelease; neither downgrades/equal-version reinstalls. | PARTIAL: owner confirmed the rc.4-to-rc.5 Preview update and no same-version offer afterward. Stable isolation and downgrade cases remain unrun. |
+| Staged edits before/during download | Installation is blocked, staged edits retained; resolving them and checking again permits the approved update. | PARTIAL: pre-install blocking and successful update after discarding the test change confirmed by owner; pending rename/blocking notice observed before publication and disk bytes unchanged. During-download retention/concurrency remains NOT RUN. |
 | Apply overlapping the final install boundary | Installer does not launch while Apply owns the transaction lock; no interrupted project transaction. | NOT RUN |
 | Development/raw build | No updater network configuration or install authority. | NOT RUN on installed test host; source/native boundary reviewed |
 
