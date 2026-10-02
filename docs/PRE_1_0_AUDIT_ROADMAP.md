@@ -4,6 +4,8 @@
 **Purpose:** systematic release-readiness review before the project approaches `1.0`.  
 **Policy:** every track must leave auditable evidence, distinguish blockers from accepted limits, and add a repeatable automated gate where that is practical. A green subset never waives a failed release-critical gate.
 
+**Owner decision, 2026-10-02:** Stable and Preview remain the only release channels. No separate QA product, installation or repository will be introduced. An installed-client manipulation test remains a possible follow-up; its setup is undecided and must preserve the existing security gates and public update feeds.
+
 ## Status model
 
 - **TODO** — not yet reviewed against the current source line.
@@ -34,6 +36,7 @@
 | 16 | Dependencies, licenses & distribution compliance | npm/Cargo graphs, runtime distribution classification, notices, transitive license metadata | Inventory from locks, classification, generated notices, unresolved license exceptions = 0 | TODO |
 | 17 | Repository hygiene, maintainability & documentation | Dead/unused carry, generated files, public-source hygiene, stale docs, large monoliths, naming/version drift | Hygiene gates, current docs, accepted debt register, no private/local artifacts | TODO |
 | 18 | Final 1.0 acceptance & manual smoke | Real installer, representative projects, open/edit/search/graph/layout/apply/settings/restart/update/uninstall | Signed release candidate, complete manual acceptance matrix, all prior blockers closed, explicit known-limits sign-off | TODO |
+| 19 | Final GitHub cleanup | After Tracks 01–18: obsolete merged branches, superseded draft PRs/issues, labels/milestones, redundant Actions artifacts and stale repository links/settings | Reviewed keep/remove inventory, protected release/update assets and audit evidence retained, cleanup results recorded | TODO |
 
 ## Track rules
 
@@ -73,6 +76,16 @@ Track 12 is completed in `docs/audits/PRE_1_0_12_DIAGNOSTICS_PRIVACY.md`, with `
 
 Track 13 is completed in `docs/audits/PRE_1_0_13_ERROR_HANDLING_RESILIENCE.md`, backed by `test:pre1-error-resilience`. Remediation covers native error/cancellation confusion, premature diagnostic-save success, fatal reload confirmation, layout and lifecycle failure recovery, optional storage denial and stale update offers. Windows PR CI passed 86/86 suites, 250 soak cycles, 34/34 native tests, release/embedded parity and zero unused source carry. Fatal recovery cannot roll back in-progress writes; installed updater and manual UI acceptance remain explicit follow-up work.
 
-Track 14 is reviewed in `docs/audits/PRE_1_0_14_UPDATER_RELEASE.md`, backed by `test:pre1-updater-release` and five native fixtures. Source remediation covers stale offers, concurrent install/Apply, premature signature-success reporting, immutable download targets, bounded network waits, cryptographic staged-artifact verification, monotonic channel publication and SemVer edge cases. Windows PR CI passed 87/87 suites, 250 soak cycles, 39/39 native tests, release/embedded parity and zero unused source carry; Dependency Approval also passed. The owner confirmed missing installed-client E2E evidence. Release-environment reviewer/branch rules and both signing-secret names were verified in Settings; administrator bypass remains enabled. Version-tag ruleset `24035029` is verified active with no bypass actors. Environment administrator bypass and version-asset governance remain open release controls. **This track is not PASS.**
+Track 14 is reviewed in `docs/audits/PRE_1_0_14_UPDATER_RELEASE.md`, backed by `test:pre1-updater-release` and five native fixtures. Source remediation covers stale offers, concurrent install/Apply, premature signature-success reporting, immutable download targets, bounded network waits, cryptographic staged-artifact verification, monotonic channel publication and SemVer edge cases. Windows PR CI passed 87/87 suites, 250 soak cycles, 39/39 native tests, release/embedded parity and zero unused source carry; Dependency Approval also passed. The subsequent rc.4-to-rc.5 test is recorded in `docs/audits/UPDATER_E2E_RC5.md`: the owner confirmed pre-install staged-edit blocking, installation after discarding the test change, automatic restart and no newer offer on a repeat Preview check. Installed rc.5 identity/resources and public artifacts were independently verified. Standalone checks also rejected a modified installer and signature; installed-client manipulation, interruption, download-time concurrency and Stable/downgrade cases remain unverified. The earlier Settings audit verified the release reviewer/branch rules and both signing-secret names, and found administrator bypass enabled. Version-tag ruleset `24035029` was verified active with no bypass actors. Environment administrator bypass and version-asset governance remain open release controls. **This track is not PASS.**
 
 **Current release blocker:** Track 14 installed-client E2E and repository release controls. **Next independent source audit:** Track 15 — build, CI & reproducibility.
+
+## Final roadmap item — GitHub cleanup
+
+Track 19 is the final roadmap item, after the audits and acceptance work. Scheduling it does not authorize deletion now.
+
+- Inventory merged/obsolete branches, superseded draft PRs and issues, labels/milestones, Actions artifacts and stale links or repository metadata; distinguish active work and needed evidence from removable leftovers.
+- Record the concrete keep/remove list before making changes. Unmerged work and required audit/build provenance must be retained.
+- Preserve published version tags/releases, installer/signature/hash/notices assets, rolling Stable/Preview manifests and the URLs used by installed clients. Release-history deletion or updater-feed changes are outside routine cleanup.
+- Retain lockfiles, Windows build helpers, pinned Actions, branch/tag protection and signing-environment controls. Cleanup must not weaken release gates or restore deliberately removed historical/internal files.
+- Finish with a concise cleanup record and verify that repository links, required checks and existing release/update downloads still work.
