@@ -67,18 +67,14 @@ Use an expendable project fixture for editing cases, never the owner's real proj
 
 Record the source/tag SHA, candidate and publication run URLs, actual public installer hash, public-key fingerprint, installed versions/hashes before and after, UI messages, process exit/restart evidence and retained fixture edits. Keep paths, project contents and raw support logs out of public evidence.
 
-## Isolated signature-negative test proposal
+## Remaining manipulation-test scope
 
 The production client has a compile-time repository, exact HTTPS GitHub manifest endpoints and an exact repository/version/installer URL check. A local manifest file or arbitrary localhost server cannot drive the installed production client without changing that authority boundary. Do not call a standalone Node verifier or native fixture an installed-app E2E pass.
 
-A separate installed QA variant and dedicated fixture repository are a possible way to exercise the same native updater command/download/signature path without touching public production feeds. Before implementing it:
+**Owner decision, 2026-10-02:** the separate QA variant/installation/repository proposal is withdrawn. Stable and Preview remain the only release channels. No QA environment was created.
 
-- Obtain owner approval for the additional fixture repository/public visibility and isolated QA installation. This plan creates neither.
-- Use distinct QA product name, application identifier, install directory, profile and updater repository. Normal release builds must retain all current production values and have no runtime endpoint override.
-- Preserve the committed public verification key, strict HTTPS validation, channel/version checks and locked Tauri updater. Use existing protected signing only through an approved QA build; never generate or disclose private keys.
-- Generate a newer QA installer with the QA identity. Never use a production installer for a successful QA install, because it could modify the normal installation.
-- Establish a positive QA baseline first. Then serve separate controlled cases: altered signature, one-byte altered installer, and mismatched existing public signature. Never let malformed fixtures enter the production repository's rolling feeds.
-- Confirm rejection before installer launch, unchanged QA executable/registration, continued usability, and recovery with an intact newer signed fixture. Record this as evidence from an isolated QA build, distinct from the rc.4-to-rc.5 production-positive test.
-- Review the exact packaging/routing diff and production-exclusion checks before running. This proposal does not itself implement or approve a test bypass.
+An installed-client manipulation test remains a possible follow-up. No alternative setup has been selected or executed. A concrete setup must stay within the agreed product scope, preserve the committed public key, strict HTTPS, exact repository/version targets and signature enforcement, and keep damaged fixtures out of the public update feeds. It must demonstrate rejection before installer launch, an unchanged usable installation and retry/recovery with valid bytes. Any required security-sensitive change must be explained before execution.
+
+The successful rc.4-to-rc.5 manual test and existing standalone mutation checks are retained evidence and need not be repeated merely because this installed-client proof remains missing.
 
 The signature-negative case, deterministic interruption/concurrency cases and release-control decisions remain open after merely publishing rc.5. Version-asset governance and release-environment administrator bypass are still separate Track 14 decisions.
