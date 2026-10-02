@@ -32,12 +32,12 @@ if errorlevel 1 (
 
 if not exist "package-lock.json" (
   echo Creating package-lock.json from the exact package.json constraints...
-  npm install --package-lock-only --ignore-scripts
+  call npm install --package-lock-only --ignore-scripts
   if errorlevel 1 goto :failed
 ) else (
   echo Existing package-lock.json found; it will be verified, not regenerated.
 )
-npm ci --ignore-scripts
+call npm ci --ignore-scripts
 if errorlevel 1 goto :failed
 
 set "CARGO_TARGET_DIR=%LOCALAPPDATA%\HytaleGeneratorWorkbench\cargo-target"
@@ -64,6 +64,7 @@ if errorlevel 1 goto :failed
 cargo metadata --locked --format-version 1 --manifest-path src-tauri\Cargo.toml > build\cargo-metadata-v0.11.36-rc.5.json
 if errorlevel 1 goto :failed
 copy /y "src-tauri\Cargo.lock" "build\Cargo.lock.capture" >nul
+if errorlevel 1 goto :failed
 certutil -hashfile "src-tauri\Cargo.lock" SHA256 > build\Cargo.lock.sha256.txt
 if errorlevel 1 goto :failed
 
