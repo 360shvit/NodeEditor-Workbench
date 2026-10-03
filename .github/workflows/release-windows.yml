@@ -26,6 +26,7 @@ jobs:
         shell: pwsh
         run: |
           git fetch --no-tags origin main
+          if ($LASTEXITCODE -ne 0) { throw 'Cannot verify release ancestry: fetching main failed.' }
           git merge-base --is-ancestor $env:GITHUB_SHA origin/main
           if ($LASTEXITCODE -ne 0) { throw 'Release tag commit must be reachable from main.' }
       - name: Require publish bootstrap
