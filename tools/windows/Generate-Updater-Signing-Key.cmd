@@ -12,9 +12,9 @@ echo This creates the private updater key OUTSIDE the repository and copies only
 echo the public key into src-tauri\updater.pubkey. Never commit the private key.
 echo.
 
+set "TAURI_VERSION="
 for /f "tokens=*" %%V in ('cargo tauri --version 2^>nul') do set "TAURI_VERSION=%%V"
-echo %TAURI_VERSION% | findstr /c:"%TAURI_CLI_VERSION%" >nul
-if errorlevel 1 (
+if not "%TAURI_VERSION%"=="tauri-cli %TAURI_CLI_VERSION%" (
   echo Required Tauri CLI %TAURI_CLI_VERSION% was not found.
   echo Run tools\windows\Install-Windows-Installer-Tooling.cmd first.
   pause

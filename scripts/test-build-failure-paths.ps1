@@ -35,6 +35,14 @@ Remove-Item Function:git
 $freeze = Get-Content -LiteralPath 'tools/windows/Freeze-Windows-Dependencies.cmd' -Raw
 $commands = [regex]::Matches($freeze, '(?m)^\s*(?:call )?npm [^\r\n]+\r?\n\s*if errorlevel 1 goto :failed')
 Assert-True ($commands.Count -eq 2) 'Both dependency bootstrap npm commands need failure fixtures.'
+$cliChecks = foreach ($file in @('Build-Windows-Installer.cmd', 'tools/windows/Install-Windows-Installer-Tooling.cmd', 'tools/windows/Generate-Updater-Signing-Key.cmd')) {
+    $source = Get-Content -LiteralPath $file -Raw
+    Assert-True ($source -match 'set "TAURI_VERSION="\r?\nfor /f') 'Clear inherited CLI-version state before reading the installed version.'
+    $pin = [regex]::Match($source, 'TAURI_CLI_VERSION=(\d+\.\d+\.\d+)').Groups[1].Value
+    $check = [regex]::Match($source, '(?m)^if (?:not )?"%TAURI_VERSION%"=="tauri-cli %TAURI_CLI_VERSION%" \(')
+    Assert-True ($pin -ne '' -and $check.Success) 'Windows tooling must compare the complete pinned CLI identity.'
+    @{ pin = $pin; command = $check.Value; negative = $check.Value.StartsWith('if not ') }
+}
 $tempParent = [IO.Path]::GetFullPath([IO.Path]::GetTempPath())
 $fixtureRoot = Join-Path $tempParent ('hgw-bootstrap-failure-' + [guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Path $fixtureRoot | Out-Null
@@ -55,6 +63,17 @@ try {
                 }
             }
         }
+        foreach ($check in $cliChecks) {
+            foreach ($version in @("tauri-cli $($check.pin)", "tauri-cli $($check.pin)0", "tauri-cli $($check.pin)-beta.1", '')) {
+                $probe = "@echo off`r`nset `"TAURI_CLI_VERSION=$($check.pin)`"`r`nset `"TAURI_VERSION=$version`"`r`n" + $check.command + "`r`necho CLI_GATE_TAKEN`r`n)`r`nexit /b 0`r`n"
+                Set-Content -LiteralPath 'probe.cmd' -Encoding ascii -Value $probe
+                $output = & $env:ComSpec /d /c probe.cmd
+                Assert-True ($LASTEXITCODE -eq 0) 'CLI identity fixture failed to execute.'
+                $versionMatches = $version -eq "tauri-cli $($check.pin)"
+                $expected = if ($check.negative) { -not $versionMatches } else { $versionMatches }
+                Assert-True (($output -contains 'CLI_GATE_TAKEN') -eq $expected) 'CLI gate accepted a substring, suffix or missing version.'
+            }
+        }
     } finally { Pop-Location }
 } finally {
     $resolved = [IO.Path]::GetFullPath($fixtureRoot)
@@ -62,5 +81,5 @@ try {
     Remove-Item -LiteralPath $resolved -Recurse -Force
 }
 
-Write-Output 'Build failure paths: PASS (3 release ancestry cases, 4 npm batch return/failure cases).'
+Write-Output 'Build failure paths: PASS (3 release ancestry cases, 4 npm batch return/failure cases, 12 exact CLI identity cases).'
 exit 0
