@@ -5,8 +5,6 @@ const read = (file) => fs.readFileSync(file, 'utf8');
 const pkg = JSON.parse(read('package.json'));
 const tauri = JSON.parse(read('src-tauri/tauri.conf.json'));
 const installer = JSON.parse(read('src-tauri/tauri.installer.conf.json'));
-const releaseContract = JSON.parse(read('release-spec/release-contract.json'));
-const installerAssetName = releaseContract.updater.publication.installerAssetPattern.replaceAll('{version}', releaseContract.version.semver).replaceAll('{displayVersion}', releaseContract.version.display);
 const build = read('Build-Windows-Installer.cmd');
 const tooling = read('tools/windows/Install-Windows-Installer-Tooling.cmd');
 const runtime = read('src/support/runtimeDiagnostics.ts');
@@ -43,8 +41,13 @@ assert.match(build, /where node/);
 assert.match(build, /generate-third-party-notices\.mjs --target x86_64-pc-windows-msvc --output THIRD_PARTY_NOTICES\.txt/);
 assert.match(build, /Installer build BLOCKED: third-party notice generation failed/);
 assert.match(build, /cargo tauri build --bundles nsis --config src-tauri\\tauri\.installer\.conf\.json -- --locked/);
-assert.match(build, new RegExp(installerAssetName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
-assert.match(build, /certutil -hashfile/);
+// Local packaging uses the same canonical asset naming/hash/signature gates as CI.
+for (const command of ['release-surface.mjs --installer-dir', 'release-surface.mjs --check', 'verify-updater-signature.mjs']) {
+  const line = build.split('\n').find(line => line.includes(command));
+  assert.ok(line, `local installer must run ${command}`);
+  assert.ok(build.slice(build.indexOf(line) + line.length).trimStart().startsWith('if errorlevel 1 ('), `${command} must fail closed`);
+}
+assert.doesNotMatch(build, /dir \/b \/a-d \/o-d|certutil -hashfile/, 'do not select arbitrary newest output or parse localized hash command output');
 
 assert.match(noticeGenerator, /audit-third-party-distribution\.mjs/);
 assert.match(noticeGenerator, /classification === 'runtime'/);

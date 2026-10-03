@@ -74,8 +74,6 @@ const semverPattern = '[0-9]+\\.[0-9]+\\.[0-9]+(?:-[0-9A-Za-z.-]+)?(?:\\+[0-9A-Z
 replaceChecked('Build-Windows.cmd', new RegExp(`^echo Hytale Generator Workbench v${displayPattern} - Native Windows Build`, 'm'), `echo Hytale Generator Workbench v${version.display} - Native Windows Build`, 'native build label');
 replaceChecked('Build-Windows.cmd', /docs\\(?:TEST_V[^\r\n ]+\.md|VALIDATION\.md)/g, 'docs\\VALIDATION.md', 'native build validation-doc pointer');
 replaceChecked('Build-Windows-Installer.cmd', new RegExp(`^echo Hytale Generator Workbench v${displayPattern} - Windows NSIS Setup`, 'm'), `echo Hytale Generator Workbench v${version.display} - Windows NSIS Setup`, 'installer build label');
-replaceChecked('Build-Windows-Installer.cmd', /^set "SETUP_OUT=release\\[^"\r\n]+"/m, `set "SETUP_OUT=release\\${installerAssetName}"`, 'installer release asset name');
-replaceChecked('Build-Windows-Installer.cmd', /^> "%SETUP_OUT%\.sha256" echo !SETUPHASH!  .*$/m, `> "%SETUP_OUT%.sha256" echo !SETUPHASH!  ${installerAssetName}`, 'installer sidecar asset name');
 replaceChecked('tools/windows/Freeze-Windows-Dependencies.cmd', new RegExp(`^echo Hytale Generator Workbench v${displayPattern} - Dependency Lock Capture`, 'm'), `echo Hytale Generator Workbench v${version.display} - Dependency Lock Capture`, 'lock-capture label');
 replaceChecked('tools/windows/Freeze-Windows-Dependencies.cmd', new RegExp(`cargo-tree-v${semverPattern}\\.txt`, 'g'), `cargo-tree-v${version.semver}.txt`, 'cargo-tree evidence name');
 replaceChecked('tools/windows/Freeze-Windows-Dependencies.cmd', new RegExp(`cargo-metadata-v${semverPattern}\\.json`, 'g'), `cargo-metadata-v${version.semver}.json`, 'cargo-metadata evidence name');

@@ -67,9 +67,9 @@ if errorlevel 1 (
   exit /b 1
 )
 
+set "TAURI_VERSION="
 for /f "tokens=*" %%V in ('cargo tauri --version 2^>nul') do set "TAURI_VERSION=%%V"
-echo !TAURI_VERSION! | findstr /c:"%TAURI_CLI_VERSION%" >nul
-if errorlevel 1 (
+if not "%TAURI_VERSION%"=="tauri-cli %TAURI_CLI_VERSION%" (
   echo.
   echo Required Tauri CLI %TAURI_CLI_VERSION% was not found.
   echo Run tools\windows\Install-Windows-Installer-Tooling.cmd first.
@@ -107,52 +107,34 @@ if errorlevel 1 (
 )
 
 set "NSISDIR=%CARGO_TARGET_DIR%\release\bundle\nsis"
-set "SETUP_SOURCE="
-for /f "delims=" %%F in ('dir /b /a-d /o-d "%NSISDIR%\*-setup.exe" 2^>nul') do if not defined SETUP_SOURCE set "SETUP_SOURCE=%NSISDIR%\%%F"
-if not defined SETUP_SOURCE (
-  echo.
-  echo Tauri build succeeded, but no NSIS setup executable was found in:
-  echo   %NSISDIR%
-  pause
-  exit /b 1
-)
-set "SIGNATURE_SOURCE=!SETUP_SOURCE!.sig"
-if not exist "!SIGNATURE_SOURCE!" (
-  echo.
-  echo Tauri build succeeded, but the required updater signature was not found:
-  echo   !SIGNATURE_SOURCE!
-  pause
-  exit /b 1
-)
-
-if not exist release mkdir release
-set "SETUP_OUT=release\Hytale-Generator-Workbench_0.11.36-rc.5_x64-setup.exe"
-copy /y "!SETUP_SOURCE!" "%SETUP_OUT%" >nul
+node scripts\release-surface.mjs --installer-dir "%NSISDIR%" --repository "%HGW_GITHUB_REPOSITORY%"
 if errorlevel 1 (
   echo.
-  echo Setup was built but could not be copied to the release folder.
+  echo Installer build BLOCKED: release surface staging failed.
   pause
   exit /b 1
 )
-copy /y "!SIGNATURE_SOURCE!" "%SETUP_OUT%.sig" >nul
+node scripts\release-surface.mjs --check
 if errorlevel 1 (
   echo.
-  echo Updater signature was built but could not be copied to the release folder.
+  echo Installer build BLOCKED: release surface validation failed.
   pause
   exit /b 1
 )
-
-set "SETUPHASH="
-for /f "skip=1 tokens=* delims=" %%H in ('certutil -hashfile "%SETUP_OUT%" SHA256 ^| findstr /v /c:"CertUtil"') do if not defined SETUPHASH set "SETUPHASH=%%H"
-set "SETUPHASH=!SETUPHASH: =!"
-> "%SETUP_OUT%.sha256" echo !SETUPHASH!  Hytale-Generator-Workbench_0.11.36-rc.5_x64-setup.exe
+node scripts\verify-updater-signature.mjs
+if errorlevel 1 (
+  echo.
+  echo Installer build BLOCKED: updater signature verification failed.
+  pause
+  exit /b 1
+)
 
 echo.
-echo Finished installer:
-echo   %SETUP_OUT%
+echo Finished verified installer and updater assets:
+echo   release\public\
 echo.
 echo The signed installer and .sig are the updater payload.
 echo SHA-256 evidence is kept next to the installer for independent release verification.
-echo Run npm run release:surface with the real GitHub repository before publishing.
+echo Publication still requires the separate protected release workflow.
 echo.
 pause

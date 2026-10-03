@@ -4,6 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { parseSemver } from './release-version.mjs';
+import { findWindowsInstaller } from './windows-installer-source.mjs';
 
 const read = (file) => fs.readFileSync(file, 'utf8');
 const contract = JSON.parse(read('release-spec/release-contract.json'));
@@ -89,6 +90,30 @@ try {
   fs.writeFileSync(path.join(fixture.output, 'src.zip'), 'unexpected');
   const reject = spawnSync(process.execPath, ['scripts/release-surface.mjs', '--check', '--out', fixture.output], { encoding: 'utf8' });
   assert.notEqual(reject.status, 0, 'release surface must reject unexpected/source-like files');
+
+  // A stale installer with a newer timestamp must never be relabeled as this release.
+  const bundle = path.join(fixture.temp, 'bundle');
+  fs.mkdirSync(bundle);
+  const current = path.join(bundle, `${contract.product.name}_${contract.version.semver}_x64-setup.exe`);
+  const stale = path.join(bundle, `${contract.product.name}_0.0.1_x64-setup.exe`);
+  fs.writeFileSync(current, 'current version bytes');
+  fs.writeFileSync(`${current}.sig`, 'current signature fixture');
+  fs.writeFileSync(stale, 'older version bytes');
+  fs.writeFileSync(`${stale}.sig`, 'older signature fixture');
+  fs.utimesSync(current, new Date('2020-01-01'), new Date('2020-01-01'));
+  fs.utimesSync(stale, new Date('2021-01-01'), new Date('2021-01-01'));
+  assert.equal(findWindowsInstaller(bundle, contract.product.name, contract.version.semver), current);
+  const fromBundle = spawnSync(process.execPath, ['scripts/release-surface.mjs', '--installer-dir', bundle, '--out', fixture.output, '--repository', 'example/hgw'], { encoding: 'utf8' });
+  assert.equal(fromBundle.status, 0, `${fromBundle.stdout}\n${fromBundle.stderr}`);
+  assert.equal(read(path.join(fixture.output, fixture.installer)), 'current version bytes');
+  assert.equal(read(path.join(fixture.output, fixture.signature)), 'current signature fixture');
+  fs.unlinkSync(current);
+  assert.throws(() => findWindowsInstaller(bundle, contract.product.name, contract.version.semver), /Expected current Windows installer is missing/);
+  const missingCurrent = spawnSync(process.execPath, ['scripts/release-surface.mjs', '--installer-dir', bundle, '--out', fixture.output, '--repository', 'example/hgw'], { encoding: 'utf8' });
+  assert.notEqual(missingCurrent.status, 0, 'a directory containing only stale installers must fail closed');
+  fs.mkdirSync(current);
+  assert.throws(() => findWindowsInstaller(bundle, contract.product.name, contract.version.semver), /Expected current Windows installer is missing/);
+  assert.throws(() => findWindowsInstaller(bundle, '../elsewhere', contract.version.semver), /Invalid Windows installer identity/);
 } finally {
   fs.rmSync(fixture.temp, { recursive: true, force: true });
 }
@@ -100,6 +125,7 @@ try {
   fs.mkdirSync(path.join(prereleaseRoot, 'scripts'), { recursive: true });
   fs.mkdirSync(path.join(prereleaseRoot, 'release-spec'), { recursive: true });
   fs.copyFileSync('scripts/release-surface.mjs', path.join(prereleaseRoot, 'scripts/release-surface.mjs'));
+  fs.copyFileSync('scripts/windows-installer-source.mjs', path.join(prereleaseRoot, 'scripts/windows-installer-source.mjs'));
   fs.copyFileSync('scripts/release-version.mjs', path.join(prereleaseRoot, 'scripts/release-version.mjs'));
   fs.copyFileSync('THIRD_PARTY_NOTICES.txt', path.join(prereleaseRoot, 'THIRD_PARTY_NOTICES.txt'));
   const previewContract = structuredClone(contract);

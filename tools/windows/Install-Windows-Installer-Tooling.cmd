@@ -14,12 +14,12 @@ if errorlevel 1 (
   exit /b 1
 )
 
+set "TAURI_VERSION="
 for /f "tokens=*" %%V in ('cargo tauri --version 2^>nul') do set "TAURI_VERSION=%%V"
 echo Existing Tauri CLI: %TAURI_VERSION%
 echo Required Tauri CLI: %TAURI_CLI_VERSION%
 
-echo %TAURI_VERSION% | findstr /c:"%TAURI_CLI_VERSION%" >nul
-if not errorlevel 1 (
+if "%TAURI_VERSION%"=="tauri-cli %TAURI_CLI_VERSION%" (
   echo.
   echo Installer tooling is ready.
   pause

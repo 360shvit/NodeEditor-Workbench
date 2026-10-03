@@ -122,8 +122,8 @@ assert.match(dependabot, /version-update:semver-patch/);
 assert.doesNotMatch(dependabot, /version-update:semver-major/, 'major migrations must remain explicit/manual');
 
 const installerBuild = read('Build-Windows-Installer.cmd');
-assert.ok(installerBuild.includes('SIGNATURE_SOURCE'));
-assert.ok(installerBuild.includes('%SETUP_OUT%.sig'));
+assert.ok(installerBuild.includes('release-surface.mjs --installer-dir'), 'local installer must stage the canonical signed surface');
+assert.ok(installerBuild.includes('verify-updater-signature.mjs'), 'local installer must verify the staged signature before success');
 
 const rootReadme = read('README.md');
 assert.ok(rootReadme.includes(`v${contract.version.display}`));

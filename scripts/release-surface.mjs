@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseSemver } from './release-version.mjs';
+import { findWindowsInstaller } from './windows-installer-source.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const contract = JSON.parse(fs.readFileSync(path.join(ROOT, 'release-spec', 'release-contract.json'), 'utf8'));
@@ -54,20 +55,8 @@ function writeHashSidecar(file) {
   return hash;
 }
 
-function findNewestInstaller(directory) {
-  const absolute = path.resolve(ROOT, directory);
-  if (!fs.existsSync(absolute)) throw new Error(`installer directory does not exist: ${absolute}`);
-  const candidates = fs.readdirSync(absolute)
-    .filter((name) => /-setup\.exe$/i.test(name))
-    .map((name) => ({ name, file: path.join(absolute, name), stat: fs.statSync(path.join(absolute, name)) }))
-    .filter((entry) => entry.stat.isFile())
-    .sort((a, b) => b.stat.mtimeMs - a.stat.mtimeMs || a.name.localeCompare(b.name));
-  if (candidates.length === 0) throw new Error(`no *-setup.exe found in ${absolute}`);
-  return candidates[0].file;
-}
-
 function resolveInstallerSource() {
-  if (installerDir) return findNewestInstaller(installerDir);
+  if (installerDir) return findWindowsInstaller(path.resolve(ROOT, installerDir), contract.product.name, contract.version.semver);
   const canonical = path.join(inputDir, canonicalInstaller);
   if (fs.existsSync(canonical)) return canonical;
   const legacy = path.join(inputDir, 'Hytale-Generator-Workbench-Setup.exe');
