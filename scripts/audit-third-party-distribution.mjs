@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { assertReviewedCargoSources, assertReviewedRuntimeLicenses, assertReviewedVendoredFiles, readThirdPartyPolicy } from './third-party-policy.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const CARGO_MANIFEST = path.join(ROOT, 'src-tauri', 'Cargo.toml');
@@ -229,6 +230,11 @@ for (const required of [CARGO_MANIFEST, PACKAGE_LOCK]) {
 
 const fullMetadata = cargoMetadata();
 const targetMetadata = cargoMetadata(['--filter-platform', target]);
+const reviewPolicy = readThirdPartyPolicy(ROOT);
+if (target !== reviewPolicy.target) throw new Error(`Distribution target requires review: ${target}`);
+assertReviewedCargoSources(fullMetadata, CARGO_MANIFEST, reviewPolicy);
+assertReviewedCargoSources(targetMetadata, CARGO_MANIFEST, reviewPolicy);
+assertReviewedVendoredFiles(ROOT, reviewPolicy, vendored);
 const packages = [...classifyNpm(), ...classifyCargo(fullMetadata, targetMetadata), ...vendored]
   .sort((a, b) => a.classification.localeCompare(b.classification) || a.ecosystem.localeCompare(b.ecosystem) || a.name.localeCompare(b.name) || String(a.version).localeCompare(String(b.version)));
 
@@ -236,6 +242,7 @@ const invalid = packages.filter((pkg) => !pkg.name || (pkg.ecosystem !== 'vendor
 if (invalid.length) throw new Error(`Distribution classification contains package(s) without required identity metadata: ${invalid.map((pkg) => `${pkg.ecosystem}:${pkg.name}`).join(', ')}`);
 
 const runtimePackages = packages.filter((pkg) => pkg.classification === 'runtime');
+assertReviewedRuntimeLicenses(packages, reviewPolicy);
 const runtimeCargoPackages = runtimePackages.filter((pkg) => pkg.ecosystem === 'cargo');
 const missingLicense = runtimePackages.filter((pkg) => !pkg.license && !pkg.licenseFile);
 if (missingLicense.length) throw new Error(`Runtime-distributed package(s) lack license metadata: ${missingLicense.map((pkg) => `${pkg.ecosystem}:${pkg.name}@${pkg.version ?? 'vendored'}`).join(', ')}`);
@@ -294,7 +301,7 @@ const report = {
   policy: {
     npmRuntimeModel: 'local-compatibility-modules-no-node_modules-code-shipped',
     cargoClassification: 'target-filtered dependency traversal; proc-macros/build-dependencies are build-only unless independently runtime-reachable',
-    licenseReview: 'runtime license expressions are classified, package legal files are discovered from Cargo source directories, and compound/alternative expressions are not silently reduced to a chosen license',
+    licenseReview: 'runtime license expressions must match the reviewed policy; legal material remains required and compound/alternative expressions are not silently reduced to a chosen license',
     mplSourceAvailability: 'MPL runtime registry packages must have an exact package/version source reference; absence of a root LICENSE/COPYING file in the published crate is reported but is not by itself treated as missing source availability',
   },
   counts,

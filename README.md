@@ -11,6 +11,7 @@ Hytale Generator Workbench is a local-first Windows desktop workbench for Hytale
 - `docs/KNOWN_LIMITS.md` — explicit current limits
 - `docs/BUILD_PLAN.md` — local build and release model
 - `docs/VALIDATION.md` — validation strategy and release gates
+- [Third-party source notices](docs/THIRD_PARTY.md) — licenses for copied frontend components; installer notices are generated separately
 - `docs/CHANGELOG.md` — product/source-line change history
 - `release-spec/README.md` — canonical release/updater contract
 
