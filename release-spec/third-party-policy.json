@@ -1,0 +1,48 @@
+{
+  "schemaVersion": 1,
+  "reviewedAt": "2026-10-04",
+  "target": "x86_64-pc-windows-msvc",
+  "cargoRegistry": "registry+https://github.com/rust-lang/crates.io-index",
+  "runtimeLicenseExpressions": [
+    "(MIT OR Apache-2.0) AND Unicode-3.0",
+    "Apache-2.0",
+    "Apache-2.0 / MIT",
+    "Apache-2.0 AND ISC",
+    "Apache-2.0 AND MIT",
+    "Apache-2.0 OR ISC OR MIT",
+    "Apache-2.0 OR MIT",
+    "BSD-3-Clause",
+    "BSD-3-Clause AND MIT",
+    "BSD-3-Clause/MIT",
+    "CC0-1.0",
+    "CC0-1.0 OR MIT-0 OR Apache-2.0",
+    "ISC",
+    "ISC AND MIT",
+    "MIT",
+    "MIT OR Apache-2.0",
+    "MIT OR Apache-2.0 OR Zlib",
+    "MIT/Apache-2.0",
+    "MPL-2.0",
+    "Unicode-3.0",
+    "Unlicense OR MIT",
+    "Unlicense/MIT",
+    "Zlib",
+    "Zlib OR Apache-2.0 OR MIT"
+  ],
+  "vendored": [
+    {
+      "path": "tauri-ui/preact-lite.js",
+      "sha256Lf": "3c57f17593fcdb069027c30ab250e40ff0610ad30a858ac99489a057d921735f",
+      "license": "MIT",
+      "identity": "vendored:Preact@vendored",
+      "versionProvenance": "Modified downstream snapshot; exact upstream release unverified. This digest identifies the reviewed source bytes."
+    },
+    {
+      "path": "src/components/LucideIcon.tsx",
+      "sha256Lf": "ecc6d6be78de1e7e28aa543f3ea12cef1251ef26d24448cc5819888a0a985328",
+      "license": "ISC AND MIT",
+      "identity": "vendored:Lucide icon geometry@1.29.0",
+      "versionProvenance": "Selected icon geometry, source-declared Lucide 1.29.0; retain both Lucide and Feather attribution."
+    }
+  ]
+}

@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { spawnSync } from 'node:child_process';
+import { assertReviewedCargoSources, readThirdPartyPolicy } from './third-party-policy.mjs';
 
 const args = process.argv.slice(2);
 const outputIndex = args.indexOf('--output');
@@ -49,6 +50,7 @@ if (cargo.status !== 0) {
 }
 
 const cargoMetadata = JSON.parse(cargo.stdout);
+assertReviewedCargoSources(cargoMetadata, cargoManifestPath, readThirdPartyPolicy(process.cwd()));
 const resolvedPackageIds = new Set((cargoMetadata.resolve?.nodes ?? []).map((node) => node.id));
 const cargoPackages = (cargoMetadata.packages ?? [])
   .filter((pkg) => pkg.source && resolvedPackageIds.has(pkg.id))
