@@ -1,8 +1,8 @@
 # Pre-1.0 Audit 17 — Repository hygiene and documentation
 
-**Status:** IN REVIEW — source review complete; final required Windows CI pending.
+**Status:** PASS — source/document review and Windows gates passed; final integration still requires the exact PR head's checks.
 **Baseline:** `c350ca6817aac94a21d4b999f79b9e097c7d84ca` after PR #36.
-**Review date:** 2026-10-04.
+**Review dates:** 2026-10-04–05.
 
 ## Findings and changes
 
@@ -19,10 +19,10 @@ The new hygiene gate uses Git's tracked-file index to reject build output, logs,
 - Unused carry is zero across 105 TypeScript/TSX files. Local Track 04 review finds 192 runtime edges, no runtime cycle or layer violation, and the one documented type-only persistence/store cycle.
 - `src/store.ts` (82,796 bytes) and `src/App.tsx` (21,863 bytes) remain within existing 100/32 KB guards. Their bounded refactoring debt is documented in [Track 04](PRE_1_0_04_FRONTEND_ARCHITECTURE.md).
 - `src-tauri/src/main.rs` is a large authority/transaction module (176,378 bytes, including native tests). Future extraction must preserve shared locks, opaque grants, transaction recovery and updater authority; a cosmetic pre-release split is not justified by the size alone.
-- UNIC maintenance advisories, unknown Preact lineage and outstanding installer component notices remain [Track 16](PRE_1_0_16_DEPENDENCIES_NOTICES.md) work, not hidden hygiene exceptions.
+- UNIC/old Preact maintenance debt and outstanding installer component notices remain [Track 16](PRE_1_0_16_DEPENDENCIES_NOTICES.md) work. Preact's 10.5.13 relationship has now been verified; no hidden hygiene exception is used.
 
 ## Validation boundary
 
-Local unused-carry and architecture audits passed. Local hygiene/security scripts reached an environment restriction when Node tried to start Git (`spawnSync git EPERM`); that is not reported as a pass. Windows CI must run the new hygiene gate, existing tracked-secret scan, release/embedded parity, full registered matrix and locked native tests on this PR before integration.
+Local unused-carry and architecture audits passed. Local direct hygiene/security scripts encountered `spawnSync git EPERM`; that was not counted as a pass. The helper was independently run against the index list captured directly from Git: 324 public paths and 20 relative Markdown links passed. [Windows CI 37327378454](https://github.com/360shvit/NodeEditor-Workbench/actions/runs/37327378454) then passed on PR #38 head `463cb056adb2bf7b9b14d5ce976030070a3396a7`, including the actual Git-backed hygiene gate, tracked-secret scan, release/embedded parity, 91/91 regression suites, zero unused carry and 39/39 locked native tests. Follow-up documentation/provenance changes must pass the same required checks before merge.
 
 No project/runtime behavior, version, signing key, runner, action pin, public release asset or local user project is changed by the documentation/hygiene audit. GitHub deletion remains deferred to Track 19 after acceptance.

@@ -109,7 +109,7 @@ try {
   const vendored = new Map([
     ['vendored:Preact@vendored', {
       selectedLicense: 'MIT',
-      source: 'https://github.com/preactjs/preact',
+      source: 'https://github.com/preactjs/preact/tree/e523a82cda1d982b6fa82d23cc7539f5f5b4701d',
       generatedText: makeMit('Copyright (c) 2015-present Jason Miller'),
     }],
     ['vendored:Lucide icon geometry@1.29.0', {

@@ -2,7 +2,7 @@
 
 The project's existing license is in [LICENSE](../LICENSE). Copied third-party material retains the notices below. The Windows installer includes generated `THIRD_PARTY_NOTICES.txt` covering its Cargo runtime graph, vendored frontend, Microsoft loader and compiler-emitted helpers.
 
-The checked npm package directories are build/typecheck inputs; local compatibility modules provide the emitted runtime imports. Some TypeScript helper code is emitted into the shipped bundle. Cargo dependencies are obtained from locked registry sources. Installer plug-in review and exact Preact lineage remain open in the [Track 16 review](audits/PRE_1_0_16_DEPENDENCIES_NOTICES.md); the current notices are not a complete distribution sign-off.
+The checked npm package directories are build/typecheck inputs; local compatibility modules provide the emitted runtime imports. Some TypeScript helper code is emitted into the shipped bundle. Cargo dependencies are obtained from locked registry sources. Installer plug-in review remains open in the [Track 16 review](audits/PRE_1_0_16_DEPENDENCIES_NOTICES.md); the current notices are not a complete distribution sign-off.
 
 ## Native SDK and emitted compiler material
 
@@ -13,7 +13,7 @@ The package-wide NOTICE files are preserved in full; this does not mean every co
 
 ## Preact downstream runtime
 
-File: `tauri-ui/preact-lite.js`. Copyright and license: [Preact](https://github.com/preactjs/preact/blob/HEAD/LICENSE), MIT. The runtime is a modified downstream snapshot; its exact upstream release has not been established. `release-spec/third-party-policy.json` records the reviewed source digest without inventing a version. The license text below is the upstream MIT notice; it is not evidence that this runtime equals a particular upstream release.
+File: `tauri-ui/preact-lite.js`. Copyright and license: [Preact 10.5.13](https://github.com/preactjs/preact/tree/e523a82cda1d982b6fa82d23cc7539f5f5b4701d), MIT. On 2026-10-05 the downstream body was verified as a binding-preserving rename of the official npm module: 5,163 tokens and 228 local bindings match, while property names, globals, literals and operators are preserved. The `globalThis.PreactLite` adapter exposes the same export-to-binding mapping. Runtime bytes were not changed. [The provenance record](../release-spec/preact-provenance.json) pins the official archive/module and downstream hashes; `scripts/verify-preact-provenance.mjs` reproduces the comparison with that module. The license text below remains the upstream MIT notice.
 
 ```text
 The MIT License (MIT)

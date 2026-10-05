@@ -1,0 +1,24 @@
+{
+  "schemaVersion": 1,
+  "reviewedAt": "2026-10-05",
+  "upstreamVersion": "10.5.13",
+  "upstreamCommit": "e523a82cda1d982b6fa82d23cc7539f5f5b4701d",
+  "archiveUrl": "https://registry.npmjs.org/preact/-/preact-10.5.13.tgz",
+  "archiveSha256": "f78000436433ff738354fa36dfa232bf7ceafb8025b07469d7197c411be54aec",
+  "archiveIntegrity": "sha512-q/vlKIGNwzTLu+jCcvywgGrt+H/1P/oIRSD6mV4ln3hmlC+Aa34C7yfPI4+5bzW8pONyVXYS7SvXosy2dKKtWQ==",
+  "upstreamModule": "package/dist/preact.module.js",
+  "upstreamModuleSha256": "0c6073d19eec309a522520f383ecae3b3a9bff00ac7c2198ffde4a9d2f7a1382",
+  "downstreamFile": "tauri-ui/preact-lite.js",
+  "downstreamSha256Lf": "3c57f17593fcdb069027c30ab250e40ff0610ad30a858ac99489a057d921735f",
+  "comparison": "Binding-aware token equivalence: local variables and resolved labels may be renamed; properties, globals, operators and literals must match; exports must map identically.",
+  "bodyTokens": 5163,
+  "localBindings": 228,
+  "advisoryQuery": {
+    "database": "https://api.osv.dev/v1/query",
+    "checkedAt": "2026-10-05T14:53:28.496Z",
+    "ecosystem": "npm",
+    "package": "preact",
+    "version": "10.5.13",
+    "matches": []
+  }
+}
