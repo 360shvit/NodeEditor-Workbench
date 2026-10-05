@@ -35,7 +35,7 @@
       "sha256Lf": "3c57f17593fcdb069027c30ab250e40ff0610ad30a858ac99489a057d921735f",
       "license": "MIT",
       "identity": "vendored:Preact@vendored",
-      "versionProvenance": "Modified downstream snapshot; exact upstream release unverified. This digest identifies the reviewed source bytes."
+      "versionProvenance": "Derived from Preact 10.5.13: binding-aware body equivalence and exact export mapping verified 2026-10-05; only local binding/label names and the global export adapter differ. See release-spec/preact-provenance.json."
     },
     {
       "path": "src/components/LucideIcon.tsx",

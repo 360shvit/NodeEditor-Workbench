@@ -1,0 +1,39 @@
+{
+  "schemaVersion": 1,
+  "target": "x86_64-pc-windows-msvc",
+  "webview2": {
+    "sdkVersion": "1.0.3650.58",
+    "wrapperVersion": "0.38.2",
+    "source": "https://www.nuget.org/packages/Microsoft.Web.WebView2/1.0.3650.58",
+    "sourceArchive": "https://api.nuget.org/v3-flatcontainer/microsoft.web.webview2/1.0.3650.58/microsoft.web.webview2.1.0.3650.58.nupkg",
+    "archiveSha256": "911a472128c82ac8baa0c486c23342cc9dd6e7dc50d754e676726642ca065c60",
+    "libraryPath": "x64/WebView2LoaderStatic.lib",
+    "librarySha256": "0659b741bde6348d4c4a6ec4ceb9af50e3d0048ed9cd3c8659bccbb61fde55ee",
+    "legalFiles": [
+      {
+        "path": "docs/third-party/Microsoft-WebView2-SDK-LICENSE.txt",
+        "sha256Lf": "0af8f1b807512aae39c2ac1aa4d0cae65cabecb6fd554b8439a5162a0d6eca55"
+      },
+      {
+        "path": "docs/third-party/Microsoft-WebView2-SDK-NOTICE.txt",
+        "sha256Lf": "106423785c5b7eba0a8e61d1837f2132e9c828e20ad530f565d981c1df60dd90"
+      }
+    ]
+  },
+  "typescript": {
+    "version": "5.8.3",
+    "source": "https://github.com/microsoft/TypeScript/tree/v5.8.3",
+    "sourceArchive": "https://registry.npmjs.org/typescript/-/typescript-5.8.3.tgz",
+    "helpersSha256Lf": "23a08b5caa4922888302a62947ee9e005ffb105c9b34105818f2c333dd6ae72a",
+    "legalFiles": [
+      {
+        "path": "docs/third-party/TypeScript-LICENSE.txt",
+        "sha256Lf": "a5e9f9b1575301c7a7a03508fdaa2e05a918cc17fd21c6e898096a96d6a34f61"
+      },
+      {
+        "path": "docs/third-party/TypeScript-ThirdPartyNoticeText.txt",
+        "sha256Lf": "01de8bc3c687a3df5a83e8b80db5006270f9f3361dbb437faf3dcc033dcd6bb1"
+      }
+    ]
+  }
+}
