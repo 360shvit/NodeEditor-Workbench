@@ -12,6 +12,7 @@ Hytale Generator Workbench is a local-first Windows desktop workbench for Hytale
 - `docs/BUILD_PLAN.md` — local build and release model
 - `docs/VALIDATION.md` — validation strategy and release gates
 - [Third-party source notices](docs/THIRD_PARTY.md) — licenses for copied frontend components; installer notices are generated separately
+- [Pre-1.0 audit roadmap](docs/PRE_1_0_AUDIT_ROADMAP.md) — completed reviews and remaining release gates
 - `docs/CHANGELOG.md` — product/source-line change history
 - `release-spec/README.md` — canonical release/updater contract
 
@@ -41,7 +42,7 @@ Generated output such as `node_modules/`, Cargo targets, `build/`, `release/` an
 
 ## Release identity and updater
 
-`release-spec/release-contract.json` is the canonical release identity and publication-policy source. `version.semver` is the public updater ordering identity; the `rN` suffix is an internal QA/source-snapshot label.
+`release-spec/release-contract.json` is the canonical release identity and publication-policy source. `version.semver` is the public updater ordering identity; the `rN` suffix is an internal source-snapshot label, not a release channel. Stable and Preview are the only channels.
 
 The v0.11.35 line contains the native Tauri v2 updater integration. Update checks and installation authority stay in Rust, Stable and Preview use separate manifests, signed packages are verified before install, and pending project changes are rechecked immediately before installation. Raw/development builds do not self-update.
 

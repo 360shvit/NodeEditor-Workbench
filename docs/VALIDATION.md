@@ -71,7 +71,9 @@ The updater remains non-deployed while the committed public key is unconfigured 
 
 ## Third-party/license gate
 
-`scripts/audit-third-party-inventory.mjs` derives the dependency inventory from the committed `package-lock.json` and `src-tauri/Cargo.lock`/`cargo metadata --locked` graph and fails when a resolved third-party package lacks declared license metadata. Distribution classification and notice generation add the Windows-runtime legal-material checks used for the installer. These compliance gates are retained; optimization should reuse already-derived dependency evidence rather than weaken or skip the checks.
+`scripts/audit-third-party-inventory.mjs` derives the dependency inventory from the committed `package-lock.json` and `src-tauri/Cargo.lock`/`cargo metadata --locked` graph and fails when a resolved third-party package lacks declared license metadata. Distribution classification requires reviewed origins, runtime license expressions and vendored bytes. Notice generation additionally verifies the native Microsoft loader and compiler-emitted helper provenance against `release-spec/bundled-materials.json`, then includes their full upstream legal material. New wrapper/compiler versions or changed loader/helper/legal bytes require renewed review. Remaining installer plug-in/Preact lineage work stays visible in Track 16; a successful generator is not complete legal sign-off.
+
+The repository hygiene gate checks tracked public-source paths and local Markdown links, complementing existing secret, unused-carry and embedded-parity checks. [Final installed acceptance](audits/PRE_1_0_18_FINAL_ACCEPTANCE.md) records the remaining manual cases individually; no standalone verifier substitutes for installed-client manipulation evidence.
 
 ## Privacy/security expectations
 

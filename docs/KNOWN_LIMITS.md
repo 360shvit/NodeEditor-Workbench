@@ -1,6 +1,6 @@
 # Hytale Generator Workbench — Current Known Limits
 
-**Applies to:** v0.11.35-r1.  
+**Applies to:** the current release contract.
 **Document type:** living documentation.
 
 These are intentional current boundaries, not hidden guarantees.
@@ -84,6 +84,6 @@ ZIP success is reported after native save completion; cancelling the picker repo
 
 ## Distribution / updater limits
 
-The audit source is based on the already-published `0.11.36-rc.3` Preview release. Its configured public key and committed lockfiles do not approve another release of the same version. A fresh SemVer, protected candidate build and installed-client positive/negative update evidence remain required; Track 14 records the current release blockers. Bootstrap still fails closed when repository/key/locks are missing or `updater.publication.publishable` is false. An unconfigured native client returns a local not-configured result without making a network request.
+The published Preview is `0.11.36-rc.5`; ongoing audit changes on main are not a new installed release. The rc.4-to-rc.5 installed update, automatic restart and repeat check were confirmed by the owner and recorded in [the rc.5 evidence](audits/UPDATER_E2E_RC5.md). A new binary requires a fresh SemVer and protected candidate build; the existing version must not be republished. Installed-client manipulation and the other unrun Track 14/18 cases remain release gates. Bootstrap still fails closed when repository/key/locks are missing or `updater.publication.publishable` is false.
 
-Installed NSIS builds are the automatic-update target once bootstrap is complete. Signed artifacts and updater manifests are required. A staged-change gate runs before download and native authority rechecks after signature verification immediately before installation, while holding the project transaction lock. Concurrent installs are refused; failed or superseded checks cannot retain an older offer. HTTP check/download timeouts are 30/600 seconds, respectively. Raw/development builds set `HGW_DISTRIBUTION_KIND=development`, so native check/install authority is refused. Stable and Preview use separate rolling endpoints; prerelease publication never writes Stable, and a stable hotfix preserves a newer Preview. Real installed update/restart and bad-signature behavior remain unverified pending the Track 14/18 matrix.
+Installed NSIS builds are the automatic-update target. Signed artifacts and updater manifests are required. A staged-change gate runs before download and native authority rechecks after signature verification immediately before installation, while holding the project transaction lock. Concurrent installs are refused; failed or superseded checks cannot retain an older offer. HTTP check/download timeouts are 30/600 seconds, respectively. Raw/development builds set `HGW_DISTRIBUTION_KIND=development`, so native check/install authority is refused. Stable and Preview use separate rolling endpoints; prerelease publication never writes Stable, and a stable hotfix preserves a newer Preview. Successful rc.5 update evidence does not verify bad-signature rejection inside the installed client.

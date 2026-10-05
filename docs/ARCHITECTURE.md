@@ -1,6 +1,6 @@
 # Hytale Generator Workbench — Current Architecture
 
-**Applies to:** v0.11.35-r1.  
+**Applies to:** the current release contract.
 **Document type:** living documentation.
 
 ## Product layers

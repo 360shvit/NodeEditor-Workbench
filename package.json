@@ -104,6 +104,8 @@
     "test:pre1-updater-release": "node scripts/test-pre1-updater-release.mjs",
     "test:pre1-build-ci": "node scripts/test-pre1-build-ci.mjs",
     "test:pre1-dependency-notices": "node scripts/test-pre1-dependency-notices.mjs",
+    "test:bundled-materials": "node scripts/test-bundled-materials.mjs",
+    "test:pre1-repository-hygiene": "node scripts/test-pre1-repository-hygiene.mjs",
     "test:pre1-diagnostics-privacy": "node scripts/test-pre1-diagnostics-privacy.mjs",
     "test:pre1-performance-resources": "npm run typecheck:core && node scripts/test-pre1-performance-resources.mjs"
   },

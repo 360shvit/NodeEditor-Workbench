@@ -1,6 +1,6 @@
 # Pre-1.0 Audit 16 — Dependencies, licenses and distribution
 
-**Status:** IN REVIEW — application dependency review and remediation prepared; required Windows CI and the native/installer component notice review remain open. This is not full distribution-compliance sign-off.
+**Status:** IN REVIEW — rustls remediation is merged and validated; native notices are extended below. Installer plug-in review and exact Preact lineage remain open. This is not full distribution-compliance sign-off.
 **Baseline:** `e0654d54104fec2601b0a2013059dc6ab56a1ad3` after Track 15 / PR #35.
 **Review date:** 2026-10-04.
 
@@ -20,7 +20,7 @@ The full locked graph was queried against OSV on 2026-10-04 (502 Cargo identitie
 
 The lock update is limited to `rustls 0.23.44 -> 0.23.45` and its registry checksum. The official registry index and downloaded crate agree on SHA-256 `0d41d731c7d2f962d1ccc364cec258de3c0e93b38c2fb3ba97ac74513048d634`; dependency and feature requirements are unchanged. The license remains `Apache-2.0 OR ISC OR MIT`. A fresh OSV query for `0.23.45` returned no matches. The gate rejects versions below the patched floor and prerelease identities.
 
-Local Cargo registry access failed with Windows Schannel `SEC_E_NO_CREDENTIALS`; offline resolution lacks the new index entry. The two lock fields were therefore prepared from the verified official registry record, not claimed as a successful local Cargo update. Required CI must resolve and compile the lock with `--locked` before integration. No TLS validation was disabled. The installed/public rc.5 binaries are unchanged and do not receive this fix until a separately approved new release is built and installed.
+Local Cargo registry access failed with Windows Schannel `SEC_E_NO_CREDENTIALS`; offline resolution lacked the new index entry. The lock was prepared from the verified registry record. [PR #36](https://github.com/360shvit/NodeEditor-Workbench/pull/36) merged after [Windows CI 37216009509](https://github.com/360shvit/NodeEditor-Workbench/actions/runs/37216009509) actually compiled `rustls 0.23.45` with `--locked`: 89/89 suites, 250 soak cycles and 39/39 native tests passed. Post-merge validation 37218512540 also succeeded on `c350ca6817aac94a21d4b999f79b9e097c7d84ca`. No TLS validation was disabled. Public/installed rc.5 binaries do not receive the fix until a separately approved new release is built and installed.
 
 ### 16-B — incomplete future-dependency review boundaries
 
@@ -53,15 +53,24 @@ MPL source references cover cssparser, dtoa-short, option-ext and selectors with
 - Five runtime UNIC crates: unmaintained advisories `RUSTSEC-2025-0075`, `0080`, `0081`, `0098`, `0100`. These are maintenance findings rather than newly demonstrated exploits. Their transitive Tauri dependency paths require follow-up; no unsafe mass dependency replacement or suppression was introduced.
 - The OSV/npm results are dated external-database evidence, not a permanent absence-of-vulnerabilities guarantee. Compiler/CLI/installer tool graphs and unidentified vendored snapshots are not covered by the 502-package query.
 
+## Native SDK and compiler material follow-up
+
+The `webview2-com-sys 0.38.2` MSVC binding statically links `WebView2LoaderStatic`. Its x64 library matches the [official Microsoft SDK 1.0.3650.58 package](https://www.nuget.org/packages/Microsoft.Web.WebView2/1.0.3650.58) byte-for-byte: SHA-256 `0659b741bde6348d4c4a6ec4ceb9af50e3d0048ed9cd3c8659bccbb61fde55ee`. The SDK archive SHA-256 is `911a472128c82ac8baa0c486c23342cc9dd6e7dc50d754e676726642ca065c60`. Its nuspec points to `LICENSE.txt`; both that Microsoft BSD-style text and `NOTICE.txt` are now committed and incorporated into generated installer notices. Wrapper MIT and Evergreen Runtime terms remain separate.
+
+`tauri-ui/app.js` begins with TypeScript 5.8.3's emitted `__createBinding`, `__exportStar` and `__importDefault` routines. The locked compiler's complete Apache-2.0 license and upstream third-party notice file are retained in source and generated notices. The helper-prefix digest identifies the exact reviewed output; no npm runtime import or compiler package is added to the app.
+
+`bundled-materials.mjs` verifies actual Cargo registry loader bytes, wrapper and installed/locked compiler versions, emitted helper bytes and full legal-file hashes before generating notices. `test:bundled-materials` rejects altered native bytes, versions, helper output, missing/edited notices, unsupported targets and escaping paths. Existing Cargo/vendored notice requirements remain intact.
+
+The locked Tauri bundler uses NSIS 3.11 (archive SHA-1 `EF7FF767E5CBD9EDD22ADD3A32C9B8F4500BB10D`) and `nsis-tauri-utils 0.5.3` (DLL SHA-1 `75197FEE3C6A814FE035788D1C34EAD39349B860`). NSIS's full COPYING text includes CPL-1.0 and the explicit LZMA linking exception. The additional plug-in's upstream declares Apache-2.0/MIT, but this is not yet a complete inventory of its compiled transitive components. That remaining binary review must not be inferred from the application's Cargo.lock.
+
 ## Validation and remaining exit gates
 
 Local `test:pre1-dependency-notices`, installer source contract, validation-link audit and `git diff --check` passed. The new registered regression executes the production policy with affected/prerelease TLS versions, unreviewed local/git origins, unknown/compound/missing licenses, modified vendored bytes and missing coverage. It also executes the shipped Preact VNode distinction and checks the current AMD imports/local providers and installed notice resources. Full new locked Windows compilation and regenerated notices remain CI evidence, not claimed as local passes.
 
 Before Track 16 can become PASS:
 
-1. Required Windows checks must pass on the final patch/lock, including refreshed inventory, classification, generated notices and native compilation/tests.
-2. Complete the non-Cargo binary inventory: `webview2-com-sys 0.38.2` ships native Microsoft loader files; the local x64 loader reports SDK `1.0.3650.58`. Confirm the applicable Microsoft SDK redistribution terms and notice treatment separately from the Rust wrapper's MIT license. Preserve the configured Evergreen download-bootstrapper path.
-3. Review NSIS 3.11/LZMA and the bundled installer plug-ins against their actual distributions; the [NSIS license](https://nsis.sourceforge.io/License) includes an explicit LZMA linking exception. A Cargo-only notice list is not proof of this packaging review.
-4. Resolve compiler-emitted helper attribution and the exact downstream Preact provenance boundary. No upstream version has been guessed and no runtime code has been replaced during this pass.
+1. Required Windows checks must pass on the final notice extension, including generation against the actual loader, locked graph and native tests. The rustls patch's CI is already passed; no signed installer incorporating the follow-up is claimed.
+2. Finish NSIS 3.11/LZMA and installer plug-in distribution review, including their compiled transitive components and required material. A Cargo-only application list does not prove this.
+3. Resolve the exact downstream Preact provenance boundary. No upstream version has been guessed and no runtime code has been replaced during this pass.
 
 Track 14's installed-client manipulation test is still required and **not waived** by the owner asking to continue. Standalone signature rejection is not that test. Stable and Preview remain the only channels; no QA setup, new signing key, tag or release was created. GitHub cleanup remains Track 19, after acceptance.

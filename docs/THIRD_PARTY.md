@@ -1,8 +1,15 @@
 # Third-party material in the public source tree
 
-The project's existing license is in [LICENSE](../LICENSE). Copied third-party material retains the notices below. This document supplies the notices for the public source checkout; the Windows installer also includes the generated `THIRD_PARTY_NOTICES.txt` covering its Cargo runtime graph and vendored frontend components.
+The project's existing license is in [LICENSE](../LICENSE). Copied third-party material retains the notices below. The Windows installer includes generated `THIRD_PARTY_NOTICES.txt` covering its Cargo runtime graph, vendored frontend, Microsoft loader and compiler-emitted helpers.
 
-The checked npm package directories are build/typecheck inputs and are not vendored in this checkout; local compatibility modules provide the emitted runtime imports. Compiler-emitted helper routines, native SDK components and installer components are separate parts of the ongoing [Track 16 distribution review](audits/PRE_1_0_16_DEPENDENCIES_NOTICES.md). Cargo dependencies are obtained from their locked registry sources rather than vendored in this repository. The generated installer notices preserve their legal texts and exact source-archive references; they are not yet a complete inventory of every native/installer binary contribution.
+The checked npm package directories are build/typecheck inputs; local compatibility modules provide the emitted runtime imports. Some TypeScript helper code is emitted into the shipped bundle. Cargo dependencies are obtained from locked registry sources. Installer plug-in review and exact Preact lineage remain open in the [Track 16 review](audits/PRE_1_0_16_DEPENDENCIES_NOTICES.md); the current notices are not a complete distribution sign-off.
+
+## Native SDK and emitted compiler material
+
+- Microsoft.Web.WebView2 SDK 1.0.3650.58: [Microsoft license](third-party/Microsoft-WebView2-SDK-LICENSE.txt) and [upstream notices](third-party/Microsoft-WebView2-SDK-NOTICE.txt). The x64 static loader shipped in `webview2-com-sys 0.38.2` exactly matches the official SDK binary. These are the loader SDK's terms, separate from the Rust wrapper and the Evergreen Runtime.
+- TypeScript 5.8.3 emitted helpers: [Apache-2.0 license](third-party/TypeScript-LICENSE.txt) and [upstream third-party notices](third-party/TypeScript-ThirdPartyNoticeText.txt). The compiler package itself is not installed with the app. Its original legal material is retained; no claim is made that an alternative tslib license covers the emitted bytes.
+
+The package-wide NOTICE files are preserved in full; this does not mean every component mentioned in those files is linked into the application. `release-spec/bundled-materials.json` pins provenance and legal-file hashes. Generation rejects changed loader bytes, compiler/wrapper versions, helper output or legal texts until reviewed. It preserves existing upstream terms without changing the project license.
 
 ## Preact downstream runtime
 

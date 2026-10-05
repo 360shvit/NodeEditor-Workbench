@@ -1,6 +1,6 @@
 # Hytale Generator Workbench — Current Product Guide
 
-**Applies to:** v0.11.35 source line.
+**Applies to:** the current release contract.
 **Document type:** living documentation.
 
 ## 1. Opening and navigating a project
@@ -79,4 +79,4 @@ The About section exposes an update channel selector plus explicit **Check for u
 
 Installed NSIS builds are the automatic-update target. Update artifacts must be signed and are verified against the committed public updater key. Stable and preview use separate rolling GitHub manifest endpoints. Raw/development builds are not supported distribution artifacts and do not self-update.
 
-The current v0.11.35 source candidate intentionally reports updater deployment as unavailable until the real GitHub repository, public verification key, checked dependency locks and CI signing secrets are configured. In that state, checking for updates performs no network request.
+The published Preview installer supports signed updates. Choose Preview to check for prereleases; Stable only offers stable versions. A check can report that no newer version is available. A raw/development build or an installation without the required updater configuration reports updates as unavailable. Keep staged edits saved or discarded before choosing **Install & restart**.

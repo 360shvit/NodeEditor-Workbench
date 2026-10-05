@@ -4,6 +4,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { bundledMaterials } from './bundled-materials.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const CARGO_MANIFEST = path.join(ROOT, 'src-tauri', 'Cargo.toml');
@@ -193,9 +194,15 @@ try {
   const textGroups = new Map();
   const evidence = [];
 
-  for (const pkg of runtime) {
+  const materials = runtime.map(pkg => {
     const identity = `${pkg.ecosystem}:${pkg.name}@${pkg.version ?? 'vendored'}`;
-    const material = legalMaterial(identity, pkg);
+    return { identity, pkg, material: legalMaterial(identity, pkg) };
+  });
+  for (const entry of bundledMaterials(ROOT, target, cargoPackages)) {
+    materials.push({ identity: entry.identity, pkg: { license: entry.license }, material: { ...entry, effectiveLicense: entry.license } });
+  }
+  materials.sort((a, b) => a.identity.localeCompare(b.identity));
+  for (const { identity, pkg, material } of materials) {
     if (!material.source) throw new Error(`Runtime package lacks a source reference: ${identity}`);
     if (!material.files.length) throw new Error(`Runtime package lacks license material: ${identity}`);
 
@@ -227,8 +234,10 @@ try {
     `Windows target: ${target}`,
     '',
     'This file is generated from the checked dependency locks and the actual',
-    'Windows runtime dependency graph. Build-only and other-target dependencies',
-    'are intentionally excluded from this binary-distribution notice.',
+    'Windows runtime dependency graph, plus reviewed native SDK material and',
+    'compiler-emitted helpers. Compiler tools and other-target packages themselves',
+    'are not shipped. Package-wide upstream NOTICE files are retained in full;',
+    'their inclusion does not assert that every listed component is linked.',
     '',
     'Runtime components',
     '==================',

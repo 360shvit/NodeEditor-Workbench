@@ -6,7 +6,7 @@
 
 ## Version identity
 
-`version.semver` is the only public updater ordering identity. `revision` (`rN`) is an internal QA/artifact label and never decides update precedence. A public updater release must use `r1`; if a published build needs a fix, bump SemVer rather than republishing the same SemVer.
+`version.semver` is the only public updater ordering identity. `revision` (`rN`) is an internal artifact label and never decides update precedence or creates another release channel. Stable and Preview are the only channels. A public updater release must use `r1`; if a published build needs a fix, bump SemVer rather than republishing the same SemVer.
 
 Examples:
 
