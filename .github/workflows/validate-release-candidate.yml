@@ -82,6 +82,9 @@ jobs:
         run: |
           cargo tauri build --bundles nsis --config src-tauri/tauri.installer.conf.json -- --locked
 
+      - name: Verify installer toolset provenance
+        run: node scripts/verify-installer-materials.mjs --evidence evidence/installer-toolset.json
+
       - name: Stage and validate non-published release surface
         shell: pwsh
         env:
@@ -109,6 +112,7 @@ jobs:
             evidence/third-party-inventory.json
             evidence/third-party-distribution.json
             evidence/third-party-notices.json
+            evidence/installer-toolset.json
             evidence/release-public-sha256.txt
           if-no-files-found: error
           retention-days: 7

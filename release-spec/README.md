@@ -48,6 +48,10 @@ The surface contains, as applicable:
 
 A prerelease surface must not contain `latest.json`. Therefore publishing an RC/beta cannot mutate the Stable rolling channel.
 
+## Installer material
+
+Installer notices and the exact NSIS toolset file index are reviewed in `installer-materials.json` and `nsis-toolset-files.json`. Both protected build paths and the local installer helper verify the actual toolset after packaging and before staging. Candidate evidence records this verification; it does not replace signature verification or resolve the upstream plug-in's missing transitive lock. See [installer material evidence](../docs/audits/INSTALLER_MATERIALS.md).
+
 ## Static updater manifest
 
 The generated static JSON follows Tauri v2's required structure: valid SemVer `version`, plus `platforms.windows-x86_64.url` and the **contents** of the generated signature file. URLs target the immutable version release `v<semver>` rather than a rolling asset.

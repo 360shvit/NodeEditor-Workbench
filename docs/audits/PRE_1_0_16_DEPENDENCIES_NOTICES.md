@@ -2,7 +2,7 @@
 
 **Status:** IN REVIEW — rustls remediation and extended SDK/compiler notices are validated; Preact provenance is resolved below. Installer plug-in distribution review remains open. This is not full distribution-compliance sign-off.
 **Baseline:** `e0654d54104fec2601b0a2013059dc6ab56a1ad3` after Track 15 / PR #35.
-**Review dates:** 2026-10-04–05.
+**Review dates:** 2026-10-04–06.
 
 ## Reviewed application graph
 
@@ -68,6 +68,8 @@ The `webview2-com-sys 0.38.2` MSVC binding statically links `WebView2LoaderStati
 The locked Tauri bundler uses NSIS 3.11 (archive SHA-1 `EF7FF767E5CBD9EDD22ADD3A32C9B8F4500BB10D`) and `nsis-tauri-utils 0.5.3` (DLL SHA-1 `75197FEE3C6A814FE035788D1C34EAD39349B860`). NSIS's full COPYING text includes CPL-1.0 and the explicit LZMA linking exception. The additional plug-in's upstream declares Apache-2.0/MIT, but this is not yet a complete inventory of its compiled transitive components. That remaining binary review must not be inferred from the application's Cargo.lock.
 
 ## Validation and remaining exit gates
+
+**Installer follow-up, 2026-10-06:** [Detailed provenance and limitations](INSTALLER_MATERIALS.md) now record the verified NSIS 3.11 ZIP and nsis-tauri-utils 0.5.3 DLL, with a 442-file SHA-256 index. Generated notices preserve NSIS COPYING/LZMA exception, NSISdl, Modern UI 2 and both plug-in project licenses. Both protected workflows and the local installer helper compare actual toolset bytes after build and before staging; candidate artifacts retain this evidence. Material regressions and the real local toolset comparison pass. Windows CI must validate the new shell cases and complete notice generation; no signed build of this extension has been run. The plug-in's absent upstream Cargo.lock and incomplete transitive/compiler-material coverage remain open, so Track 16 is still IN REVIEW.
 
 Local dependency/bundled-material regressions, installer and validation-link checks passed. The source/document diff check excludes the four copied upstream legal files, whose original whitespace is retained. [Windows CI 37327378454](https://github.com/360shvit/NodeEditor-Workbench/actions/runs/37327378454), on PR #38 head `463cb056adb2bf7b9b14d5ce976030070a3396a7`, passed 91/91 suites, 250 soak cycles and 39 native tests. Actual notice generation verified the registry loader and produced **247 runtime/material entries and 160 distinct legal texts**. The application's Cargo/vendor classification remains 245 entries; two supplemental entries cover the loader and emitted helpers. No new signed installer is claimed by this PR validation. The subsequent Preact comparison also passed locally with the pinned official module; final PR checks remain required after follow-up changes.
 

@@ -107,7 +107,8 @@
     "test:bundled-materials": "node scripts/test-bundled-materials.mjs",
     "test:pre1-repository-hygiene": "node scripts/test-pre1-repository-hygiene.mjs",
     "test:pre1-diagnostics-privacy": "node scripts/test-pre1-diagnostics-privacy.mjs",
-    "test:pre1-performance-resources": "npm run typecheck:core && node scripts/test-pre1-performance-resources.mjs"
+    "test:pre1-performance-resources": "npm run typecheck:core && node scripts/test-pre1-performance-resources.mjs",
+    "test:installer-materials": "node scripts/test-installer-materials.mjs"
   },
   "dependencies": {
     "react": "18.3.1",
