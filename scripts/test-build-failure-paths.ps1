@@ -33,6 +33,9 @@ foreach ($case in @(
 Remove-Item Function:git
 
 $freeze = Get-Content -LiteralPath 'tools/windows/Freeze-Windows-Dependencies.cmd' -Raw
+$installerHelper = Get-Content -LiteralPath 'Build-Windows-Installer.cmd' -Raw
+$installerGate = [regex]::Match($installerHelper, '(?m)^node scripts\\verify-installer-materials\.mjs\r?\nif errorlevel 1 \(\r?\n(?:[^\r\n]+\r?\n)*?\)')
+Assert-True $installerGate.Success 'Installer provenance failure gate was not found.'
 $commands = [regex]::Matches($freeze, '(?m)^\s*(?:call )?npm [^\r\n]+\r?\n\s*if errorlevel 1 goto :failed')
 Assert-True ($commands.Count -eq 2) 'Both dependency bootstrap npm commands need failure fixtures.'
 $cliChecks = foreach ($file in @('Build-Windows-Installer.cmd', 'tools/windows/Install-Windows-Installer-Tooling.cmd', 'tools/windows/Generate-Updater-Signing-Key.cmd')) {
@@ -49,6 +52,21 @@ New-Item -ItemType Directory -Path $fixtureRoot | Out-Null
 try {
     Push-Location $fixtureRoot
     try {
+        foreach ($code in @(0, 23)) {
+            # Replace only the verifier process with a controlled exit status;
+            # execute the helper's real errorlevel/exit block in cmd.exe.
+            $probeGate = $installerGate.Value -replace '(?m)^node [^\r\n]+', "cmd /d /c exit $code"
+            $probeGate = $probeGate -replace '(?m)^  pause\r?$', '  echo FIXTURE_PAUSE'
+            $probe = "@echo off`r`n" + $probeGate + "`r`necho PROVENANCE_CONTINUED`r`nexit /b 0`r`n"
+            Set-Content -LiteralPath 'probe.cmd' -Encoding ascii -Value $probe
+            $output = & $env:ComSpec /d /c probe.cmd
+            $exitCode = $LASTEXITCODE
+            if ($code -eq 0) {
+                Assert-True ($exitCode -eq 0 -and $output -contains 'PROVENANCE_CONTINUED') 'Successful installer verification must permit staging.'
+            } else {
+                Assert-True ($exitCode -eq 1 -and $output -notcontains 'PROVENANCE_CONTINUED') 'Failed installer verification must stop before staging.'
+            }
+        }
         foreach ($command in $commands) {
             foreach ($code in @(0, 23)) {
                 Set-Content -LiteralPath 'npm.cmd' -Encoding ascii -Value "@exit /b $code"
@@ -81,5 +99,5 @@ try {
     Remove-Item -LiteralPath $resolved -Recurse -Force
 }
 
-Write-Output 'Build failure paths: PASS (3 release ancestry cases, 4 npm batch return/failure cases, 12 exact CLI identity cases).'
+Write-Output 'Build failure paths: PASS (3 release ancestry cases, 4 npm batch return/failure cases, 12 exact CLI identity cases, 2 installer provenance cases).'
 exit 0

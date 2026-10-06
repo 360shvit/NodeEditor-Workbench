@@ -1,6 +1,6 @@
 # Third-party material in the public source tree
 
-The project's existing license is in [LICENSE](../LICENSE). Copied third-party material retains the notices below. The Windows installer includes generated `THIRD_PARTY_NOTICES.txt` covering its Cargo runtime graph, vendored frontend, Microsoft loader and compiler-emitted helpers.
+The project's existing license is in [LICENSE](../LICENSE). Copied third-party material retains the notices below. The Windows installer includes generated `THIRD_PARTY_NOTICES.txt` covering its Cargo runtime graph, vendored frontend, Microsoft loader, compiler-emitted helpers and reviewed installer material.
 
 The checked npm package directories are build/typecheck inputs; local compatibility modules provide the emitted runtime imports. Some TypeScript helper code is emitted into the shipped bundle. Cargo dependencies are obtained from locked registry sources. Installer plug-in review remains open in the [Track 16 review](audits/PRE_1_0_16_DEPENDENCIES_NOTICES.md); the current notices are not a complete distribution sign-off.
 
@@ -10,6 +10,10 @@ The checked npm package directories are build/typecheck inputs; local compatibil
 - TypeScript 5.8.3 emitted helpers: [Apache-2.0 license](third-party/TypeScript-LICENSE.txt) and [upstream third-party notices](third-party/TypeScript-ThirdPartyNoticeText.txt). The compiler package itself is not installed with the app. Its original legal material is retained; no claim is made that an alternative tslib license covers the emitted bytes.
 
 The package-wide NOTICE files are preserved in full; this does not mean every component mentioned in those files is linked into the application. `release-spec/bundled-materials.json` pins provenance and legal-file hashes. Generation rejects changed loader bytes, compiler/wrapper versions, helper output or legal texts until reviewed. It preserves existing upstream terms without changing the project license.
+
+## Installer material
+
+NSIS 3.11 retains its complete [COPYING](third-party/NSIS-COPYING.txt), [NSISdl attribution](third-party/NSISdl-LICENSE.txt) and [Modern UI 2 license](third-party/NSIS-Modern-UI-2-LICENSE.txt), including the original LZMA exception. The additional nsis-tauri-utils 0.5.3 plug-in retains both [MIT](third-party/nsis-tauri-utils-LICENSE-MIT.txt) and [Apache-2.0](third-party/nsis-tauri-utils-LICENSE-APACHE.txt) texts. [Installer provenance evidence](audits/INSTALLER_MATERIALS.md) identifies the verified binaries and the remaining upstream transitive-build gap; these project-level plug-in notices do not assert complete transitive coverage.
 
 ## Preact downstream runtime
 

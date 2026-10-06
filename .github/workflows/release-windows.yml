@@ -100,6 +100,9 @@ jobs:
           HGW_DISTRIBUTION_KIND: installed
         run: |
           cargo tauri build --bundles nsis --config src-tauri/tauri.installer.conf.json -- --locked
+
+      - name: Verify installer toolset provenance
+        run: node scripts/verify-installer-materials.mjs
       - name: Stage allowlisted public release surface
         shell: pwsh
         env:

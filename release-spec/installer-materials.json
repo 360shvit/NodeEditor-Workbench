@@ -1,0 +1,70 @@
+{
+  "schemaVersion": 1,
+  "target": "x86_64-pc-windows-msvc",
+  "tauriCliVersion": "2.11.0",
+  "tauriBundlerVersion": "2.9.0",
+  "toolsetIndex": {
+    "path": "release-spec/nsis-toolset-files.json",
+    "sha256Lf": "ea477d14cec2ba008a7d155f04165a29f5580c9140a84b84c28bf1e5b0193924",
+    "files": 442
+  },
+  "nsisArchive": {
+    "url": "https://github.com/tauri-apps/binary-releases/releases/download/nsis-3.11/nsis-3.11.zip",
+    "sha256": "c7d27f780ddb6cffb4730138cd1591e841f4b7edb155856901cdf5f214394fa1",
+    "bundlerSha1": "ef7ff767e5cbd9edd22add3a32c9b8f4500bb10d"
+  },
+  "pluginBinary": {
+    "url": "https://github.com/tauri-apps/nsis-tauri-utils/releases/download/nsis_tauri_utils-v0.5.3/nsis_tauri_utils.dll",
+    "sha256": "5ba143b5db4a87d32d6e7802e033330aae56cbceabe0d1e3ba41948385ad4709",
+    "bundlerSha1": "75197fee3c6a814fe035788d1c34ead39349b860",
+    "sourceCommit": "13d9edd27b69310e108d6fbd49f90992f8a05390",
+    "upstreamTransitiveLock": "not published; unresolved"
+  },
+  "components": [
+    {
+      "identity": "installer:NSIS@3.11",
+      "license": "Zlib AND CPL-1.0 (with upstream LZMA linking exception)",
+      "source": "https://nsis.sourceforge.io/License",
+      "sourceArchive": "https://sourceforge.net/projects/nsis/files/NSIS%203/3.11/nsis-3.11-src.tar.bz2/download",
+      "legalFiles": [
+        {
+          "path": "docs/third-party/NSIS-COPYING.txt",
+          "sha256Lf": "dc0f74a312c08ffc900548a67ae9a3670ed28ad25a3afda1fe0504da16f89361",
+          "upstreamPath": "COPYING",
+          "upstreamSha256": "e7dd514003ab96cb3ddccbc028fe5c795fccf57dc41f21cfb9d4dd16ead23bf5",
+          "encoding": "utf-8"
+        },
+        {
+          "path": "docs/third-party/NSISdl-LICENSE.txt",
+          "sha256Lf": "daab4a8b00759c9a0712d9d15583ff947d2b6aa0db72e5292711c20986e4a0d2",
+          "upstreamPath": "Docs/NSISdl/License.txt",
+          "upstreamSha256": "326e587f36ca58e14bd09cca153f9e69f1c5ed701189aa47d2d0627af7e16280",
+          "encoding": "utf-8"
+        },
+        {
+          "path": "docs/third-party/NSIS-Modern-UI-2-LICENSE.txt",
+          "sha256Lf": "069755af9ef075853b2d9cb9542adf7e3f6a06eceb1a1c8419caf97cb78d2ed8",
+          "upstreamPath": "Docs/Modern UI 2/License.txt",
+          "upstreamSha256": "d5957bd99460eb21148bd2695eeb5a3718abae6b118040a4678926da3f4cfbc0",
+          "encoding": "windows-1252"
+        }
+      ]
+    },
+    {
+      "identity": "installer:nsis-tauri-utils@0.5.3",
+      "license": "MIT OR Apache-2.0",
+      "source": "https://github.com/tauri-apps/nsis-tauri-utils/tree/13d9edd27b69310e108d6fbd49f90992f8a05390",
+      "sourceArchive": "https://github.com/tauri-apps/nsis-tauri-utils/archive/13d9edd27b69310e108d6fbd49f90992f8a05390.tar.gz",
+      "legalFiles": [
+        {
+          "path": "docs/third-party/nsis-tauri-utils-LICENSE-MIT.txt",
+          "sha256Lf": "20ae1ba81c7eddc620dfe2de650f6a453b4979f843c2482abfe8764264a24a49"
+        },
+        {
+          "path": "docs/third-party/nsis-tauri-utils-LICENSE-APACHE.txt",
+          "sha256Lf": "809fa1ed21450f59827d1e9aec720bbc4b687434fa22283c6cb5dd82a47ab9c0"
+        }
+      ]
+    }
+  ]
+}

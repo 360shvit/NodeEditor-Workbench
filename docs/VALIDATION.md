@@ -52,7 +52,7 @@ On the pinned Windows owner toolchain, release candidates additionally require:
 - `cargo test --locked`;
 - raw release EXE build and manual application smoke;
 - signed NSIS build for a real distribution candidate;
-- release-surface staging/check;
+- installer toolset provenance verification followed by release-surface staging/check;
 - signature and SHA-256 evidence verification.
 
 Manual smoke should cover project open/reopen, Explorer/Search, Project Graph, Layout/Visual tooling, staged-change review/discard, Settings, session/window persistence and normal close/restart behavior.
@@ -71,7 +71,9 @@ The updater remains non-deployed while the committed public key is unconfigured 
 
 ## Third-party/license gate
 
-`scripts/audit-third-party-inventory.mjs` derives the dependency inventory from the committed `package-lock.json` and `src-tauri/Cargo.lock`/`cargo metadata --locked` graph and fails when a resolved third-party package lacks declared license metadata. Distribution classification requires reviewed origins, runtime license expressions and vendored bytes. Notice generation additionally verifies the native Microsoft loader and compiler-emitted helper provenance against `release-spec/bundled-materials.json`, then includes their full upstream legal material. New wrapper/compiler versions or changed loader/helper/legal bytes require renewed review. Remaining installer plug-in/Preact lineage work stays visible in Track 16; a successful generator is not complete legal sign-off.
+`scripts/audit-third-party-inventory.mjs` derives the dependency inventory from the committed `package-lock.json` and `src-tauri/Cargo.lock`/`cargo metadata --locked` graph and fails when a resolved third-party package lacks declared license metadata. Distribution classification requires reviewed origins, runtime license expressions and vendored bytes. Notice generation additionally verifies the native Microsoft loader and compiler-emitted helper provenance against `release-spec/bundled-materials.json`, then includes their full upstream legal material. New wrapper/compiler versions or changed loader/helper/legal bytes require renewed review. Preact's 10.5.13 code relationship is resolved in Track 16.
+
+Installer notice generation validates `release-spec/installer-materials.json`. After packaging, `scripts/verify-installer-materials.mjs` rejects changed, additional or missing files in the reviewed 442-file NSIS toolset before release-surface staging. Candidate evidence retains its index digest and count. [Installer material evidence](audits/INSTALLER_MATERIALS.md) records the original notices, encoding and binary hashes, post-build scope, and unresolved plug-in transitive provenance. Successful generation/toolset verification is not complete legal sign-off or an installed-client test.
 
 The repository hygiene gate checks tracked public-source paths and local Markdown links, complementing existing secret, unused-carry and embedded-parity checks. [Final installed acceptance](audits/PRE_1_0_18_FINAL_ACCEPTANCE.md) records the remaining manual cases individually; no standalone verifier substitutes for installed-client manipulation evidence.
 

@@ -106,6 +106,13 @@ if errorlevel 1 (
   exit /b 1
 )
 
+node scripts\verify-installer-materials.mjs
+if errorlevel 1 (
+  echo Installer build BLOCKED: installer toolset provenance verification failed.
+  pause
+  exit /b 1
+)
+
 set "NSISDIR=%CARGO_TARGET_DIR%\release\bundle\nsis"
 node scripts\release-surface.mjs --installer-dir "%NSISDIR%" --repository "%HGW_GITHUB_REPOSITORY%"
 if errorlevel 1 (

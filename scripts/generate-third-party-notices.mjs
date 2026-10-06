@@ -5,6 +5,7 @@ import crypto from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { bundledMaterials } from './bundled-materials.mjs';
+import { installerReview } from './installer-materials.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const CARGO_MANIFEST = path.join(ROOT, 'src-tauri', 'Cargo.toml');
@@ -198,7 +199,7 @@ try {
     const identity = `${pkg.ecosystem}:${pkg.name}@${pkg.version ?? 'vendored'}`;
     return { identity, pkg, material: legalMaterial(identity, pkg) };
   });
-  for (const entry of bundledMaterials(ROOT, target, cargoPackages)) {
+  for (const entry of [...bundledMaterials(ROOT, target, cargoPackages), ...installerReview(ROOT, target).materials]) {
     materials.push({ identity: entry.identity, pkg: { license: entry.license }, material: { ...entry, effectiveLicense: entry.license } });
   }
   materials.sort((a, b) => a.identity.localeCompare(b.identity));
@@ -235,8 +236,8 @@ try {
     '',
     'This file is generated from the checked dependency locks and the actual',
     'Windows runtime dependency graph, plus reviewed native SDK material and',
-    'compiler-emitted helpers. Compiler tools and other-target packages themselves',
-    'are not shipped. Package-wide upstream NOTICE files are retained in full;',
+    'compiler-emitted helpers and installer material. Compiler tools and',
+    'other-target packages themselves are not shipped. Package-wide upstream NOTICE files are retained in full;',
     'their inclusion does not assert that every listed component is linked.',
     '',
     'Runtime components',
