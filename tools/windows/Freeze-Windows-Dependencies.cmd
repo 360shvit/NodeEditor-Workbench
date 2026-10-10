@@ -2,7 +2,7 @@
 setlocal
 cd /d "%~dp0\..\.."
 
-echo Hytale Generator Workbench v0.11.36-rc.5-r1 - Dependency Lock Capture
+echo Hytale Generator Workbench v0.11.36-rc.6-r1 - Dependency Lock Capture
 
 echo.
 echo This command is intentionally separate from the normal release build.
@@ -59,9 +59,9 @@ if errorlevel 1 goto :failed
 
 echo.
 echo Capturing dependency evidence...
-cargo tree --locked --manifest-path src-tauri\Cargo.toml > build\cargo-tree-v0.11.36-rc.5.txt
+cargo tree --locked --manifest-path src-tauri\Cargo.toml > build\cargo-tree-v0.11.36-rc.6.txt
 if errorlevel 1 goto :failed
-cargo metadata --locked --format-version 1 --manifest-path src-tauri\Cargo.toml > build\cargo-metadata-v0.11.36-rc.5.json
+cargo metadata --locked --format-version 1 --manifest-path src-tauri\Cargo.toml > build\cargo-metadata-v0.11.36-rc.6.json
 if errorlevel 1 goto :failed
 copy /y "src-tauri\Cargo.lock" "build\Cargo.lock.capture" >nul
 if errorlevel 1 goto :failed
@@ -73,7 +73,7 @@ echo PASS: package-lock.json and Cargo.lock were created or verified; locked res
 echo.
 echo IMPORTANT FOR THE VERIFIED SOURCE:
 echo   Keep package-lock.json and src-tauri\Cargo.lock as checked dependency evidence.
-echo   v0.11.36-rc.5-r1 keeps that exact verified lock as local build evidence before a release build
+echo   v0.11.36-rc.6-r1 keeps that exact verified lock as local build evidence before a release build
 echo   is retained in the verified source and rebuilt with --locked.
 echo.
 pause
