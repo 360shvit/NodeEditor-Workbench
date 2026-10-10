@@ -43,7 +43,7 @@ This is a migration outline, not an executed or validated migration. Do not disa
 ## Acceptance still required
 
 - Installed-client manipulation, interruption/retry, download-time edits/Apply and remaining Stable/downgrade cases in [Track 14](PRE_1_0_14_UPDATER_RELEASE.md).
-- Installer plug-in transitive/compiler provenance and a fresh signed candidate in [Track 16](PRE_1_0_16_DEPENDENCIES_NOTICES.md).
+- A fresh signed candidate with verified packaged material in [Track 16](PRE_1_0_16_DEPENDENCIES_NOTICES.md). Per the owner's 2026-10-10 scope decision, unavailable historical upstream build details are a documented limit, not an external-inquiry blocker.
 - The identified final candidate's [manual acceptance matrix](PRE_1_0_18_FINAL_ACCEPTANCE.md), followed by the reviewed cleanup inventory. No cleanup deletion occurred here.
 
 Main source CI [37492912413](https://github.com/360shvit/NodeEditor-Workbench/actions/runs/37492912413) passed on the reviewed baseline. It predates these administration changes and is not a deployment or installed-client test. A later documentation PR's required CI must be checked independently before merge.

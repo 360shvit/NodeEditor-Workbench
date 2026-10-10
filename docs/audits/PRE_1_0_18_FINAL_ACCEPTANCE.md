@@ -36,4 +36,4 @@ The installed client accepts only compiled HTTPS GitHub endpoints and versioned 
 
 ## Final exit gates
 
-Close Track 14 installed/security/governance proof and Track 16 distribution provenance, complete the matrix on an identified final candidate, verify protected release controls and private vulnerability reporting, and obtain owner sign-off on remaining known limits. A green source build does not close this track. Then perform the reviewed Track 19 cleanup and present the release-gate report before seeking explicit public release approval.
+Close Track 14 installed/security/governance proof and Track 16 signed-candidate material verification, complete the matrix on an identified final candidate, verify protected release controls and private vulnerability reporting, and obtain owner sign-off on remaining known limits. The owner's 2026-10-10 decision treats unavailable historical upstream build details as a documented audit limit; no external inquiry or response is required. A green source build does not close this track. Then perform the reviewed Track 19 cleanup and present the release-gate report before seeking explicit public release approval.

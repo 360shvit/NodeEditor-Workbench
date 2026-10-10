@@ -90,7 +90,9 @@ Track 19's read-only inventory is in `docs/audits/PRE_1_0_19_GITHUB_CLEANUP.md`:
 
 **Administration follow-up, 2026-10-08:** [Repository release controls](audits/REPOSITORY_RELEASE_CONTROLS.md) supersedes the earlier unresolved administrator-bypass/private-reporting observations above. Release environment bypass is now disabled; full Action SHA pinning is provider-enforced; dependency and malware alerts are enabled without automatic dismissal. Private Vulnerability Reporting and secret/push protection were verified enabled. Version-asset immutability remains unresolved because rolling Stable/Preview manifests must stay mutable. No release or test result is implied by these settings changes.
 
-**Current release blockers:** Track 14 installed-client E2E/version-asset governance, Track 16 installer distribution provenance/final signed candidate and Track 18 final acceptance. Track 17 source/doc hygiene is complete; Track 19 cleanup execution waits for acceptance.
+**Evidence scope, 2026-10-10:** Available installer-material review and PR #39 CI passed (92 suites, 250 soak cycles, 39 native tests, 249 material entries/164 legal texts). The owner declined external provenance inquiries: unavailable historical upstream dependency/compiler details remain unverified and documented, but are no longer an automatic blocker or a prerequisite for candidate packaging. Existing technical, signature and notice gates remain unchanged.
+
+**Current release blockers:** Track 14 installed-client E2E/version-asset governance, Track 16 final signed-candidate material verification and Track 18 final acceptance. Track 17 source/doc hygiene is complete; Track 19 cleanup execution waits for acceptance.
 
 ## Final roadmap item — GitHub cleanup
 
