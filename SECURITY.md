@@ -4,7 +4,9 @@ Hytale Generator Workbench is still in pre-1.0 acceptance. Security-sensitive is
 
 ## Reporting
 
-Until a dedicated security contact or GitHub private-vulnerability-reporting channel is configured, do not publish sensitive reproduction details. Repository bootstrap must enable GitHub Private Vulnerability Reporting (or document an equivalent private contact) before the source repository is advertised publicly.
+Use GitHub Private Vulnerability Reporting from this repository's [Security advisories](https://github.com/360shvit/NodeEditor-Workbench/security/advisories) page: choose **Report a vulnerability** to contact the maintainers privately. The channel was verified enabled on 2026-10-08. If it is unavailable, do not post sensitive reproduction details in a public issue; wait for a private reporting route.
+
+Repository maintainers must ensure GitHub Private Vulnerability Reporting (or an equivalent documented private contact) is available before the source repository is advertised publicly. Recheck this requirement before public promotion; a dated settings observation does not guarantee future availability.
 
 A valid report should include the affected version, platform, impact, minimal reproduction conditions and whether project data, filesystem authority, updater/signing material or release integrity is involved. Do not include private signing keys, user project contents or unrelated personal data.
 

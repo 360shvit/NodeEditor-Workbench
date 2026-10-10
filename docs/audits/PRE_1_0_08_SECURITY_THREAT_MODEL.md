@@ -57,6 +57,8 @@ Release private-key values remain GitHub secrets and are not committed, packaged
 
 ## Security reporting / operational gate
 
+**Follow-up, 2026-10-08:** GitHub Settings and the repository Security overview directly showed Private Vulnerability Reporting enabled. `SECURITY.md` now points to the private reporting route. This closes the missing administration evidence in finding 08-D for this dated snapshot; source CI still cannot prove future settings. See [repository release controls](REPOSITORY_RELEASE_CONTROLS.md).
+
 `SECURITY.md` already requires GitHub Private Vulnerability Reporting or an equivalent private contact before public promotion and explicitly tells reporters not to place exploit details or private signing material in public issues.
 
 The repository-admin state for Private Vulnerability Reporting cannot be proven through the available source/CI interface, so this audit does **not** claim that the setting is enabled. Confirming that admin setting (or documenting an equivalent private contact) remains a manual operational prerequisite before stable 1.0/public promotion. This is not a source-code blocker and is intentionally kept visible for final acceptance rather than silently waived.

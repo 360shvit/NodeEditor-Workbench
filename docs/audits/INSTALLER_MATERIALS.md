@@ -1,6 +1,6 @@
 # Installer material provenance — 2026-10-06
 
-**Status:** source/legal material and local toolset verified; plug-in transitive build provenance remains unresolved. This is not complete Track 16 sign-off or evidence of a new signed candidate.
+**Status:** available source/legal material and local toolset verified; unavailable historical plug-in build details remain a documented review limit. Fresh signed-candidate verification is pending.
 
 ## Reviewed inputs
 
@@ -38,4 +38,6 @@ Regression fixtures cover changed/extra/missing binaries, modified legal text, i
 
 The upstream release source has no Cargo.lock. Its workspace declares `windows-sys 0.61.2`; the DLL crate uses `semver 1.0` and the workspace `nsis-plugin-api`; the latter uses the `nsis-fn` procedural macro. The macro's proc-macro2/quote/syn graph is build-time code, not evidence of additional DLL runtime components. The release tag identifies the project's source, but does not pin all resolved dependency patch versions or the compiler's contributed material.
 
-The original project licenses and an exact published DLL hash therefore do not establish complete transitive notice coverage. No exact semver dependency version, missing upstream lock, reconstructed binary equivalence or full compliance result is invented. Complete that review and build an identified fresh signed candidate before Track 16 can become PASS. Existing public rc.5 and the older same-version candidate remain unchanged.
+The original project licenses and an exact published DLL hash therefore do not establish complete transitive notice coverage. No exact semver dependency version, missing upstream lock, reconstructed binary equivalence or full compliance result is invented.
+
+On 2026-10-10 the owner accepted unavailable historical upstream details as a limit of this audit and declined external evidence requests. No upstream issue was sent; further packaging does not depend on a maintainer response. This changes the audit scope, not any technical verification gate or license text. The official asset/source identities and preserved notices remain the available evidence. The final report must retain this limit. Build and verify an identified fresh signed candidate to complete the remaining Track 16 packaging evidence; public rc.5 and the older same-version candidate remain unchanged.
