@@ -1,1 +1,1 @@
-v0.11.36-rc.5-r1-installed-updater-validation
+v0.11.36-rc.6-r1-final-installed-acceptance

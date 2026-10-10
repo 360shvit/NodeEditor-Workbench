@@ -5,12 +5,12 @@
     "identifier": "com.hytalegenerator.workbench"
   },
   "version": {
-    "semver": "0.11.36-rc.5",
+    "semver": "0.11.36-rc.6",
     "revision": "r1",
-    "display": "0.11.36-rc.5-r1",
-    "milestone": "v0.11.36-rc.5",
-    "milestoneName": "Installed Updater Validation",
-    "buildId": "v0.11.36-rc.5-r1-installed-updater-validation"
+    "display": "0.11.36-rc.6-r1",
+    "milestone": "v0.11.36-rc.6",
+    "milestoneName": "Final Installed Acceptance",
+    "buildId": "v0.11.36-rc.6-r1-final-installed-acceptance"
   },
   "validation": {
     "profile": "github-updater-deep-clean-v1",
@@ -20,7 +20,7 @@
   "updater": {
     "prepared": true,
     "enabled": true,
-    "integrationMilestone": "v0.11.36-rc.5-r1",
+    "integrationMilestone": "v0.11.36-rc.6-r1",
     "provider": "GitHub Releases",
     "framework": "Tauri v2 updater",
     "defaultChannel": "stable",
