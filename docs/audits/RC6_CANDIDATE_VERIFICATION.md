@@ -1,6 +1,6 @@
 # Preview rc.6 — signed candidate verification
 
-**Status:** PASS for candidate build, cryptographic verification and packaged material. Installation, installed-client negative tests and public publication are NOT RUN by this record.
+**Status:** PASS for candidate build, cryptographic verification and packaged material. Subsequent manual installation is recorded separately in [installed acceptance](RC6_INSTALLED_ACCEPTANCE.md); installed-client signature-negative tests and public publication remain NOT RUN.
 **Build date:** 2026-10-12. **Independent verification:** 2026-10-15.
 **Source:** `57195937f34ca48914fa85b1ce384652e47aadf2`, tree `c4710f557f45c00f725b3f3e50f5890a6682be3a`, version `0.11.36-rc.6-r1` / updater `0.11.36-rc.6`.
 
@@ -42,7 +42,7 @@ For reproducing the inspection-tool provenance: official `7z2604-x64.exe` has SH
 
 ## Negative checks and remaining boundaries
 
-In-memory changes to the downloaded installer and to its signature were each rejected by the standalone verifier. **This does not establish rejection inside the installed application.** The existing installed rc.5 executable still had its recorded hash `2df801761e0f18152ce18288f262a0c4cb1394570538a948f26de61418786a4a` on 2026-10-15; no candidate installation or new installed E2E observation is claimed.
+In-memory changes to the downloaded installer and to its signature were each rejected by the standalone verifier. **This does not establish rejection inside the installed application.** Before the owner's subsequent manual installation on 2026-10-15, installed rc.5 still had its recorded hash `2df801761e0f18152ce18288f262a0c4cb1394570538a948f26de61418786a4a`. The separate [installed acceptance record](RC6_INSTALLED_ACCEPTANCE.md) documents rc.6 startup/resources, lower-version Preview no-offer and the unresolved Windows registration discrepancy; it does not claim an rc.5-to-rc.6 updater installation.
 
 The candidate's fresh distribution evidence classifies `glib 0.18.5` as `other-target`, not resolved for `x86_64-pc-windows-msvc`. GitHub Dependabot alert #1 / `GHSA-wrw7-89jp-8q8g` matches the already documented advisory and was left open. This Windows conclusion does not clear Linux/macOS distribution or all future advisories.
 

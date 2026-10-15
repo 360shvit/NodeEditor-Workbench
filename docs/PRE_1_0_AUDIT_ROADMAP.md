@@ -96,6 +96,8 @@ Track 19's read-only inventory is in `docs/audits/PRE_1_0_19_GITHUB_CLEANUP.md`:
 
 **Current release blockers:** Track 14 installed-client E2E/version-asset governance and Track 18 final acceptance. Track 16 source/material review and signed-candidate verification are complete within the agreed evidence scope. Track 17 source/doc hygiene is complete; Track 19 cleanup execution waits for acceptance.
 
+**Installed follow-up, 2026-10-15:** [rc.6 installed acceptance](audits/RC6_INSTALLED_ACCEPTANCE.md) records the owner's completed manual installation/start and no newer offer while the live Preview feed remains on rc.5. The installed application, uninstaller, license and notices match the inspected candidate. The Windows uninstall entry still reports rc.5, so installer identity acceptance remains partial pending investigation. This neither replaces the earlier successful rc.4-to-rc.5 updater test nor closes the installed-client manipulation and remaining manual cases.
+
 ## Final roadmap item — GitHub cleanup
 
 Track 19 is the final roadmap item, after the audits and acceptance work. Scheduling it does not authorize deletion now.
