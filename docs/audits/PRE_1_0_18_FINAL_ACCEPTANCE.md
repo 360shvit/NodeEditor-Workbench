@@ -3,7 +3,7 @@
 **Status:** BLOCKED — signed rc.6 candidate/material verified and first installed checks confirmed; Windows registration discrepancy and remaining manual cases are open.
 **Prepared:** 2026-10-04, source baseline `c350ca6817aac94a21d4b999f79b9e097c7d84ca`.
 
-The existing published/installed `0.11.36-rc.5` and the same-version Track 15 build do not contain later dependency/notice changes. Do not install that same-version build as a new update or replace the published assets. A final candidate needs the completed source audits, a fresh SemVer, successful required CI and an approved protected signing build. Publication and final Stable promotion remain separate owner approvals.
+At preparation, published/installed `0.11.36-rc.5` and the same-version Track 15 build did not contain later dependency/notice changes. Do not install that same-version build as a new update or replace the published assets. The rc.6 candidate now contains the completed source audits and has a fresh SemVer, successful required CI and an approved protected signing build. Publication and final Stable promotion remain separate owner approvals.
 
 ## Evidence record
 
