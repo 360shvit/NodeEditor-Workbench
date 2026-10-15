@@ -1,8 +1,8 @@
 # Pre-1.0 Audit 16 — Dependencies, licenses and distribution
 
-**Status:** IN REVIEW — available source/material checks are complete; a fresh signed candidate still needs verification. Unavailable historical upstream build details are a documented review limit, not a requirement to contact upstream. This is not full distribution-compliance sign-off.
+**Status:** PASS within the agreed review scope — source/material checks, fresh signed rc.6 candidate, actual embedded notices and updater signature verified. Unavailable historical upstream build details remain documented limits, not verified facts or a requirement to contact upstream. This is not an unrestricted distribution-compliance guarantee.
 **Baseline:** `e0654d54104fec2601b0a2013059dc6ab56a1ad3` after Track 15 / PR #35.
-**Review dates:** 2026-10-04–10.
+**Review dates:** 2026-10-04–15.
 
 **Scope decision, 2026-10-10:** The owner declined an upstream issue and directed that evidence unavailable through our own checks must not become an automatic blocker requiring external inquiries. No inquiry was sent. The exact historical compiler and fully resolved dependency graph of the published installer plug-in remain unverified; neither is invented or treated as a passed test. The available official files, hashes, source declarations and legal texts remain the evidence boundary. Existing checks for altered bytes, missing reviewed notices, signatures, locks and release integrity stay mandatory. Fresh candidate packaging can proceed without waiting for a maintainer response.
 
@@ -75,10 +75,12 @@ The locked Tauri bundler uses NSIS 3.11 (archive SHA-1 `EF7FF767E5CBD9EDD22ADD3A
 
 Local dependency/bundled-material regressions, installer and validation-link checks passed. The source/document diff check excludes the four copied upstream legal files, whose original whitespace is retained. [Windows CI 37327378454](https://github.com/360shvit/NodeEditor-Workbench/actions/runs/37327378454), on PR #38 head `463cb056adb2bf7b9b14d5ce976030070a3396a7`, passed 91/91 suites, 250 soak cycles and 39 native tests. Actual notice generation verified the registry loader and produced **247 runtime/material entries and 160 distinct legal texts**. The application's Cargo/vendor classification remains 245 entries; two supplemental entries cover the loader and emitted helpers. No new signed installer is claimed by this PR validation. The subsequent Preact comparison also passed locally with the pinned official module; final PR checks remain required after follow-up changes.
 
-Before Track 16 can become PASS:
+The three Track 16 exit conditions below are now met by the [rc.6 candidate verification](RC6_CANDIDATE_VERIFICATION.md), independently completed on 2026-10-15:
 
 1. Required Windows checks must pass on the final candidate source. The notice extension's PR #39 checks already passed as recorded above; this is not a signed-installer result.
 2. Retain the reviewed NSIS/LZMA and plug-in notices and all fail-closed material checks. Carry the unavailable historical upstream build details into the final report as a review limit; no upstream response is required.
 3. Build and verify a fresh signed candidate, including the material evidence, actual packaged notices and updater signature. Existing rc.5 and the Track 15 same-version artifact do not contain the new dependency/notices. No public release or same-version replacement is authorized by this audit.
 
 Track 14's installed-client manipulation test is still required and **not waived** by the owner asking to continue. Standalone signature rejection is not that test. Stable and Preview remain the only channels; no QA setup, new signing key, tag or release was created. GitHub cleanup remains Track 19, after acceptance.
+
+**Signed-candidate follow-up, 2026-10-15:** Protected run `38283054735` succeeded on source `57195937f34ca48914fa85b1ce384652e47aadf2`. Independent verification matched the artifact digest, six-file Preview surface, both locks, updater signature and 442-file toolset evidence. Actual NSIS extraction confirmed byte-identical embedded project license/notices, all five reviewed plug-in DLLs and rc.6 executable identity. Notices contain 249 material entries/164 legal texts. The fresh target evidence confirms `glib 0.18.5` is absent from the Windows graph; the corresponding Dependabot alert remains open. The installer was not run. This follow-up supersedes the earlier statement that no signed build of the notice extension had been verified; remaining installed tests stay in Tracks 14/18.

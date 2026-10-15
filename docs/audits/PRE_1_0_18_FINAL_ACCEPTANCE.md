@@ -1,11 +1,13 @@
 # Pre-1.0 Audit 18 — Final installed acceptance
 
-**Status:** BLOCKED — matrix prepared; final candidate and remaining manual evidence are absent.
+**Status:** BLOCKED — signed rc.6 candidate and packaged material verified; remaining manual acceptance evidence is absent.
 **Prepared:** 2026-10-04, source baseline `c350ca6817aac94a21d4b999f79b9e097c7d84ca`.
 
 The existing published/installed `0.11.36-rc.5` and the same-version Track 15 build do not contain later dependency/notice changes. Do not install that same-version build as a new update or replace the published assets. A final candidate needs the completed source audits, a fresh SemVer, successful required CI and an approved protected signing build. Publication and final Stable promotion remain separate owner approvals.
 
 ## Evidence record
+
+**Candidate available, 2026-10-15:** [rc.6 verification](RC6_CANDIDATE_VERIFICATION.md) records exact source `57195937f34ca48914fa85b1ce384652e47aadf2`, protected run `38283054735`, installer/signature/lock hashes and actual embedded license/notices. Candidate packaging is PASS; installation and every still-open manual case below remain NOT RUN/BLOCKED. The successful installed rc.4-to-rc.5 evidence is retained.
 
 For each run record date, exact source SHA, workflow/job and artifact identity, installer hash, public-key fingerprint, installed version before/after, Windows/WebView2 environment and whether each observation was direct or owner-reported. Use an expendable copy of a representative generator project; record its initial/final file hashes privately. Public results must omit personal paths, project contents and raw support logs. Mark cases PASS, FAIL, NOT RUN or BLOCKED individually.
 
