@@ -14,6 +14,8 @@ This track must not be marked PASS from source tests alone. At the original Sept
 
 ## Trust boundaries and findings
 
+**Publication preparation, 2026-10-16:** The source now prepares for provider immutability using an explicit draft, complete uploaded asset digest/size/URL verification, a release-ID check and post-publication recheck before moving feeds. Missing/draft/immutable rolling containers fail preflight; only an explicitly prepared empty mutable container can receive its first manifest. This supersedes the original automatic-404-bootstrap behavior described in the historical findings below. Failure fixtures run in the existing updater/release suite. No live release or provider-setting change is claimed; the remaining migration gates are in [repository release controls](REPOSITORY_RELEASE_CONTROLS.md). Track 14 stays BLOCKED.
+
 | Boundary / finding | Remediation and proof |
 |---|---|
 | Failed or out-of-order native update checks | **Must-fix — remediated.** Every check first revokes the old offer. Generation checks prevent an older completion from overwriting or clearing a newer offer. Three native session fixtures exercise failure, supersession, validation rejection and lease cleanup. |

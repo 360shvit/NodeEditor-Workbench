@@ -114,12 +114,13 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Release surface validation failed.' }
           node scripts/verify-updater-signature.mjs
           if ($LASTEXITCODE -ne 0) { throw 'Staged updater signature verification failed.' }
-      - name: Verify immutable version and monotonic channel publication
+      - name: Require new version and mutable monotonic channels
         id: publication
         env:
           GH_TOKEN: ${{ github.token }}
         run: node scripts/check-release-publication.mjs
-      - name: Publish version release from release/public only
+      - name: Create and verify draft from release/public only
+        id: version_draft
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
@@ -129,10 +130,26 @@ jobs:
           gh release view $tag *> $null
           if ($LASTEXITCODE -eq 0) { throw "Release $tag already exists; same-SemVer republish is forbidden." }
           $assets = Get-ChildItem 'release/public' -File | ForEach-Object { $_.FullName }
-          $args = @('release', 'create', $tag) + $assets + @('--verify-tag', '--title', "Hytale Generator Workbench $tag", '--notes', "Signed Windows release generated from the checked allowlisted release surface.")
+          $args = @('release', 'create', $tag) + $assets + @('--draft', '--verify-tag', '--title', "Hytale Generator Workbench $tag", '--notes', "Signed Windows release generated from the checked allowlisted release surface.")
           if ($contract.version.semver.Split('+')[0].Contains('-')) { $args += '--prerelease' }
           & gh @args
-          if ($LASTEXITCODE -ne 0) { throw 'GitHub version release creation failed.' }
+          if ($LASTEXITCODE -ne 0) { throw 'GitHub draft release creation failed; do not publish or retry over an existing draft.' }
+          node scripts/verify-release-assets.mjs --draft
+          if ($LASTEXITCODE -ne 0) { throw 'Draft asset verification failed; release remains unpublished.' }
+      - name: Publish verified version draft and recheck assets
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EXPECTED_RELEASE_ID: ${{ steps.version_draft.outputs.release_id }}
+        run: |
+          $contract = Get-Content 'release-spec/release-contract.json' -Raw | ConvertFrom-Json
+          $tag = "v$($contract.version.semver)"
+          node scripts/verify-release-assets.mjs --draft
+          if ($LASTEXITCODE -ne 0) { throw 'Draft changed before publication.' }
+          gh release edit $tag --draft=false --verify-tag
+          if ($LASTEXITCODE -ne 0) { throw 'Verified draft publication failed.' }
+          node scripts/verify-release-assets.mjs --published
+          if ($LASTEXITCODE -ne 0) { throw 'Published asset verification failed; rolling manifests will not advance.' }
       - name: Publish rolling updater manifests with channel isolation
         shell: pwsh
         env:
@@ -143,21 +160,11 @@ jobs:
           $isPrerelease = $contract.version.semver.Split('+')[0].Contains('-')
 
           if ($env:ADVANCE_PREVIEW -eq 'true') {
-            gh release view updater-preview *> $null
-            if ($LASTEXITCODE -ne 0) {
-              gh release create updater-preview --prerelease --title 'Updater preview manifest' --notes 'Rolling signed Preview updater manifest.'
-              if ($LASTEXITCODE -ne 0) { throw 'Preview manifest release creation failed.' }
-            }
             gh release upload updater-preview release/public/latest-preview.json --clobber
             if ($LASTEXITCODE -ne 0) { throw 'Preview manifest publication failed.' }
           }
 
           if (-not $isPrerelease) {
-            gh release view updater-stable *> $null
-            if ($LASTEXITCODE -ne 0) {
-              gh release create updater-stable --prerelease --title 'Updater stable manifest' --notes 'Rolling signed Stable updater manifest.'
-              if ($LASTEXITCODE -ne 0) { throw 'Stable manifest release creation failed.' }
-            }
             gh release upload updater-stable release/public/latest.json --clobber
             if ($LASTEXITCODE -ne 0) { throw 'Stable manifest publication failed.' }
           }

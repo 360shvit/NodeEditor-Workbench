@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import { compareSemver, isValidSemver } from './release-version.mjs';
 import { verifyUpdaterSignature } from './verify-updater-signature.mjs';
 import { checkReleasePublication, fetchPublicationJson } from './check-release-publication.mjs';
+import { verifyReleaseAssets } from './verify-release-assets.mjs';
 
 // Public verification vectors from the locked minisign-verify 0.2.5 tests (src/lib.rs).
 // No private key is present or generated. These are cryptographic fixtures, not installable artifacts.
@@ -34,20 +35,28 @@ assert.equal(compareSemver('1.0.0+a', '1.0.0+b'), 0);
 
 const repository = 'example/workbench';
 const manifest = version => ({ version, platforms: { 'windows-x86_64': { signature: 'signed-public-fixture', url: `https://github.com/${repository}/releases/download/v${version}/Hytale-Generator-Workbench_${version}_x64-setup.exe` } } });
-async function plan(version, channels = {}, existing = false) {
+async function plan(version, channels = {}, existing = false, rollingOverrides = {}) {
   const calls = [];
   const result = await checkReleasePublication({ repository, version, getJson: async (url, missing) => {
     calls.push(url);
     if (url.includes('/releases/tags/v')) { assert.equal(missing, true); return existing ? {} : null; }
     const channel = url.includes('updater-stable') ? 'stable' : 'preview';
     const current = channels[channel];
-    if (url.includes('/releases/tags/')) return current ? { draft: false, assets: [{ name: channel === 'stable' ? 'latest.json' : 'latest-preview.json' }] } : null;
+    if (url.includes('/releases/tags/')) return Object.hasOwn(channels, channel) ? { tag_name: `updater-${channel}`, draft: false, immutable: false, assets: current === null ? [] : [{ name: channel === 'stable' ? 'latest.json' : 'latest-preview.json', state: 'uploaded' }], ...rollingOverrides[channel] } : null;
     assert.equal(missing, false);
     return typeof current === 'string' ? manifest(current) : current;
   } });
   return { ...result, calls };
 }
-assert.equal((await plan('1.0.0-rc.1')).advancePreview, true, 'confirmed absent channels can bootstrap');
+await assert.rejects(plan('1.0.0-rc.1'), /Missing preview rolling release/, 'a missing container must be prepared explicitly');
+assert.equal((await plan('1.0.0-rc.1', { preview: null })).advancePreview, true, 'an existing public mutable empty container can receive its first manifest');
+await assert.rejects(plan('1.0.0', { preview: '0.9.0' }), /Missing stable rolling release/);
+for (const metadata of [{ immutable: true }, { immutable: undefined }, { immutable: 'false' }, { draft: true }, { draft: undefined }, { tag_name: 'wrong-channel' }, { assets: null }]) {
+  await assert.rejects(plan('1.0.0-rc.2', { preview: '1.0.0-rc.1' }, false, { preview: metadata }), /Invalid preview rolling release/);
+}
+for (const assets of [[{ name: 'unexpected.json', state: 'uploaded' }], [{ name: 'latest-preview.json', state: 'new' }], [{ name: 'latest-preview.json', state: 'uploaded' }, { name: 'extra.json', state: 'uploaded' }]]) {
+  await assert.rejects(plan('1.0.0-rc.2', { preview: '1.0.0-rc.1' }, false, { preview: { assets } }), /Invalid preview rolling assets/);
+}
 const prerelease = await plan('1.0.0-rc.2', { preview: '1.0.0-rc.1' });
 assert.ok(prerelease.calls.every(url => !url.includes('stable')), 'Preview publication never reads or writes Stable');
 await assert.rejects(plan('1.0.0-rc.1', { preview: '1.0.0-rc.2' }), /regression/);
@@ -56,7 +65,7 @@ await assert.rejects(plan('1.0.0', {}, true), /already exists/);
 await assert.rejects(plan('1.0.0', { stable: '0.9.0-rc.1' }), /Stable.*prerelease/);
 await assert.rejects(plan('1.0.0', { stable: { ...manifest('0.9.0'), platforms: {} } }), /Invalid.*target/);
 assert.equal((await plan('1.0.1', { stable: '1.0.0', preview: '1.1.0-beta.1' })).advancePreview, false, 'a stable hotfix must preserve the newer Preview channel');
-assert.equal((await plan('1.0.0', { preview: '1.0.0-rc.3' })).advancePreview, true);
+assert.equal((await plan('1.0.0', { stable: null, preview: '1.0.0-rc.3' })).advancePreview, true);
 await assert.rejects(checkReleasePublication({ repository, version: '1.0.0', getJson: async () => { throw Error('network unavailable'); } }), /network/);
 await assert.rejects(checkReleasePublication({ repository, version: '1.0.0', getJson: async url => url.includes('/tags/v') ? null : { assets: [] } }), /Invalid.*rolling/);
 
@@ -71,6 +80,27 @@ try {
   globalThis.fetch = async (_url, options) => { assert.equal(options.headers.Authorization, undefined); return new Response('{}'); };
   await fetchPublicationJson('https://github.com/example/workbench/releases/download/updater-preview/latest-preview.json', false, 'fixture-token');
 } finally { globalThis.fetch = originalFetch; }
+
+// The publication boundary checks uploaded GitHub metadata against locally
+// hashed allowlisted bytes before a draft becomes public and before feeds move.
+const version = '1.0.0-rc.2';
+const expectedAssets = [
+  { name: 'installer.exe', size: 17, sha256: 'a'.repeat(64) },
+  { name: 'installer.exe.sig', size: 23, sha256: 'b'.repeat(64) },
+];
+const uploaded = expectedAssets.map(asset => ({ name: asset.name, size: asset.size, state: 'uploaded', digest: `sha256:${asset.sha256}`, browser_download_url: `https://github.com/${repository}/releases/download/v${version}/${asset.name}` }));
+const draftRelease = { id: 123, tag_name: `v${version}`, draft: true, prerelease: true, immutable: false, assets: uploaded };
+const verify = (release = draftRelease, options = {}) => verifyReleaseAssets({ repository, version, expectedAssets, draft: true, release, ...options });
+assert.deepEqual(verify(), { id: 123, immutable: false });
+assert.deepEqual(verify({ ...draftRelease, draft: false, immutable: true }, { draft: false, expectedReleaseId: 123 }), { id: 123, immutable: true });
+for (const metadata of [{ tag_name: 'v1.0.0' }, { draft: false }, { prerelease: false }, { id: 0 }, { immutable: true }, { immutable: undefined }]) assert.throws(() => verify({ ...draftRelease, ...metadata }), /identity or publication state/);
+assert.throws(() => verify(draftRelease, { expectedReleaseId: 124 }), /identity changed/);
+assert.throws(() => verify({ ...draftRelease, assets: uploaded.slice(1) }), /inventory mismatch/);
+assert.throws(() => verify({ ...draftRelease, assets: [...uploaded, uploaded[0]] }), /inventory mismatch/);
+assert.throws(() => verify({ ...draftRelease, assets: [uploaded[0], uploaded[0]] }), /mismatch/);
+for (const change of [{ name: 'unexpected.exe' }, { state: 'new' }, { size: 18 }, { digest: null }, { digest: `sha256:${'c'.repeat(64)}` }, { browser_download_url: 'https://example.invalid/installer.exe' }]) assert.throws(() => verify({ ...draftRelease, assets: [{ ...uploaded[0], ...change }, uploaded[1]] }), /mismatch/);
+for (const local of [[], [expectedAssets[0], expectedAssets[0]], [{ ...expectedAssets[0], name: '../installer.exe' }, expectedAssets[1]], [{ ...expectedAssets[0], sha256: '' }, expectedAssets[1]]]) assert.throws(() => verify(draftRelease, { expectedAssets: local }), /inventory/);
+assert.throws(() => verify({ ...draftRelease, draft: false }, { draft: false, version: '1.0.0' }), /identity/);
 
 const read = file => fs.readFileSync(file, 'utf8');
 const rust = read('src-tauri/src/main.rs');
@@ -98,4 +128,13 @@ assert.ok(publish.indexOf('check-release-publication.mjs') < publish.indexOf("@(
 assert.match(publish, /--verify-tag/);
 assert.match(publish, /ADVANCE_PREVIEW: \$\{\{ steps.publication.outputs.advance_preview \}\}/);
 assert.match(publish, /if \(\$env:ADVANCE_PREVIEW -eq 'true'\)/);
+assert.doesNotMatch(publish, /gh release create updater-/, 'publishing cannot implicitly create immutable rolling feeds');
+const draftCheck = publish.indexOf('node scripts/verify-release-assets.mjs --draft');
+const publishDraft = publish.indexOf('gh release edit $tag --draft=false --verify-tag');
+const publishedCheck = publish.indexOf('node scripts/verify-release-assets.mjs --published');
+const firstRollingUpload = publish.indexOf('gh release upload updater-preview');
+assert.ok(publish.indexOf("@('--draft', '--verify-tag'") < draftCheck && draftCheck < publishDraft && publishDraft < publishedCheck && publishedCheck < firstRollingUpload);
+assert.match(publish, /EXPECTED_RELEASE_ID: \$\{\{ steps.version_draft.outputs.release_id \}\}/);
+assert.match(publish, /verify-release-assets.mjs --draft\n\s+if \(\$LASTEXITCODE -ne 0\)/);
+assert.match(publish, /verify-release-assets.mjs --published\n\s+if \(\$LASTEXITCODE -ne 0\)/);
 console.log('Pre-1.0 Audit 14 — updater/release: PASS (public signature vectors, publication failures/ordering, native integration boundaries; installed E2E still required)');

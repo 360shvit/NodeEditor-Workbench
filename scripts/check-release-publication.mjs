@@ -12,9 +12,13 @@ export async function checkReleasePublication({ repository, version, getJson }) 
   let advancePreview = true;
   for (const channel of preview ? ['preview'] : ['stable', 'preview']) {
     const rolling = await getJson(`${api}updater-${channel}`, true);
-    if (!rolling) continue; // Only a confirmed HTTP 404 permits bootstrap.
+    if (!rolling) throw new Error(`Missing ${channel} rolling release; explicit setup is required before publishing.`);
     const asset = channel === 'stable' ? 'latest.json' : 'latest-preview.json';
-    if (rolling.draft || !Array.isArray(rolling.assets) || rolling.assets.filter(entry => entry.name === asset).length !== 1) throw new Error(`Invalid ${channel} rolling release; repair it explicitly before publishing.`);
+    if (rolling.tag_name !== `updater-${channel}` || rolling.draft !== false || rolling.immutable !== false || !Array.isArray(rolling.assets)) throw new Error(`Invalid ${channel} rolling release; an existing public mutable container is required.`);
+    // An explicitly prepared empty container can receive its first manifest.
+    // Missing releases are never created implicitly by the publishing workflow.
+    if (rolling.assets.length === 0) continue;
+    if (rolling.assets.length !== 1 || rolling.assets[0]?.name !== asset || rolling.assets[0]?.state !== 'uploaded') throw new Error(`Invalid ${channel} rolling assets; repair them explicitly before publishing.`);
     const manifest = await getJson(`https://github.com/${repository}/releases/download/updater-${channel}/${asset}`, false);
     const existing = parseSemver(manifest?.version);
     if (channel === 'stable' && existing.prerelease.length) throw new Error('Stable rolling manifest contains a prerelease.');

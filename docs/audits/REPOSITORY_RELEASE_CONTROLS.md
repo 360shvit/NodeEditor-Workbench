@@ -38,12 +38,20 @@ A compatible migration must be prepared and separately approved before public op
 4. Enable repository release immutability after the migration prerequisites pass. Future version releases should then be provider-protected; earlier releases remain historical mutable assets and must not be described as retroactively protected.
 5. During a separately approved publication, verify the resulting version release's immutable flag, asset digests/signature and continuing mutability/monotonic behavior of the intended rolling manifests.
 
-This is a migration outline, not an executed or validated migration. Do not disable immutability opportunistically around normal releases or weaken signature/channel/version checks. Only Stable and Preview remain supported.
+This is a migration outline, not an executed live migration. Do not disable immutability opportunistically around normal releases or weaken signature/channel/version checks. Only Stable and Preview remain supported.
+
+## Source preparation, 2026-10-16
+
+The publishing workflow now creates an explicit version draft, uploads only the checked public surface, and compares every remote asset name/state/size/SHA-256/URL with local bytes. It rechecks the draft identity before publication and the same release ID and assets afterward, before moving a rolling feed. It retains a failed draft for inspection; existing-version rejection prevents automatic same-version replacement on retry. This follows GitHub's recommended draft/upload/publish sequence.
+
+Rolling preflight now rejects missing releases, unknown/true immutable flags, drafts, wrong tags and malformed assets. The workflow no longer creates rolling releases automatically. An explicitly prepared public mutable container with no assets may receive its first manifest; a nonempty container must contain exactly its uploaded channel manifest and pass the existing target/version checks. The existing mutable Preview release meets the metadata requirement. The missing Stable container still needs explicit owner-approved setup before the first Stable publication.
+
+The extended `test:pre1-updater-release` exercises these boundaries with injected metadata and altered/missing/duplicate asset fixtures. Local/source checks are not a live publication test. Repository immutability activation, owner-approved Stable-container creation and verification of a real immutable version release are still open. The asset verifier reports the actual immutable flag but deliberately does not claim that this preparation already enabled provider protection. The [settings-read API](https://docs.github.com/en/rest/repos/repos#check-if-immutable-releases-are-enabled-for-a-repository) requires administration-read access; no broader token or additional secret is introduced. The release reviewer must verify the migration prerequisites before approving a real publication.
 
 ## Acceptance still required
 
 - Installed-client manipulation, interruption/retry, download-time edits/Apply and remaining Stable/downgrade cases in [Track 14](PRE_1_0_14_UPDATER_RELEASE.md).
-- A fresh signed candidate with verified packaged material in [Track 16](PRE_1_0_16_DEPENDENCIES_NOTICES.md). Per the owner's 2026-10-10 scope decision, unavailable historical upstream build details are a documented limit, not an external-inquiry blocker.
+- Track 16's fresh signed candidate/material gate is now complete in [rc.6 verification](RC6_CANDIDATE_VERIFICATION.md). Unavailable historical upstream build details remain the owner's accepted documented limit; no external inquiry is required.
 - The identified final candidate's [manual acceptance matrix](PRE_1_0_18_FINAL_ACCEPTANCE.md), followed by the reviewed cleanup inventory. No cleanup deletion occurred here.
 
 Main source CI [37492912413](https://github.com/360shvit/NodeEditor-Workbench/actions/runs/37492912413) passed on the reviewed baseline. It predates these administration changes and is not a deployment or installed-client test. A later documentation PR's required CI must be checked independently before merge.
