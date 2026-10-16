@@ -133,7 +133,8 @@ const draftCheck = publish.indexOf('node scripts/verify-release-assets.mjs --dra
 const publishDraft = publish.indexOf('gh release edit $tag --draft=false --verify-tag');
 const publishedCheck = publish.indexOf('node scripts/verify-release-assets.mjs --published');
 const firstRollingUpload = publish.indexOf('gh release upload updater-preview');
-assert.ok(publish.indexOf("@('--draft', '--verify-tag'") < draftCheck && draftCheck < publishDraft && publishDraft < publishedCheck && publishedCheck < firstRollingUpload);
+const draftCreate = publish.indexOf("@('--draft', '--verify-tag'");
+assert.ok(draftCreate >= 0 && draftCreate < draftCheck && draftCheck < publishDraft && publishDraft < publishedCheck && publishedCheck < firstRollingUpload);
 assert.match(publish, /EXPECTED_RELEASE_ID: \$\{\{ steps.version_draft.outputs.release_id \}\}/);
 assert.match(publish, /verify-release-assets.mjs --draft\n\s+if \(\$LASTEXITCODE -ne 0\)/);
 assert.match(publish, /verify-release-assets.mjs --published\n\s+if \(\$LASTEXITCODE -ne 0\)/);
