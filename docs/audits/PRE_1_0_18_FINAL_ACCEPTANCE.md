@@ -1,11 +1,13 @@
 # Pre-1.0 Audit 18 — Final installed acceptance
 
-**Status:** BLOCKED — matrix prepared; final candidate and remaining manual evidence are absent.
+**Status:** BLOCKED — signed rc.6 candidate/material verified and first installed checks confirmed; Windows registration discrepancy and remaining manual cases are open.
 **Prepared:** 2026-10-04, source baseline `c350ca6817aac94a21d4b999f79b9e097c7d84ca`.
 
-The existing published/installed `0.11.36-rc.5` and the same-version Track 15 build do not contain later dependency/notice changes. Do not install that same-version build as a new update or replace the published assets. A final candidate needs the completed source audits, a fresh SemVer, successful required CI and an approved protected signing build. Publication and final Stable promotion remain separate owner approvals.
+At preparation, published/installed `0.11.36-rc.5` and the same-version Track 15 build did not contain later dependency/notice changes. Do not install that same-version build as a new update or replace the published assets. The rc.6 candidate now contains the completed source audits and has a fresh SemVer, successful required CI and an approved protected signing build. Publication and final Stable promotion remain separate owner approvals.
 
 ## Evidence record
+
+**Candidate and first installed checks, 2026-10-15:** [rc.6 verification](RC6_CANDIDATE_VERIFICATION.md) records exact source `57195937f34ca48914fa85b1ce384652e47aadf2`, protected run `38283054735`, installer/signature/lock hashes and actual embedded license/notices. Candidate packaging is PASS. The [installed acceptance record](RC6_INSTALLED_ACCEPTANCE.md) confirms the owner's completed manual installation/start and Preview no-offer against the older rc.5 feed, independently matching installed files, and an unresolved Windows registration mismatch. This is not an rc.5-to-rc.6 updater E2E. The successful installed rc.4-to-rc.5 evidence is retained.
 
 For each run record date, exact source SHA, workflow/job and artifact identity, installer hash, public-key fingerprint, installed version before/after, Windows/WebView2 environment and whether each observation was direct or owner-reported. Use an expendable copy of a representative generator project; record its initial/final file hashes privately. Public results must omit personal paths, project contents and raw support logs. Mark cases PASS, FAIL, NOT RUN or BLOCKED individually.
 
@@ -13,7 +15,7 @@ For each run record date, exact source SHA, workflow/job and artifact identity, 
 
 | Case | Required observation | Current evidence |
 |---|---|---|
-| Installer/identity/resources | Candidate installs; About and Windows registration match; license/notices match generated evidence | rc.5 end state verified; final candidate NOT RUN |
+| Installer/identity/resources | Candidate installs; About and Windows registration match; license/notices match generated evidence | PARTIAL: owner confirms completed manual installation and rc.6 startup; all four installed files match candidate, but Windows registration still says rc.5; cause unverified |
 | Open/reopen and Explorer | Selected project opens; expected files/tabs; recent project reopens the same content | NOT RUN on final candidate |
 | Search and references | Text/symbol/reference searches navigate to the expected file/node | NOT RUN |
 | Graph and layout | Pan/zoom/select, switch views, layout preview and cancel; no unintended file writes | NOT RUN |
@@ -27,7 +29,7 @@ For each run record date, exact source SHA, workflow/job and artifact identity, 
 | Invalid signature | Installed client rejects altered payload/signature before launching installer; installed binary and staged fixture remain usable/unchanged | BLOCKED: safe setup not yet approved/executed |
 | Network/interruption/retry | Scoped check/download fault gives recoverable failure; valid retry works; no unexpected restart | NOT RUN |
 | Download-time edits/Apply | Deterministically pause download, introduce edits/transaction, prove final installation gate holds | NOT RUN; a timing guess is insufficient |
-| Stable/Preview/downgrade | Stable rejects prerelease; lower/equal versions cannot install | Same-version Preview case passed; other cases NOT RUN |
+| Stable/Preview/downgrade | Stable rejects prerelease; lower/equal versions cannot install | Same-version Preview case passed on rc.5; owner-confirmed rc.6 no-offer against independently verified lower rc.5 feed. Stable rejection and forced downgrade installation NOT RUN |
 | Uninstall/reinstall | Explicitly scheduled owner test; behavior for settings/project files matches the stated uninstall choice | NOT RUN; do not uninstall the owner's working app during source audit |
 
 ## Manipulation-test boundary
