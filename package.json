@@ -74,6 +74,7 @@
     "release:check": "node scripts/sync-release-contract.mjs --check",
     "test:updater-preparation": "node scripts/test-updater-preparation-v0.11.33.mjs",
     "test:nodecard-jsonpath-linkage": "node scripts/test-nodecard-jsonpath-linkage-v0.11.33.mjs",
+    "test:nodecard-draft-lifecycle": "node scripts/test-nodecard-draft-lifecycle.mjs",
     "bundle:embedded": "node scripts/embedded-bundle.mjs",
     "bundle:check": "node scripts/embedded-bundle.mjs --check",
     "test:release-integrity": "node scripts/test-release-integrity-v0.11.34.mjs",

@@ -57,6 +57,8 @@ On the pinned Windows owner toolchain, release candidates additionally require:
 
 Manual smoke should cover project open/reopen, Explorer/Search, Project Graph, Layout/Visual tooling, staged-change review/discard, Settings, session/window persistence and normal close/restart behavior.
 
+`test:nodecard-draft-lifecycle` executes the packaged NodeCard, embedded hooks and store through input/blur and state transitions. It covers immediate Discard reset, rejection of stale blur events, no restaging on a later blur, Undo/Redo, individual removal, preservation of live drafts during unrelated UI changes, Editing Off/On and rebuilt project values. It does not operate a browser DOM or replace installed-client acceptance. In the installed test, both the read-only value and editable input must revert immediately after Discard, without restarting.
+
 ## Non-publishing release-candidate workflow
 
 `.github/workflows/validate-release-candidate.yml` is a manually dispatched, protected-environment validation path. It is intentionally restricted to `main`, uses read-only repository permissions, requires the configured updater public key and protected updater signing secret, reruns the release-critical source/native gates, builds the installed NSIS distribution, stages `release/public/`, writes SHA-256 evidence and a full dependency/license metadata inventory, and uploads only a short-lived GitHub Actions artifact.

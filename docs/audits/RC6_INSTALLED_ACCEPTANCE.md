@@ -1,6 +1,6 @@
 # Preview rc.6 — installed acceptance evidence
 
-**Date:** 2026-10-15. **Status:** PARTIAL — manual installation/start and lower-version Preview no-offer confirmed; Windows registration differs and remaining acceptance cases are open.
+**Updated:** 2026-10-17. **Status:** PARTIAL — installation/start, lower-version Preview no-offer and a synthetic navigation smoke are confirmed; an installed Discard input-state defect, Windows registration discrepancy and remaining acceptance cases are open.
 
 ## Candidate and method
 
@@ -30,6 +30,16 @@ The installed executable reports product version `0.11.36-rc.6`; the running pro
 The public [rolling Preview feed](https://github.com/360shvit/NodeEditor-Workbench/releases/download/updater-preview/latest-preview.json) was independently downloaded on 2026-10-15. It still contains `0.11.36-rc.5`, has SHA-256 `82445389f36466ee9fa28bb56cfb369e898320902ab2840dcc8aa303b06d8145`, and names the canonical versioned rc.5 installer. The owner reported no newer update from installed rc.6.
 
 This supports the **lower-version offer rejection** case against the real Preview feed. It does not prove a forced downgrade installation attempt, Stable rejecting a prerelease, signature-negative rejection in the installed client, or recovery from an interrupted download. The client network exchange was not captured independently.
+
+## Synthetic editor acceptance, 2026-10-17
+
+The owner confirmed the About display `v0.11.36-rc.6 · Final Installed Acceptance`, then exercised a disposable four-file synthetic WorldStructure/Biome/Density project. The flow root, two expected node-search matches, graph navigation and project reopening worked. All four files were independently rehashed and remained identical to their pre-test contents. This is a small editor smoke, not representative-project, layout-preview or in-game acceptance.
+
+Only a Biome file tab remained after reopening. Query/tool tabs are intentionally session-only; file/source tabs should restore. The previous complete file-tab set was not recorded, so full multi-file tab restoration is not established.
+
+**Discard defect:** after editing a numeric `Value` from `1` to `2` and choosing Discard, the owner saw the read-only value return to `1` while the editable input still displayed `2`. Reopening/restarting restored the input to `1`. The packaged-component regression reproduced the stale draft before the fix. An obsolete input draft could also be staged again on a later blur; source remediation scopes drafts to project/change revisions, clears a committed input draft and rejects events captured before a reset. The new regression exercises the actual embedded component/hooks/store, including Discard, stale blur, Undo/Redo, removal, Editing toggle and project rebuild.
+
+The existing installed rc.6 candidate predates this fix. Immediate input reset and no restaging must be retested on a newly identified signed candidate; a source test is not an installed PASS. Apply/reopen remains untested, and no public release is authorized by this result.
 
 ## Remaining acceptance
 
