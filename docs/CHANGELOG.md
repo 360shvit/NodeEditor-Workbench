@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.11.36-rc.7 — Discard Input Reset (candidate, not published)
+
+- Reset editable field values immediately after Discard, Undo/Redo, change removal and project rebuilds; stale blur events cannot restore a discarded edit.
+- Add packaged-component regression coverage for the installed rc.6 Discard defect.
+- Use a new candidate identity for the signed installer and installed retest. Only application version fields change in the committed lockfiles; dependency resolutions remain unchanged.
+- The installed retest and remaining acceptance gates are pending. Candidate preparation does not publish a release or advance an updater feed.
+
 ## 0.11.35 — GitHub / Updater Integration (unreleased)
 
 - Added native Rust-controlled signed Tauri v2 updater support with separate Stable/Preview manifests and explicit install/restart UX.
