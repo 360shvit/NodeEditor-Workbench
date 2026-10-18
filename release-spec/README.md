@@ -1,6 +1,6 @@
 # Release / updater contract
 
-**Applies to:** v0.11.36-rc.6-r1 Final Installed Acceptance source line.
+**Applies to:** v0.11.36-rc.7-r1 Discard Input Reset candidate source line. Candidate preparation does not publish a release or update a feed.
 
 `release-contract.json` is the canonical authoring source for release identity, update channels and publication policy. `npm run release:sync` synchronizes package/Tauri/Rust/build-helper mirrors and regenerates the shipped `tauri-ui/app.js` deterministically. `npm run release:check` validates the same identity mirrors without mutation and requires byte-for-byte embedded-bundle parity.
 
