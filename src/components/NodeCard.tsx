@@ -25,6 +25,26 @@ async function copy(value: string) {
   try { await navigator.clipboard.writeText(value); } catch { /* clipboard can be denied; no mutation required */ }
 }
 
+function FieldValueEditor({ value, revision, onCommit }: {
+  value: JsonPrimitive;
+  revision: string;
+  onCommit: (value: string) => void;
+}) {
+  const [draft, setDraft] = useState<{ value: string; revision: string }>();
+  // Discard, Undo/Redo and project rebuilds invalidate drafts synchronously.
+  // The editor unmounts when Editing is off, so toggling it cannot revive a draft.
+  const currentDraft = draft?.revision === revision ? draft : undefined;
+  return <input
+    value={currentDraft?.value ?? String(value)}
+    onChange={(event) => setDraft({ value: event.target.value, revision })}
+    onKeyDown={(event) => { if (event.key === 'Enter') event.currentTarget.blur(); }}
+    onBlur={(event) => {
+      setDraft(undefined);
+      if (currentDraft && event.currentTarget.value !== String(value)) onCommit(event.currentTarget.value);
+    }}
+  />;
+}
+
 export function NodeCard({ node, onShowReferences, matchedFieldPaths = [], matchedNodeMetadata = false, matchedFieldLabel = 'match', matchedNodeLabel = 'query match' }: {
   node: ProjectNode;
   onShowReferences: (record: SymbolRecord) => void;
@@ -38,10 +58,11 @@ export function NodeCard({ node, onShowReferences, matchedFieldPaths = [], match
   const editing = useWorkbenchStore((state) => state.editing);
   const filters = useWorkbenchStore((state) => state.filters);
   const changeSet = useWorkbenchStore((state) => state.changeSet);
+  const projectVersion = useWorkbenchStore((state) => state.projectVersion);
+  const changeVersion = useWorkbenchStore((state) => state.changeVersion);
   const focusedNode = useWorkbenchStore((state) => state.focusedNode);
   const activePane = useWorkbenchStore((state) => state.activePane);
   const setChangeSet = useWorkbenchStore((state) => state.setChangeSet);
-  const [drafts, setDrafts] = useState<Record<string, string>>({});
   const [renameRequest, setRenameRequest] = useState<RenameRequest>();
   const [matchField, setMatchField] = useState<{ field: ProjectField; newValue: JsonPrimitive }>();
   const [collapsed, setCollapsed] = useState(false);
@@ -77,6 +98,9 @@ export function NodeCard({ node, onShowReferences, matchedFieldPaths = [], match
   };
 
   const stage = (field: ProjectField, rawNewValue: string) => {
+    const current = useWorkbenchStore.getState();
+    // A blur captured before Discard must not restage into the replacement state.
+    if (!current.editing || current.projectVersion !== projectVersion || current.changeVersion !== changeVersion) return;
     const newValue = parseValue(field, rawNewValue);
     if (newValue === undefined || newValue === field.value) return;
 
@@ -145,13 +169,10 @@ export function NodeCard({ node, onShowReferences, matchedFieldPaths = [], match
                   {editing && (
                     <>
                       <span className="arrow">→</span>
-                      <input
-                        value={drafts[draftKey] ?? String(displayValue)}
-                        onChange={(event) => setDrafts((current) => ({ ...current, [draftKey]: event.target.value }))}
-                        onKeyDown={(event) => { if (event.key === 'Enter') event.currentTarget.blur(); }}
-                        onBlur={(event) => {
-                          if (event.target.value !== String(displayValue)) stage(field, event.target.value);
-                        }}
+                      <FieldValueEditor
+                        value={displayValue}
+                        revision={`${projectVersion}:${changeVersion}`}
+                        onCommit={(value) => stage(field, value)}
                       />
                     </>
                   )}

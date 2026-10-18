@@ -28659,16 +28659,29 @@ define("components/NodeCard", ["require", "exports", "react/jsx-runtime", "react
         }
         catch { /* clipboard can be denied; no mutation required */ }
     }
+    function FieldValueEditor({ value, revision, onCommit }) {
+        const [draft, setDraft] = (0, react_27.useState)();
+        // Discard, Undo/Redo and project rebuilds invalidate drafts synchronously.
+        // The editor unmounts when Editing is off, so toggling it cannot revive a draft.
+        const currentDraft = draft?.revision === revision ? draft : undefined;
+        return (0, jsx_runtime_30.jsx)("input", { value: currentDraft?.value ?? String(value), onChange: (event) => setDraft({ value: event.target.value, revision }), onKeyDown: (event) => { if (event.key === 'Enter')
+                event.currentTarget.blur(); }, onBlur: (event) => {
+                setDraft(undefined);
+                if (currentDraft && event.currentTarget.value !== String(value))
+                    onCommit(event.currentTarget.value);
+            } });
+    }
     function NodeCard({ node, onShowReferences, matchedFieldPaths = [], matchedNodeMetadata = false, matchedFieldLabel = 'match', matchedNodeLabel = 'query match' }) {
         const paneId = (0, WorkbenchPaneContext_4.useWorkbenchPaneId)();
         const project = (0, store_21.useWorkbenchStore)((state) => state.project);
         const editing = (0, store_21.useWorkbenchStore)((state) => state.editing);
         const filters = (0, store_21.useWorkbenchStore)((state) => state.filters);
         const changeSet = (0, store_21.useWorkbenchStore)((state) => state.changeSet);
+        const projectVersion = (0, store_21.useWorkbenchStore)((state) => state.projectVersion);
+        const changeVersion = (0, store_21.useWorkbenchStore)((state) => state.changeVersion);
         const focusedNode = (0, store_21.useWorkbenchStore)((state) => state.focusedNode);
         const activePane = (0, store_21.useWorkbenchStore)((state) => state.activePane);
         const setChangeSet = (0, store_21.useWorkbenchStore)((state) => state.setChangeSet);
-        const [drafts, setDrafts] = (0, react_27.useState)({});
         const [renameRequest, setRenameRequest] = (0, react_27.useState)();
         const [matchField, setMatchField] = (0, react_27.useState)();
         const [collapsed, setCollapsed] = (0, react_27.useState)(false);
@@ -28700,6 +28713,10 @@ define("components/NodeCard", ["require", "exports", "react/jsx-runtime", "react
             return rawNewValue;
         };
         const stage = (field, rawNewValue) => {
+            const current = store_21.useWorkbenchStore.getState();
+            // A blur captured before Discard must not restage into the replacement state.
+            if (!current.editing || current.projectVersion !== projectVersion || current.changeVersion !== changeVersion)
+                return;
             const newValue = parseValue(field, rawNewValue);
             if (newValue === undefined || newValue === field.value)
                 return;
@@ -28728,11 +28745,7 @@ define("components/NodeCard", ["require", "exports", "react/jsx-runtime", "react
                                 const draftKey = (0, core_20.jsonPathKey)(field.jsonPath);
                                 const displayValue = pending?.newValue ?? field.value;
                                 const matches = field.refactorBehavior === 'symbol' ? [] : (0, core_20.findMatchingFields)(project, node, field);
-                                return ((0, jsx_runtime_30.jsxs)("div", { className: `field-row ${matchedPaths.has(draftKey) ? 'search-match-field' : ''}`, children: [(0, jsx_runtime_30.jsxs)("div", { className: "field-meta", children: [(0, jsx_runtime_30.jsx)("span", { className: `field-category ${field.category}`, children: field.category }), (0, jsx_runtime_30.jsx)("strong", { children: field.key }), matchedPaths.has(draftKey) && (0, jsx_runtime_30.jsx)("span", { className: "search-match-badge", children: matchedFieldLabel })] }), (0, jsx_runtime_30.jsxs)("div", { className: "field-value", children: [(0, jsx_runtime_30.jsx)("span", { className: "current-value", "data-tooltip": String(field.value), children: String(field.value) }), editing && ((0, jsx_runtime_30.jsxs)(jsx_runtime_30.Fragment, { children: [(0, jsx_runtime_30.jsx)("span", { className: "arrow", children: "\u2192" }), (0, jsx_runtime_30.jsx)("input", { value: drafts[draftKey] ?? String(displayValue), onChange: (event) => setDrafts((current) => ({ ...current, [draftKey]: event.target.value })), onKeyDown: (event) => { if (event.key === 'Enter')
-                                                                event.currentTarget.blur(); }, onBlur: (event) => {
-                                                                if (event.target.value !== String(displayValue))
-                                                                    stage(field, event.target.value);
-                                                            } })] }))] }), (0, jsx_runtime_30.jsxs)("div", { className: "field-actions", children: [record && field.category === 'export' && ((0, jsx_runtime_30.jsxs)("button", { onClick: () => onShowReferences(record), children: [record.references.length, " refs"] })), record && field.category === 'import' && ((0, jsx_runtime_30.jsx)("button", { className: record.definitions.length ? '' : 'warning-button', onClick: () => onShowReferences(record), children: record.definitions.length ? `${record.definitions.length} def` : 'unresolved' })), matches.length > 0 && ((0, jsx_runtime_30.jsxs)("button", { onClick: () => setMatchField({ field, newValue: pending?.newValue ?? field.value }), children: [matches.length, " matches"] })), editing && field.category === 'import' && suggestion && suggestion !== String(displayValue) && ((0, jsx_runtime_30.jsx)("button", { className: "suggestion", onClick: () => stage(field, suggestion), children: "Use suggestion" })), pending && (0, jsx_runtime_30.jsx)("span", { className: "pending-badge", children: "staged" })] }), editing && field.category === 'seed' && ((0, jsx_runtime_30.jsx)("small", { className: "field-help warning", children: "Literal only. Matching seeds can be selected manually; they never propagate as symbol references." })), editing && field.category === 'property' && matches.length > 0 && ((0, jsx_runtime_30.jsxs)("small", { className: "field-help", children: ["Same ", node.nodeKind, ".", field.key, " value found elsewhere. Matching values are suggestions only."] }))] }, draftKey));
+                                return ((0, jsx_runtime_30.jsxs)("div", { className: `field-row ${matchedPaths.has(draftKey) ? 'search-match-field' : ''}`, children: [(0, jsx_runtime_30.jsxs)("div", { className: "field-meta", children: [(0, jsx_runtime_30.jsx)("span", { className: `field-category ${field.category}`, children: field.category }), (0, jsx_runtime_30.jsx)("strong", { children: field.key }), matchedPaths.has(draftKey) && (0, jsx_runtime_30.jsx)("span", { className: "search-match-badge", children: matchedFieldLabel })] }), (0, jsx_runtime_30.jsxs)("div", { className: "field-value", children: [(0, jsx_runtime_30.jsx)("span", { className: "current-value", "data-tooltip": String(field.value), children: String(field.value) }), editing && ((0, jsx_runtime_30.jsxs)(jsx_runtime_30.Fragment, { children: [(0, jsx_runtime_30.jsx)("span", { className: "arrow", children: "\u2192" }), (0, jsx_runtime_30.jsx)(FieldValueEditor, { value: displayValue, revision: `${projectVersion}:${changeVersion}`, onCommit: (value) => stage(field, value) })] }))] }), (0, jsx_runtime_30.jsxs)("div", { className: "field-actions", children: [record && field.category === 'export' && ((0, jsx_runtime_30.jsxs)("button", { onClick: () => onShowReferences(record), children: [record.references.length, " refs"] })), record && field.category === 'import' && ((0, jsx_runtime_30.jsx)("button", { className: record.definitions.length ? '' : 'warning-button', onClick: () => onShowReferences(record), children: record.definitions.length ? `${record.definitions.length} def` : 'unresolved' })), matches.length > 0 && ((0, jsx_runtime_30.jsxs)("button", { onClick: () => setMatchField({ field, newValue: pending?.newValue ?? field.value }), children: [matches.length, " matches"] })), editing && field.category === 'import' && suggestion && suggestion !== String(displayValue) && ((0, jsx_runtime_30.jsx)("button", { className: "suggestion", onClick: () => stage(field, suggestion), children: "Use suggestion" })), pending && (0, jsx_runtime_30.jsx)("span", { className: "pending-badge", children: "staged" })] }), editing && field.category === 'seed' && ((0, jsx_runtime_30.jsx)("small", { className: "field-help warning", children: "Literal only. Matching seeds can be selected manually; they never propagate as symbol references." })), editing && field.category === 'property' && matches.length > 0 && ((0, jsx_runtime_30.jsxs)("small", { className: "field-help", children: ["Same ", node.nodeKind, ".", field.key, " value found elsewhere. Matching values are suggestions only."] }))] }, draftKey));
                             }) }), !collapsed && (0, jsx_runtime_30.jsxs)("details", { className: "technical-details", children: [(0, jsx_runtime_30.jsx)("summary", { children: "Technical" }), (0, jsx_runtime_30.jsxs)("div", { children: [(0, jsx_runtime_30.jsx)("span", { children: "Node ID" }), (0, jsx_runtime_30.jsx)("code", { children: node.id }), (0, jsx_runtime_30.jsx)("button", { onClick: () => copy(node.id), children: "Copy" })] }), (0, jsx_runtime_30.jsxs)("div", { children: [(0, jsx_runtime_30.jsx)("span", { children: "JSON path" }), (0, jsx_runtime_30.jsx)("code", { children: pathText(node.jsonPath) }), (0, jsx_runtime_30.jsx)("button", { onClick: () => copy(pathText(node.jsonPath)), children: "Copy" })] })] })] }), renameRequest && (0, jsx_runtime_30.jsx)(RenameSymbolDialog_1.RenameSymbolDialog, { request: renameRequest, onClose: () => setRenameRequest(undefined) }), matchField && ((0, jsx_runtime_30.jsx)(FieldMatchesDrawer_1.FieldMatchesDrawer, { node: node, field: matchField.field, newValue: matchField.newValue, onClose: () => setMatchField(undefined) }))] }));
     }
 });
