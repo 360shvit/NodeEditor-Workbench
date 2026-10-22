@@ -1,6 +1,6 @@
 # Pre-1.0 Audit 09 — Apply Transaction, Recovery & Concurrency
 
-**Status:** PASS  
+**Status:** REOPENED — Windows Apply persistence defect reproduced on installed rc.7; source correction prepared, new signed candidate/retest required.
 **Branch:** `audit/pre-1.0-full-review`  
 **Baseline release identity:** `v0.11.36-rc.3`  
 **Durable gate:** `npm run test:pre1-apply-transaction-recovery`
@@ -11,7 +11,7 @@ This track reviews the native Apply transaction boundary end to end: conflict de
 
 ## Result
 
-PASS — no unresolved 1.0 blocker remains in the reviewed Apply/recovery/concurrency boundary.
+The original source audit passed. Installed rc.7 acceptance on 2026-10-22 exposed the additional 09-D blocker below; the prior result does not establish a working installed Apply path.
 
 The audit found three concrete hardening gaps and remediated all three with durable source contracts plus Windows-native failure/race tests. The final Track 09 validation run passed the Track 09 gate, all 18 locked native Rust tests, release/embedded parity, the complete registered regression matrix, and the zero-unused-source audit.
 
@@ -103,3 +103,13 @@ The final temporary validation harness proved the complete candidate state befor
 Track 09 is complete. The reviewed Apply path now fails closed on ambiguous recovery state, serializes lifecycle operations against active Apply/recovery work, preserves newer external edits instead of overwriting them during rollback, and has repeatable regression coverage for the corrected invariants.
 
 **Next:** Track 10 — I/O, ZIP, import/export & large-project safety.
+
+## 09-D — Windows file synchronization used read-only handles
+
+**Classification:** must-fix before 1.0 — reproduced; source correction and four native regression fixtures prepared, installed retest pending.
+
+The rc.7 installed test failed before staging project bytes: recovery-journal persistence returned Windows OS error 5. `sync_write` closed the write handle, reopened the journal read-only and attempted `sync_all`. The staged and committed file paths repeated that pattern. Windows requires write access for `FlushFileBuffers`.
+
+The correction keeps a writable handle through write/sync for journal, marker and staged files, and opens the committed target writable without creating or truncating it. All synchronization failures remain fatal. Transaction ordering, rollback and late-writer protection are unchanged. New native tests cover journal create/shorter overwrite, stage/replace/sync, nontruncating committed sync, missing targets, non-file paths and read-only file rejection. Three tests reproduced error 5 before remediation; all four passed afterward in an isolated Windows harness using the production helpers. Required full CI and a newly signed installed candidate remain separate evidence gates.
+
+See the [rc.7 installed failure record](RC7_INSTALLED_ACCEPTANCE.md) for exact candidate identity and owner versus direct observations.

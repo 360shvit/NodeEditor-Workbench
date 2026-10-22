@@ -963,8 +963,11 @@ fn persistent_log_status_for(app: &AppHandle) -> Result<PersistentLogStatus, Str
 }
 
 fn sync_write(path: &Path, bytes: &[u8], context: &str) -> Result<(), String> {
-    fs::write(path, bytes).map_err(|error| io_error(context, error))?;
-    let file = fs::File::open(path).map_err(|error| io_error(context, error))?;
+    // Windows FlushFileBuffers requires a writable handle. Keep the write handle
+    // through sync so persistence never reopens the file read-only.
+    let mut file = OpenOptions::new().write(true).create(true).truncate(true).open(path)
+        .map_err(|error| io_error(context, error))?;
+    file.write_all(bytes).map_err(|error| io_error(context, error))?;
     file.sync_all().map_err(|error| io_error(context, error))
 }
 
@@ -2449,7 +2452,7 @@ fn sync_committed_apply_target(entry: &PreparedApplyFile) -> Result<(), String> 
     // The atomic rename installed Workbench's staged file. Do not compare content and
     // roll back here: a later external writer is newer authority and must be allowed to
     // win. The watcher will surface a differing post-Apply write.
-    fs::File::open(&entry.target)
+    OpenOptions::new().write(true).open(&entry.target)
         .and_then(|file| file.sync_all())
         .map_err(|error| io_error(&format!("Cannot sync applied target: {}", entry.display), error))
 }
@@ -2602,16 +2605,11 @@ fn apply_project_files(payload: ApplyPayload, app: AppHandle, state: State<'_, D
             let primary = io_error(&format!("Cannot prepare apply transaction for {}", entry.display), error);
             return Err(rollback_apply_failure(&app, &prepared, primary));
         }
-        if let Err(error) = fs::write(&entry.temp, entry.text.as_bytes()) {
-            let primary = io_error(&format!("Cannot stage apply transaction for {}", entry.display), error);
+        if let Err(primary) = sync_write(
+            &entry.temp, entry.text.as_bytes(),
+            &format!("Cannot stage and sync apply transaction for {}", entry.display),
+        ) {
             return Err(rollback_apply_failure(&app, &prepared, primary));
-        }
-        match fs::File::open(&entry.temp).and_then(|file| file.sync_all()) {
-            Ok(()) => {}
-            Err(error) => {
-                let primary = io_error(&format!("Cannot sync staged apply transaction for {}", entry.display), error);
-                return Err(rollback_apply_failure(&app, &prepared, primary));
-            }
         }
     }
 
@@ -3387,6 +3385,98 @@ Total: 1 ms
 
         fs::remove_dir(&authorized).expect("remove save-target junction fixture");
         fs::remove_dir_all(&base).expect("clean save-target revalidation fixture");
+    }
+
+    #[test]
+    fn sync_write_persists_metadata_and_replaces_longer_content() {
+        let unique = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+        let base = std::env::temp_dir().join(format!("hgw-sync-metadata-{unique}"));
+        fs::create_dir(&base).unwrap();
+        let journal = base.join("apply-transaction.json");
+        sync_write(&journal, br#"{"files":["longer.json"]}"#, "persist journal").expect("durably create journal");
+        sync_write(&journal, b"{}", "persist journal").expect("durably replace journal");
+        assert_eq!(fs::read(&journal).unwrap(), b"{}", "replacement must not retain an old suffix");
+        let marker = base.join("apply-transaction.commit");
+        sync_write(&marker, b"42", "persist marker").expect("durably create commit marker");
+        assert_eq!(fs::read(&marker).unwrap(), b"42");
+        fs::remove_dir_all(&base).unwrap();
+    }
+
+    #[test]
+    fn apply_staged_and_committed_sync_preserves_content() {
+        let unique = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+        let base = std::env::temp_dir().join(format!("hgw-sync-apply-{unique}"));
+        fs::create_dir(&base).unwrap();
+        let entry = PreparedApplyFile {
+            target: base.join("value.json"),
+            temp: base.join("value.tmp"),
+            backup: base.join("value.bak"),
+            display: "value.json".to_string(),
+            expected: r#"{"value":1}"#.to_string(),
+            text: r#"{"value":2}"#.to_string(),
+        };
+        fs::write(&entry.target, &entry.expected).unwrap();
+        fs::copy(&entry.target, &entry.temp).unwrap();
+        sync_write(&entry.temp, entry.text.as_bytes(), "stage Apply").expect("durably stage changed content");
+        assert_eq!(fs::read_to_string(&entry.target).unwrap(), entry.expected);
+        assert!(secure_original_for_apply(&entry).unwrap());
+        fs::rename(&entry.temp, &entry.target).unwrap();
+        sync_committed_apply_target(&entry).expect("sync replacement through writable handle");
+        assert_eq!(fs::read_to_string(&entry.target).unwrap(), entry.text);
+        assert_eq!(fs::read_to_string(&entry.backup).unwrap(), entry.expected);
+
+        fs::write(&entry.target, br#"{"value":3}"#).unwrap();
+        sync_committed_apply_target(&entry).expect("sync must preserve a later external edit");
+        assert_eq!(fs::read_to_string(&entry.target).unwrap(), r#"{"value":3}"#);
+        fs::remove_file(&entry.target).unwrap();
+        assert!(sync_committed_apply_target(&entry).is_err(), "missing target must fail closed");
+        assert!(!entry.target.exists(), "sync must never recreate or truncate a target");
+        fs::remove_dir_all(&base).unwrap();
+    }
+
+    #[test]
+    fn apply_committed_sync_uses_writable_handle_without_truncation() {
+        let unique = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+        let base = std::env::temp_dir().join(format!("hgw-sync-committed-{unique}"));
+        fs::create_dir(&base).unwrap();
+        let entry = PreparedApplyFile {
+            target: base.join("value.json"), temp: base.join("value.tmp"), backup: base.join("value.bak"),
+            display: "value.json".to_string(), expected: "old".to_string(), text: "new".to_string(),
+        };
+        fs::write(&entry.target, b"later external content").unwrap();
+        sync_committed_apply_target(&entry).expect("committed sync must succeed on Windows");
+        assert_eq!(fs::read(&entry.target).unwrap(), b"later external content");
+        fs::remove_dir_all(&base).unwrap();
+    }
+
+    #[test]
+    fn sync_write_propagates_failure_without_relaxing_access() {
+        let unique = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+        let base = std::env::temp_dir().join(format!("hgw-sync-failure-{unique}"));
+        fs::create_dir(&base).unwrap();
+        let not_a_file = base.join("directory");
+        fs::create_dir(&not_a_file).unwrap();
+        let error = sync_write(&not_a_file, b"new", "persist test journal").expect_err("directory must fail closed");
+        assert!(error.contains("persist test journal"));
+        assert!(not_a_file.is_dir());
+        let missing_parent = base.join("missing").join("journal");
+        assert!(sync_write(&missing_parent, b"new", "persist test journal").is_err());
+        assert!(!missing_parent.exists());
+        #[cfg(windows)]
+        {
+            let readonly = base.join("readonly");
+            fs::write(&readonly, b"original").unwrap();
+            let mut permissions = fs::metadata(&readonly).unwrap().permissions();
+            permissions.set_readonly(true);
+            fs::set_permissions(&readonly, permissions).unwrap();
+            assert!(sync_write(&readonly, b"replacement", "persist test journal").is_err());
+            assert_eq!(fs::read(&readonly).unwrap(), b"original");
+            let mut permissions = fs::metadata(&readonly).unwrap().permissions();
+            assert!(permissions.readonly(), "production helper must not alter permissions");
+            permissions.set_readonly(false);
+            fs::set_permissions(&readonly, permissions).unwrap();
+        }
+        fs::remove_dir_all(&base).unwrap();
     }
 
     #[test]

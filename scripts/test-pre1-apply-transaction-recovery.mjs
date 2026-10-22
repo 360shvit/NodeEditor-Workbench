@@ -27,6 +27,11 @@ const journalRead = sliceBetween(rust, 'fn read_recovery_journal(', '\nfn write_
 assert.match(journalRead, /read_optional_utf8_file/);
 assert.match(journalRead, /Cannot read Apply recovery journal; refusing Apply/);
 
+const syncWrite = sliceBetween(rust, 'fn sync_write(', '\nfn apply_content_fingerprint(');
+assert.match(syncWrite, /write\(true\)/);
+assertOrder(syncWrite, ['file.write_all(bytes)', 'file.sync_all()']);
+assert.doesNotMatch(syncWrite, /fs::File::open/);
+
 const fingerprint = sliceBetween(rust, 'fn apply_content_fingerprint(', '\nfn recovery_journal_path(');
 assert.match(fingerprint, /0xcbf29ce484222325u64/);
 assert.match(fingerprint, /wrapping_mul\(0x100000001b3\)/);
@@ -63,6 +68,8 @@ assert.match(secureOriginal, /current == entry\.expected/);
 
 const syncTarget = sliceBetween(rust, 'fn sync_committed_apply_target(', '\nfn rollback_prepared(');
 assert.match(syncTarget, /file\.sync_all\(\)/);
+assert.match(syncTarget, /write\(true\)/);
+assert.doesNotMatch(syncTarget, /truncate\(true\)|create\(true\)/);
 assert.doesNotMatch(syncTarget, /entry\.text|current !=/,
   'post-replace sync must not classify a later external writer as Workbench rollback material');
 
@@ -76,6 +83,7 @@ const apply = sliceBetween(rust, 'fn apply_project_files(', '\nfn select_worldge
 for (const marker of [
   'write_recovery_journal(&app, &journal)?',
   'fs::copy(&entry.target, &entry.temp)',
+  'sync_write(\n            &entry.temp, entry.text.as_bytes()',
   'secure_original_for_apply(entry)',
   'fs::rename(&entry.temp, &entry.target)',
   'sync_committed_apply_target(entry)',
@@ -105,6 +113,10 @@ assert.match(watcher, /current == entry\.expected/);
 assert.match(watcher, /if suppressed \{ continue; \}/);
 
 for (const nativeTest of [
+  'sync_write_persists_metadata_and_replaces_longer_content',
+  'apply_staged_and_committed_sync_preserves_content',
+  'apply_committed_sync_uses_writable_handle_without_truncation',
+  'sync_write_propagates_failure_without_relaxing_access',
   'optional_recovery_metadata_read_fails_closed_on_non_file',
   'recovery_commit_marker_requires_exact_transaction_identity',
   'late_apply_conflict_preserves_external_change_for_rollback',
