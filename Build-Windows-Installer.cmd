@@ -3,7 +3,7 @@ setlocal EnableDelayedExpansion
 cd /d "%~dp0"
 
 set "TAURI_CLI_VERSION=2.11.0"
-echo Hytale Generator Workbench v0.11.36-rc.7-r1 - Windows NSIS Setup
+echo Hytale Generator Workbench v0.11.36-rc.8-r1 - Windows NSIS Setup
 
 if not exist "src-tauri\icons\icon.ico" (
   echo.
