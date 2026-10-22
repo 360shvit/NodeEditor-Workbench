@@ -44,3 +44,7 @@ The existing installed rc.6 candidate predates this fix. Immediate input reset a
 ## Remaining acceptance
 
 Resolve the Windows registration discrepancy and complete the still-open cases in the [Track 18 matrix](PRE_1_0_18_FINAL_ACCEPTANCE.md). The installed-client manipulation test, deterministic network/concurrency cases and version-asset controls remain [Track 14](PRE_1_0_14_UPDATER_RELEASE.md) work. Public publication and final Stable promotion require separate explicit owner approval.
+
+## rc.7 follow-up, 2026-10-22
+
+The [rc.7 candidate and installed editor retest](RC7_INSTALLED_ACCEPTANCE.md) closes the Discard input-state defect on the same synthetic fixture: immediate input reset, no restaging and two-file-tab restoration were owner-confirmed, with independently unchanged project hashes. The rc.6 observations above remain historical evidence. Windows registration and the remaining manual matrix are still open.
