@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.11.36-rc.8 — Windows Apply Persistence (candidate, not published)
+
+- Fix Windows error 5 while persisting Apply recovery metadata, staged files and committed targets by using writable synchronization handles.
+- Preserve mandatory sync failures, rollback and protection of newer external edits; add four native regression fixtures.
+- Retain the verified rc.7 Discard fix and use a fresh candidate identity for the installed Apply/reopen retest. Dependency resolutions and release policies are unchanged.
+- Installed Apply acceptance and the remaining release gates are pending; no public release or updater feed is changed by preparation.
+
 ## 0.11.36-rc.7 — Discard Input Reset (candidate, not published)
 
 - Reset editable field values immediately after Discard, Undo/Redo, change removal and project rebuilds; stale blur events cannot restore a discarded edit.
