@@ -2,6 +2,8 @@
 
 **Updated:** 2026-10-22. **Status:** PASS for candidate/material verification and the installed Discard regression on the synthetic fixture; overall installed acceptance is BLOCKED by a newly reproduced native Apply failure.
 
+**Later resolution, 2026-10-24:** [rc.8 installed acceptance](RC8_INSTALLED_ACCEPTANCE.md) verifies the corrected Apply/reopen path and closes the Track 09 blocker. The rc.7 failure and its observations below remain unchanged; remaining Track 18 acceptance is still open.
+
 ## Candidate identity and build
 
 Version `0.11.36-rc.7-r1` / updater `0.11.36-rc.7`, milestone **Discard Input Reset**, contains the [Discard fix](https://github.com/360shvit/NodeEditor-Workbench/pull/47) and [candidate identity update](https://github.com/360shvit/NodeEditor-Workbench/pull/48). Exact source: `6442ad045b6def676bee1b2139e4f83b29229275`, tree `58b002799e5566f897ccabef15974ceba924939b`.

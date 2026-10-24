@@ -1,6 +1,6 @@
 # Pre-1.0 Audit 18 — Final installed acceptance
 
-**Status:** BLOCKED — signed rc.7 candidate/material and installed Discard retest confirmed; a reproduced native Apply persistence failure, Windows registration and remaining manual cases are open.
+**Status:** BLOCKED — signed rc.8 candidate/material and installed Apply/reopen confirmed; Windows registration and the remaining manual/updater cases are open.
 **Prepared:** 2026-10-04, source baseline `c350ca6817aac94a21d4b999f79b9e097c7d84ca`.
 
 At preparation, published/installed `0.11.36-rc.5` and the same-version Track 15 build did not contain later dependency/notice changes. Do not install that same-version build as a new update or replace the published assets. The rc.6 candidate now contains the completed source audits and has a fresh SemVer, successful required CI and an approved protected signing build. Publication and final Stable promotion remain separate owner approvals.
@@ -13,16 +13,18 @@ For each run record date, exact source SHA, workflow/job and artifact identity, 
 
 **rc.7 follow-up, 2026-10-22:** [candidate and installed editor acceptance](RC7_INSTALLED_ACCEPTANCE.md) records the successful protected build, independent material checks, exact installed rc.7 application/resources and owner-confirmed immediate Discard reset, no restaging and two-file-tab restoration. All four fixture files remained unchanged. This closes the rc.6 Discard defect on the tested synthetic fixture; the subsequent Apply test exposed OS error 5 while persisting the recovery journal. Its source fix still requires a new signed candidate/retest. Windows registration and other manual cases remain open.
 
+**rc.8 follow-up, 2026-10-24:** [signed candidate and installed Apply acceptance](RC8_INSTALLED_ACCEPTANCE.md) closes that Apply blocker. The owner confirmed successful Apply/reopen; direct inspection matched installed application/uninstaller/LICENSE/notices to rc.8 and proved that only the intended Value changed from 1 to 2 in one fixture file. All three other files were unchanged. This is synthetic single-file acceptance; Windows registration and the untested cases below remain open.
+
 ## Manual matrix
 
 | Case | Required observation | Current evidence |
 |---|---|---|
-| Installer/identity/resources | Candidate installs; About and Windows registration match; license/notices match generated evidence | PARTIAL: rc.7 startup/editor use confirmed by owner; installed application/LICENSE/notices match candidate. Windows registration version for rc.7 remains unverified; earlier rc.6/rc.5 discrepancy unresolved |
+| Installer/identity/resources | Candidate installs; About and Windows registration match; license/notices match generated evidence | PARTIAL: rc.8 installation/About/Apply sequence confirmed by owner; installed application/uninstaller/LICENSE/notices match candidate. Windows registration version remains unverified; earlier rc.6/rc.5 discrepancy unresolved |
 | Open/reopen and Explorer | Selected project opens; expected files/tabs; recent project reopens the same content | PASS for synthetic rc.7 fixture: owner confirms project reopening with both explicitly opened file tabs; four file hashes unchanged. Representative-project acceptance remains open |
 | Search and references | Text/symbol/reference searches navigate to the expected file/node | PARTIAL: synthetic rc.6 fixture root/search/navigation confirmed; broader reference cases not run |
 | Graph and layout | Pan/zoom/select, switch views, layout preview and cancel; no unintended file writes | PARTIAL: synthetic graph navigation confirmed, all four files unchanged; layout preview/cancel not run |
 | Stage/discard | Make a disposable change; Changes shows it; discard immediately resets both displayed values without later restaging and leaves disk hashes unchanged | PASS on installed rc.7 synthetic fixture: owner confirms immediate reset of both displayed values and no later restaging; four disk hashes unchanged. Prior rc.6 failure retained in its historical record |
-| Apply/reopen | Apply an intentional fixture edit; only intended file changes; reopen shows persisted result | FAIL on rc.7: recovery-journal sync returned OS error 5, with all four original files unchanged. Native writable-handle fix/regressions prepared; new candidate/retest required |
+| Apply/reopen | Apply an intentional fixture edit; only intended file changes; reopen shows persisted result | PASS on installed rc.8 synthetic fixture: owner confirms successful Apply/reopen with Value 2 and no pending changes; direct file comparison proves only the intended Value 1-to-2 edit. The rc.7 failure remains in its historical record |
 | Split/settings/persistence | Scale, resize, tabs, theme and window geometry; documented settings survive restart | NOT RUN |
 | Keyboard/Narrator/High Contrast | Keyboard access, visible focus, dialog focus restore, useful Narrator labels and readable selected states | NOT RUN; source contracts alone do not prove this |
 | Diagnostics/privacy | Trigger a benign failure, save report after reviewing contents; no project text or unsafe paths | NOT RUN |
