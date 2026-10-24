@@ -1,6 +1,6 @@
 # Preview rc.8 — Windows Apply persistence acceptance
 
-**Updated:** 2026-10-24. **Status:** PASS for signed-candidate material verification, installed identity, Apply/reopen, documented settings persistence, Normalize preview/cancellation, scoped accessibility smoke and diagnostic export/content inspection on the synthetic fixture. Track 09's Windows persistence blocker is closed; overall Track 18 acceptance remains open.
+**Updated:** 2026-10-24. **Status:** PASS for signed-candidate material verification, installed identity, synthetic Apply/reopen, documented settings persistence, Normalize preview/cancellation, scoped accessibility smoke, diagnostic export/content inspection and the representative-project navigation smoke below. Track 09's Windows persistence blocker is closed; overall Track 18 acceptance remains open.
 
 ## Candidate and automated evidence
 
@@ -80,9 +80,32 @@ The installed save/cancel and this report's identity/options/content checks are 
 
 The preceding documentation-only [PR #52](https://github.com/360shvit/NodeEditor-Workbench/pull/52) also passed [post-merge Windows CI](https://github.com/360shvit/NodeEditor-Workbench/actions/runs/40096352424) on exact commit `2b6edeef7e538347613be066fc133b85a5c5db8b`; the tested application binary remains the rc.8 candidate identified above.
 
+## Representative-project navigation and measured operations
+
+On 2026-10-24 the owner used a separate, initially byte-identical copy of a real generator project with Editing Off. The requested sequence was project open, search and navigation to a known symbol, Project Graph root selection/fit/pan/zoom, close/reopen through Recents, and diagnostic export with project paths disabled. The owner explicitly confirmed **all steps worked and the report was saved**. No hangs or blocking diagnostics were reported.
+
+Independent comparison confirmed that all **196 files / 7,566,927 bytes** in both the copy and the original still matched the private pre-test baseline, with no added or missing files. The installed report identifies **16 semantic files, 1,955 nodes, 84 symbols and 213 semantic references**. Its project diagnostics are 11 errors, 2 warnings and 26 informational entries, matching the earlier core preflight's severity counts; these are distinct from runtime failures. The report contains **240 runtime events, 68 metrics and 20 traces**, with **zero runtime error or warning events**.
+
+The report spans earlier operations as well. The following durations are selected from the two trace-linked opens with the expected 196-file inventory and the subsequent graph operation, rather than the mixed-session averages:
+
+| Operation | Observed duration |
+|---|---|
+| Native open after folder selection | 20.90 ms |
+| Frontend model build for that open | 43.10 ms |
+| Recents reopen through model/workspace restoration | 84.90 ms |
+| Native portion of that Recents reopen | 22.45 ms |
+| Frontend model build for that Recents reopen | 38.10 ms |
+| Project Graph build / layout | 0.50 / 0.30 ms; rendered graph model has 36 nodes and 60 edges |
+
+The folder-picker open total of 30,732.2 ms includes waiting for the owner's selection; source inspection confirms the request starts before the native blocking picker. It and the derived bridge-overhead metric are not pure loading benchmarks. Search/camera aggregates span the application session and are not isolated to this project. Camera commit instrumentation ends at a React layout effect; it does not measure presented-frame latency or FPS. Peak process/WebView memory was not measured. These single-machine observations do not establish worst-case performance or a graph rendering all 1,955 project nodes at once.
+
+The saved schema-8 rc.8 desktop report was generated at **2026-10-24 16:04:12.183 UTC**, contains **114,971 bytes**, and has SHA-256 `a686b28cef160ae89774c86bb078f1d7f046ca5f9609b7c25891f08f1605d12e`. Privacy options match the requested booleans. Recursive inspection of **1,294 string values** and field names found no known private project/path/content markers, unredacted path fields, raw error/stack fields or credential patterns. The raw report, project identity and per-file baseline stay local. This is a bounded inspection of this report, not a guarantee about every future input or a failure-report test.
+
+Open/search/graph/reopen is **PASS for this owner-operated real-project smoke**, supported by the report and unchanged-file checks. The overall performance row remains **PARTIAL** because peak memory and presented-frame latency are unmeasured. No real-project Apply or additional layout strategy was exercised.
+
 ## Remaining acceptance boundaries
 
-- This is a synthetic single-file Apply/reopen case, not representative-project, abrupt-power-loss or installed concurrency acceptance.
+- Apply/reopen acceptance is a synthetic single-file case. The separate representative-project smoke covers read-only navigation, not real-project writes, abrupt power loss or installed concurrency.
 - Prior rc.7 Discard/two-file-tab evidence and rc.4-to-rc.5 updater evidence are retained for their tested versions. This manual rc.8 installation is not a new updater E2E.
 - Installed signature-negative, network/interruption, download-time concurrency, Stable/downgrade and remaining manual UI cases stay as recorded in [Track 18](PRE_1_0_18_FINAL_ACCEPTANCE.md).
 - Track 14 and Track 18 remain open. Track 19 deletion and public release publication are not authorized by this result.
