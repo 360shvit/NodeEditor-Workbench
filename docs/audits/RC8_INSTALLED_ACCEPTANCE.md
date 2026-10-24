@@ -1,6 +1,6 @@
 # Preview rc.8 — Windows Apply persistence acceptance
 
-**Updated:** 2026-10-24. **Status:** PASS for signed-candidate material verification and installed Apply/reopen on the synthetic fixture. Track 09's Windows persistence blocker is closed; overall Track 18 acceptance remains open.
+**Updated:** 2026-10-24. **Status:** PASS for signed-candidate material verification, installed identity, Apply/reopen, documented settings persistence and Normalize preview/cancellation on the synthetic fixture. Track 09's Windows persistence blocker is closed; overall Track 18 acceptance remains open.
 
 ## Candidate and automated evidence
 
@@ -50,10 +50,21 @@ Independent read-only inspection after the reply confirmed:
 
 UI behavior is owner-reported; file identity and persistence are directly checked. Together with the source regression evidence, this closes the [09-D Windows Apply persistence defect](PRE_1_0_09_APPLY_TRANSACTION_RECOVERY.md). The [rc.7 failure](RC7_INSTALLED_ACCEPTANCE.md) remains recorded as a historical failure, not retroactively marked successful.
 
+## Windows registration, settings and Layout follow-up
+
+The owner supplied a Windows Programs and Features screenshot showing **Hytale Generator Workbench**, version `0.11.36-rc.8` and installation date 2026-10-24. Direct inspection of that screenshot confirms that the current Windows registration matches the already verified installed application and uninstaller. This closes the current registration discrepancy; the cause of the historical rc.6/rc.5 mismatch is not established. No registry values were modified.
+
+For settings persistence, the owner was asked to change UI scale, sidebar width, non-maximized window size/position and split ratio, fully close/restart the application, reopen the project through Recents and enable Split Workview again. The owner affirmed the sequence and specifically confirmed that the split returned to its previous position. This is **PASS as owner-reported installed behavior**; exact numeric values were not supplied. Split mode itself intentionally starts disabled. No theme setting, maximized-state transition or multi-monitor behavior is claimed by this test.
+
+For Layout, the owner kept Editing Off, selected **All graph files → Normalize → Generate proposal**, changed the file selection through **Choose files in Explorer…**, cancelled that selection change and closed the Layout results tab. The owner explicitly confirmed the requested outcome: the preview worked, cancellation retained the original selection and Changes remained empty. This is **PASS for the synthetic Normalize preview and selection-cancellation sequence**; no proposal was staged or applied.
+
+Independent file-hash checks after both sequences confirmed that all four files still matched the post-Apply hashes above, including `SmokeSource.json` Value 2. Project files and recovery metadata were not modified by the agent. These checks do not extend the result to representative projects or other layout strategies.
+
+The documentation-only [PR #51](https://github.com/360shvit/NodeEditor-Workbench/pull/51) retained the tested application source. Its [post-merge Windows CI](https://github.com/360shvit/NodeEditor-Workbench/actions/runs/40094574235) also succeeded on exact commit `7b2993fd0ac9db1934056acdc0a63ddd31293130`.
+
 ## Remaining acceptance boundaries
 
 - This is a synthetic single-file Apply/reopen case, not representative-project, abrupt-power-loss or installed concurrency acceptance.
-- Windows Installed Apps / uninstall registration version remains unverified. Matching PE ProductVersion does not resolve the earlier registration discrepancy.
 - Prior rc.7 Discard/two-file-tab evidence and rc.4-to-rc.5 updater evidence are retained for their tested versions. This manual rc.8 installation is not a new updater E2E.
 - Installed signature-negative, network/interruption, download-time concurrency, Stable/downgrade and remaining manual UI cases stay as recorded in [Track 18](PRE_1_0_18_FINAL_ACCEPTANCE.md).
 - Track 14 and Track 18 remain open. Track 19 deletion and public release publication are not authorized by this result.
