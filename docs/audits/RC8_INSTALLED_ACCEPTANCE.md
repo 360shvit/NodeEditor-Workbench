@@ -1,6 +1,6 @@
 # Preview rc.8 — Windows Apply persistence acceptance
 
-**Updated:** 2026-10-24. **Status:** PASS for signed-candidate material verification, installed identity, Apply/reopen, documented settings persistence and Normalize preview/cancellation on the synthetic fixture. Track 09's Windows persistence blocker is closed; overall Track 18 acceptance remains open.
+**Updated:** 2026-10-24. **Status:** PASS for signed-candidate material verification, installed identity, Apply/reopen, documented settings persistence, Normalize preview/cancellation, scoped accessibility smoke and diagnostic export/content inspection on the synthetic fixture. Track 09's Windows persistence blocker is closed; overall Track 18 acceptance remains open.
 
 ## Candidate and automated evidence
 
@@ -61,6 +61,24 @@ For Layout, the owner kept Editing Off, selected **All graph files → Normalize
 Independent file-hash checks after both sequences confirmed that all four files still matched the post-Apply hashes above, including `SmokeSource.json` Value 2. Project files and recovery metadata were not modified by the agent. These checks do not extend the result to representative projects or other layout strategies.
 
 The documentation-only [PR #51](https://github.com/360shvit/NodeEditor-Workbench/pull/51) retained the tested application source. Its [post-merge Windows CI](https://github.com/360shvit/NodeEditor-Workbench/actions/runs/40094574235) also succeeded on exact commit `7b2993fd0ac9db1934056acdc0a63ddd31293130`.
+
+## Keyboard, Narrator and contrast follow-up
+
+The owner confirmed visible focus navigation within Settings, category activation with Enter, end-to-start Tab wrapping, Escape dismissal and immediate reopening with Enter after focus returns to the original Settings button. Category focus alone does not activate a page. Reopening initializes the temporary Settings page to Appearance; the owner accepted this behavior, and it does not reset persisted application preferences. The Settings keyboard smoke is **PASS as owner-reported installed behavior**.
+
+The owner then confirmed understandable Windows Narrator labels while navigating Settings categories and UI-scale buttons, and readable text, focus outlines and selected categories/file tabs under Windows contrast mode. Both scoped checks are **PASS as owner-reported**. Exact spoken strings, pressed-state narration and contrast palette were not independently captured. This is not a comprehensive accessibility-conformance claim or a claim about every dialog, control and palette.
+
+## Diagnostic save/cancel and report inspection
+
+With the synthetic project open, project-relative paths disabled and recent logs/performance enabled, the owner cancelled the Windows save dialog once and then saved a diagnostic JSON. The owner explicitly confirmed both cancellation and saving. The expected cancellation message was **Save cancelled. No report was saved.** The file did not exist before the test and was directly inspected afterward; cancellation UI behavior remains owner-reported.
+
+The saved report contains **56,281 bytes**, SHA-256 `3e1ddc4d361126478f7c130b2cad2e2a32ec070773324dd0705779d3e6a3ad95`, schema 8, desktop application version `0.11.36-rc.8-r1` and generation time 2026-10-24 15:43:01.347 UTC. Its privacy flags retain boolean types: project contents/paths disabled, logs/performance enabled, automatic upload false. It includes **96 events, 56 performance metrics and 20 traces**, with **zero error and warning events**.
+
+Independent recursive inspection of 571 string values and field names found no known fixture contents, symbols, filenames or project/user paths, no unredacted path fields, and no raw error-text/stack fields or credential patterns in this report. Raw fixture documents were absent, and all four project-file hashes still matched the post-Apply baseline above. The raw JSON and local filesystem paths remain private; only the result and report digest are published.
+
+The installed save/cancel and this report's identity/options/content checks are **PASS**. Because the report contains no error events, it does not cover the remaining final-candidate benign-failure report case. Clipboard interaction, low-memory behavior, arbitrary unseen data and future reports are outside this observation. The `automaticUpload:false` field is report metadata, not a new network-capture proof. No log clearing or deliberate project damage was used.
+
+The preceding documentation-only [PR #52](https://github.com/360shvit/NodeEditor-Workbench/pull/52) also passed [post-merge Windows CI](https://github.com/360shvit/NodeEditor-Workbench/actions/runs/40096352424) on exact commit `2b6edeef7e538347613be066fc133b85a5c5db8b`; the tested application binary remains the rc.8 candidate identified above.
 
 ## Remaining acceptance boundaries
 
