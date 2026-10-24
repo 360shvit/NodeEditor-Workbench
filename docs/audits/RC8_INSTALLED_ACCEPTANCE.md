@@ -1,6 +1,6 @@
 # Preview rc.8 — Windows Apply persistence acceptance
 
-**Updated:** 2026-10-24. **Status:** PASS for signed-candidate material verification, installed identity, synthetic Apply/reopen, documented settings persistence, Normalize preview/cancellation, scoped accessibility smoke, diagnostic export/content inspection and the representative-project navigation smoke below. Track 09's Windows persistence blocker is closed; overall Track 18 acceptance remains open.
+**Updated:** 2026-10-24. **Status:** PASS for signed-candidate material verification, installed identity, synthetic Apply/reopen, documented settings persistence, Normalize preview/cancellation, scoped accessibility smoke, diagnostic export/content inspection, representative-project navigation and the benign read-failure/recovery smoke below. Track 09's Windows persistence blocker is closed; overall Track 18 acceptance remains open.
 
 ## Candidate and automated evidence
 
@@ -76,7 +76,7 @@ The saved report contains **56,281 bytes**, SHA-256 `3e1ddc4d361126478f7c130b2ca
 
 Independent recursive inspection of 571 string values and field names found no known fixture contents, symbols, filenames or project/user paths, no unredacted path fields, and no raw error-text/stack fields or credential patterns in this report. Raw fixture documents were absent, and all four project-file hashes still matched the post-Apply baseline above. The raw JSON and local filesystem paths remain private; only the result and report digest are published.
 
-The installed save/cancel and this report's identity/options/content checks are **PASS**. Because the report contains no error events, it does not cover the remaining final-candidate benign-failure report case. Clipboard interaction, low-memory behavior, arbitrary unseen data and future reports are outside this observation. The `automaticUpload:false` field is report metadata, not a new network-capture proof. No log clearing or deliberate project damage was used.
+The installed save/cancel and this report's identity/options/content checks are **PASS**. This report contains no error events; the later error-report test below separately covers one benign read failure. Clipboard interaction, low-memory behavior, arbitrary unseen data and future reports are outside this observation. The `automaticUpload:false` field is report metadata, not a new network-capture proof. No log clearing or deliberate damage to the valid project was used.
 
 The preceding documentation-only [PR #52](https://github.com/360shvit/NodeEditor-Workbench/pull/52) also passed [post-merge Windows CI](https://github.com/360shvit/NodeEditor-Workbench/actions/runs/40096352424) on exact commit `2b6edeef7e538347613be066fc133b85a5c5db8b`; the tested application binary remains the rc.8 candidate identified above.
 
@@ -102,6 +102,16 @@ The folder-picker open total of 30,732.2 ms includes waiting for the owner's sel
 The saved schema-8 rc.8 desktop report was generated at **2026-10-24 16:04:12.183 UTC**, contains **114,971 bytes**, and has SHA-256 `a686b28cef160ae89774c86bb078f1d7f046ca5f9609b7c25891f08f1605d12e`. Privacy options match the requested booleans. Recursive inspection of **1,294 string values** and field names found no known private project/path/content markers, unredacted path fields, raw error/stack fields or credential patterns. The raw report, project identity and per-file baseline stay local. This is a bounded inspection of this report, not a guarantee about every future input or a failure-report test.
 
 Open/search/graph/reopen is **PASS for this owner-operated real-project smoke**, supported by the report and unchanged-file checks. The overall performance row remains **PARTIAL** because peak memory and presented-frame latency are unmeasured. No real-project Apply or additional layout strategy was exercised.
+
+## Benign read failure, recovery and error-report privacy
+
+A separate disposable project contained one two-byte file with deliberately invalid UTF-8 under a recognized semantic JSON directory. Neither valid project was modified to provoke the failure. The owner opened this fixture with Editing Off and confirmed the expected local **not valid UTF-8** error, successful return to the good project through Recents, continued usability and diagnostic saving with project paths disabled.
+
+The inspected schema-8 rc.8 report was generated at **2026-10-24 16:14:08.344 UTC**, contains **143,397 bytes**, and has SHA-256 `da87b6d9cebf26cf397b0ca671d3d11d8721546ff3f7e7b4036a70a471484810`. Its **317 events, 68 metrics and 20 traces** include exactly three error records for **one failed open**: `desktop.request.failed` with `/api/project/open` status 500, `project.open.trace-failed`, and `project.open.failed`. The failed trace has no completion event. A subsequent Recents trace successfully opens the expected 196-file project in 92.9 ms. There are no warning events; the pre-existing project-diagnostic counts remain unchanged.
+
+Recursive inspection of **1,673 strings** and field names found no malformed-fixture filename, raw expected error text, known private project/path/content markers, unredacted path fields, raw stack fields or credential patterns. Both original and test-copy inventories still contain exactly 196 baseline-matching files; all four synthetic fixture hashes also match their post-Apply baseline. The malformed fixture's two bytes are unchanged. The raw report and local paths remain private.
+
+The diagnostics/privacy matrix case is **PASS for this scoped benign read-failure, recovery and report-export sequence**. The exact local message and UI usability are owner-confirmed; the independently inspected report proves operation/category recording and omission of the known raw error/filename markers. This does not extend to every runtime failure, fatal-crash recovery, memory exhaustion or updater fault.
 
 ## Remaining acceptance boundaries
 
