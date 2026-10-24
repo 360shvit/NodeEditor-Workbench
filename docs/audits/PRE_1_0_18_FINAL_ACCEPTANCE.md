@@ -1,6 +1,6 @@
 # Pre-1.0 Audit 18 — Final installed acceptance
 
-**Status:** BLOCKED — signed rc.8 candidate/material, installed identity, Apply/reopen, settings persistence and synthetic Layout preview/cancellation confirmed; the remaining manual/updater cases are open.
+**Status:** BLOCKED — signed rc.8 candidate/material, installed identity, Apply/reopen, settings persistence, synthetic Layout preview/cancellation, scoped accessibility smoke and diagnostic export/content inspection confirmed; remaining manual/updater cases are open.
 **Prepared:** 2026-10-04, source baseline `c350ca6817aac94a21d4b999f79b9e097c7d84ca`.
 
 At preparation, published/installed `0.11.36-rc.5` and the same-version Track 15 build did not contain later dependency/notice changes. Do not install that same-version build as a new update or replace the published assets. The rc.6 candidate now contains the completed source audits and has a fresh SemVer, successful required CI and an approved protected signing build. Publication and final Stable promotion remain separate owner approvals.
@@ -17,6 +17,8 @@ For each run record date, exact source SHA, workflow/job and artifact identity, 
 
 ## Manual matrix
 
+**Accessibility and support follow-up, 2026-10-24:** The [rc.8 acceptance record](RC8_INSTALLED_ACCEPTANCE.md) adds owner-confirmed Settings keyboard navigation/focus restoration, Windows Narrator labels, contrast readability and diagnostic save cancellation/success. Direct inspection of the saved schema-8 report confirms rc.8 identity, requested privacy options and no known fixture/path/raw-error content in the inspected fields. All four project-file hashes remain unchanged. The report has no errors; final-candidate failure-report coverage remains open.
+
 | Case | Required observation | Current evidence |
 |---|---|---|
 | Installer/identity/resources | Candidate installs; About and Windows registration match; license/notices match generated evidence | PASS on rc.8: installation/About confirmed by owner; installed application/uninstaller/LICENSE/notices match candidate; owner-supplied Windows Programs and Features screenshot shows 0.11.36-rc.8. Historical mismatch cause is not established |
@@ -26,8 +28,8 @@ For each run record date, exact source SHA, workflow/job and artifact identity, 
 | Stage/discard | Make a disposable change; Changes shows it; discard immediately resets both displayed values without later restaging and leaves disk hashes unchanged | PASS on installed rc.7 synthetic fixture: owner confirms immediate reset of both displayed values and no later restaging; four disk hashes unchanged. Prior rc.6 failure retained in its historical record |
 | Apply/reopen | Apply an intentional fixture edit; only intended file changes; reopen shows persisted result | PASS on installed rc.8 synthetic fixture: owner confirms successful Apply/reopen with Value 2 and no pending changes; direct file comparison proves only the intended Value 1-to-2 edit. The rc.7 failure remains in its historical record |
 | Split/settings/persistence | UI scale, sidebar width, split ratio, file tabs and window geometry; documented settings survive restart | PASS for requested rc.8 restart sequence, owner-reported: scale/sidebar/window size-position retained, split ratio specifically confirmed after re-enabling transient Split Workview. Prior rc.7 two-file-tab restoration evidence retained. Exact numeric measurements, maximized-state transitions and multi-monitor behavior were not tested |
-| Keyboard/Narrator/High Contrast | Keyboard access, visible focus, dialog focus restore, useful Narrator labels and readable selected states | NOT RUN; source contracts alone do not prove this |
-| Diagnostics/privacy | Trigger a benign failure, save report after reviewing contents; no project text or unsafe paths | NOT RUN |
+| Keyboard/Narrator/High Contrast | Keyboard access, visible focus, dialog focus restore, useful Narrator labels and readable selected states | PASS for owner-operated rc.8 Settings keyboard smoke, Narrator category/UI-scale labels and contrast readability/selected categories/file tabs. Exact narration/palette and all other widgets were not independently measured; no comprehensive conformance claim |
+| Diagnostics/privacy | Trigger a benign failure, save report after reviewing contents; no project text or unsafe paths | PARTIAL: rc.8 save cancellation/success and direct report identity/options/content inspection PASS; 96 events/56 metrics/20 traces, no known fixture/path/raw-error content, four project hashes unchanged. No error events in this report; benign-failure report on the final candidate remains NOT RUN |
 | Performance/large project | Representative fixture remains responsive; record project size, memory and frame/interaction observations | Automated budgets exist; installed measurement NOT RUN |
 | Valid signed update/restart/recheck | Update installs and restarts; equal version is not offered again | rc.4-to-rc.5 owner-confirmed; retain [existing evidence](UPDATER_E2E_RC5.md), do not repeat just for this matrix |
 | Invalid signature | Installed client rejects altered payload/signature before launching installer; installed binary and staged fixture remain usable/unchanged | BLOCKED: safe setup not yet approved/executed |
