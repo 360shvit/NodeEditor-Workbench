@@ -1,6 +1,6 @@
 # Preview rc.8 — Windows Apply persistence acceptance
 
-**Updated:** 2026-10-24. **Status:** PASS for signed-candidate material verification, installed identity, synthetic Apply/reopen, documented settings persistence, Normalize preview/cancellation, scoped accessibility smoke, diagnostic export/content inspection, representative-project navigation and the benign read-failure/recovery smoke below. Track 09's Windows persistence blocker is closed; overall Track 18 acceptance remains open.
+**Updated:** 2026-10-26. **Status:** PASS for signed-candidate material verification, installed identity, synthetic Apply/reopen, documented settings persistence, Normalize preview/cancellation, scoped accessibility smoke, diagnostic export/content inspection, representative-project navigation, symbol-reference navigation and the benign read-failure/recovery smoke below. Track 09's Windows persistence blocker is closed; overall Track 18 acceptance remains open.
 
 ## Candidate and automated evidence
 
@@ -112,6 +112,14 @@ The inspected schema-8 rc.8 report was generated at **2026-10-24 16:14:08.344 UT
 Recursive inspection of **1,673 strings** and field names found no malformed-fixture filename, raw expected error text, known private project/path/content markers, unredacted path fields, raw stack fields or credential patterns. Both original and test-copy inventories still contain exactly 196 baseline-matching files; all four synthetic fixture hashes also match their post-Apply baseline. The malformed fixture's two bytes are unchanged. The raw report and local paths remain private.
 
 The diagnostics/privacy matrix case is **PASS for this scoped benign read-failure, recovery and report-export sequence**. The exact local message and UI usability are owner-confirmed; the independently inspected report proves operation/category recording and omission of the known raw error/filename markers. This does not extend to every runtime failure, fatal-crash recovery, memory exhaustion or updater fault.
+
+## Symbol-reference navigation follow-up
+
+On 2026-10-26 the owner confirmed the requested four-step rc.8 sequence on the same real-project test copy with Editing Off: open a known exported Density definition, follow one of its **22 references** to an imported usage, follow **1 definition** back to the export, then choose **Open all as tab**. The expected snapshot contains one definition and 22 references, and Changes remains empty. The owner's reply **“passt”** confirms this preceding sequence; no new UI capture or diagnostic report was supplied.
+
+The counts agree with the earlier core preflight: one live definition, 22 live references and no floating references for the selected symbol. A fresh independent SHA-256 comparison found all 196 files unchanged in both the copy and original, with no added or missing files. All four synthetic fixture files still match their post-Apply hashes, retaining Value 2.
+
+This is **PASS as owner-reported installed symbol-reference navigation and snapshot behavior**, with directly checked file integrity. Other symbol/resource families and ambiguous or unresolved references were not exercised. The private project/symbol identity and per-file inventory remain local. The documentation-only [PR #54](https://github.com/360shvit/NodeEditor-Workbench/pull/54) also passed [post-merge Windows CI](https://github.com/360shvit/NodeEditor-Workbench/actions/runs/40111198825) on exact commit `51fe113fb9fca1fef97f8248f782805e74747c69`; the tested application source remains the rc.8 candidate above.
 
 ## Remaining acceptance boundaries
 
