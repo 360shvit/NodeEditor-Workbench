@@ -1,6 +1,6 @@
 # Preview rc.8 — Windows Apply persistence acceptance
 
-**Updated:** 2026-10-26. **Status:** PASS for signed-candidate material verification, installed identity, synthetic Apply/reopen, documented settings persistence, Normalize preview/cancellation, scoped accessibility smoke, diagnostic export/content inspection, representative-project navigation, symbol-reference navigation and the benign read-failure/recovery smoke below. Track 09's Windows persistence blocker is closed; overall Track 18 acceptance remains open.
+**Updated:** 2026-10-26. **Status:** PASS for signed-candidate material verification, installed identity, synthetic Apply/reopen, documented settings persistence, Normalize preview/cancellation, scoped accessibility smoke, diagnostic export/content inspection, representative-project navigation, symbol-reference navigation, benign read-failure/recovery and offline update-check/retry smoke below. Track 09's Windows persistence blocker is closed; overall Track 18 acceptance remains open.
 
 ## Candidate and automated evidence
 
@@ -120,6 +120,16 @@ On 2026-10-26 the owner confirmed the requested four-step rc.8 sequence on the s
 The counts agree with the earlier core preflight: one live definition, 22 live references and no floating references for the selected symbol. A fresh independent SHA-256 comparison found all 196 files unchanged in both the copy and original, with no added or missing files. All four synthetic fixture files still match their post-Apply hashes, retaining Value 2.
 
 This is **PASS as owner-reported installed symbol-reference navigation and snapshot behavior**, with directly checked file integrity. Other symbol/resource families and ambiguous or unresolved references were not exercised. The private project/symbol identity and per-file inventory remain local. The documentation-only [PR #54](https://github.com/360shvit/NodeEditor-Workbench/pull/54) also passed [post-merge Windows CI](https://github.com/360shvit/NodeEditor-Workbench/actions/runs/40111198825) on exact commit `51fe113fb9fca1fef97f8248f782805e74747c69`; the tested application source remains the rc.8 candidate above.
+
+## Offline update check and online retry
+
+On 2026-10-26 the owner exercised Preview update checking around a brief Internet disconnection. The owner supplied the expected **Update check failed: error sending request for url** message naming the compiled Preview manifest endpoint, then explicitly confirmed that the online check worked again after reconnecting and that the diagnostic report was saved. This is **PASS for the scoped installed check-time network failure and online retry**, with the network state, UI message and recovery outcome owner-reported.
+
+The directly inspected schema-8 desktop rc.8 report was generated at **2026-10-26 22:15:34.587 UTC**, contains **52,119 bytes**, and has SHA-256 `a9b984b4ef8579674453fc0a7f0dd4b386c1b99a9ab8e04bb4709b72f140d5ca`. It contains **87 events, 52 metrics and 5 traces**, with two error records at the same timestamp for one failed check: `desktop.request.failed` on `/api/app/update/check` with status 500 and `app.update.check-failed` with the error category. There are no warning events. The check metric contains three request-duration samples; these aggregate samples do not independently establish the sequence or result of each online call. The successful retry remains the owner's observation.
+
+The requested privacy booleans are preserved. Recursive inspection of **517 string values** and field names found no known private project/path/content markers, raw update-error text, unredacted path fields, raw stack fields or credential patterns. Both 196-file real-project trees and the four synthetic fixture files still match their baselines. Installed application, uninstaller, LICENSE and notices again match the independently verified rc.8 candidate hashes. The report and per-file inventories remain local.
+
+This test did not exercise a download interruption, an HTTP-specific server failure, an invalid signature, download-time edits, an overlapping Apply, Stable rejection or a forced downgrade. The broader network/interruption matrix row stays **PARTIAL**. No proxy, certificate, firewall rule, signing key or public feed was changed.
 
 ## Remaining acceptance boundaries
 
