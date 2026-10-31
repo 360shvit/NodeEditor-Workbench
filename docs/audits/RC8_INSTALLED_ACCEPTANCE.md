@@ -1,6 +1,6 @@
 # Preview rc.8 — Windows Apply persistence acceptance
 
-**Updated:** 2026-10-26. **Status:** PASS for signed-candidate material verification, installed identity, synthetic Apply/reopen, documented settings persistence, Normalize preview/cancellation, scoped accessibility smoke, diagnostic export/content inspection, representative-project navigation, symbol-reference navigation, benign read-failure/recovery and offline update-check/retry smoke below. Track 09's Windows persistence blocker is closed; overall Track 18 acceptance remains open.
+**Updated:** 2026-10-31. **Status:** PASS for signed-candidate material verification, installed identity, synthetic Apply/reopen, documented settings persistence, Normalize preview/cancellation, scoped accessibility smoke, diagnostic export/content inspection, representative-project navigation, symbol-reference navigation, benign read-failure/recovery, offline update-check/retry and the scoped installed updater fault tests below. Track 09's Windows persistence blocker is closed; overall Track 18 acceptance remains open.
 
 ## Candidate and automated evidence
 
@@ -131,9 +131,31 @@ The requested privacy booleans are preserved. Recursive inspection of **517 stri
 
 This test did not exercise a download interruption, an HTTP-specific server failure, an invalid signature, download-time edits, an overlapping Apply, Stable rejection or a forced downgrade. The broader network/interruption matrix row stays **PARTIAL**. No proxy, certificate, firewall rule, signing key or public feed was changed.
 
+## Installed updater fault tests and cleanup
+
+On **2026-10-29**, the owner explicitly approved a temporary local HTTPS interception session for the unchanged installed rc.8 candidate identified above. Windows reports version **10.0.26300.0**; the WebView2 version was not captured. A process-local authenticated loopback proxy answered only the exact compiled repository manifest/fixture URLs and did not forward Internet traffic. Its short-lived TLS certificate was trusted in the owner's Windows user store, which is a user-wide trust change, not a process-only trust change. The real updater public key, TLS/signature/version checks and application binary were retained. No new channel, product, public feed, release or signing key was created.
+
+The local manifest advertised synthetic version `0.11.36-rc.9-localtest.1` solely to reach the installed client's normal download path. The known signed rc.8 installer verified before mutation. A separate in-memory copy had its first **512 bytes zeroed**, destroying its executable header while retaining the original signature. The altered **2,870,966-byte** payload has SHA-256 `ce8acd9997e5635a3815dc6cd42c6be507cb0a89901677c0c7f1fc5996f00c91` and fails that signature. The helper could not serve the original executable. Synthetic manifest metadata is not a real release or evidence of a correctly versioned successful installation.
+
+| Installed case | Observed result |
+|---|---|
+| Altered payload | **PASS, scoped.** The owner supplied `Update download or signature verification failed: The signature verification failed` and confirmed the app remained open/usable with no installer start. Proxy dispatch and diagnostic failure events correspond to the attempt. |
+| Interrupted download and retry | **PASS, scoped.** The helper closed the response after 32,768 bytes against a 2,870,966-byte Content-Length. The owner confirmed a recoverable download error. The next full transfer reached the expected signature rejection with the app still usable. No new manifest request was observed on that retry; it reused the checked offer. This is transfer recovery, not a successful valid update installation. |
+| Check-time HTTP 503 and recovery | **PASS, scoped.** The owner confirmed a failed check while the app remained usable. After the helper returned normal manifest JSON again, the check succeeded with no newer offer. Installer-download HTTP 503 was not exercised. |
+| Stable rejects a prerelease | **PASS, scoped.** A newer synthetic prerelease returned at the Stable endpoint was rejected, as confirmed by the owner; no subsequent installer request was observed. |
+| Equal/lower versions | **PASS for no-offer checks.** The initial equal-version response received the owner's brief confirmation. The final lower-version response advertising rc.5 explicitly produced no newer offer on installed rc.8. This does not bypass the comparator to test forced downgrade installation. |
+
+The saved diagnostic report was generated at **2026-10-29 19:32:47.500 UTC**, contains **37,146 bytes**, and has SHA-256 `0f1dca6de04b9013ef6f1ff3463c8a45622908bf2488a200dcc4c186ba64af1a`. Independent inspection on 2026-10-31 confirms schema 8, desktop rc.8 identity and the requested boolean privacy flags: contents/paths off, logs/performance on, automatic upload false. Its **58 events, 47 metrics and 4 traces** include three install-failure pairs and two check-failure pairs corresponding to the deliberate updater faults. The eleventh error record is a separate `project.open.trace-failed` with `AbortError`; it is not an additional updater failure. There are no warning records. A bounded scan of **357 string values** and selected sensitive fields found no known private path/project/content markers, raw signature-error text or credential patterns.
+
+The owner confirmed the final no-offer check, saving the report and closing the app/controller. The owner-context controller recorded **certificateRemoved=true, proxyStopped=true and rootInventoryRestored=true** at 2026-10-29 19:38:42 UTC. This is evidence from that controller's trust-store checks; the agent's certificate-store view did not expose the owner's test entry and is not used to claim independent removal. Four installed files and all four synthetic project files still match the before-test hashes, retaining the intended Value 2. The raw report, proxy/control scripts and local paths remain private.
+
+**Normal post-cleanup online check, 2026-10-31:** The owner confirmed a regular app start without the test launcher and a successful Preview check with no newer offer, no connection error and no local test offer. This is owner-reported recovery to normal operation; no additional diagnostic report or packet capture was supplied.
+
+The exact signature-error text and UI usability/no-installer observations are owner-reported. The report and local proxy establish the corresponding requests/failure categories; proxy dispatch logs are not packet capture. A signature-only mutation with executable bytes, wrong-key case, successful valid retry installation, download-time edits/Apply concurrency and forced downgrade installation were not performed. The invalid signature stops before the final Apply/staged-change gate, so these results do not close that concurrency case.
+
 ## Remaining acceptance boundaries
 
 - Apply/reopen acceptance is a synthetic single-file case. The separate representative-project smoke covers read-only navigation, not real-project writes, abrupt power loss or installed concurrency.
 - Prior rc.7 Discard/two-file-tab evidence and rc.4-to-rc.5 updater evidence are retained for their tested versions. This manual rc.8 installation is not a new updater E2E.
-- Installed signature-negative, network/interruption, download-time concurrency, Stable/downgrade and remaining manual UI cases stay as recorded in [Track 18](PRE_1_0_18_FINAL_ACCEPTANCE.md).
+- The scoped installed altered-payload, network/retry and Stable-rejection cases above are recorded in [Track 18](PRE_1_0_18_FINAL_ACCEPTANCE.md). Download-time concurrency, forced downgrade installation and remaining manual acceptance cases stay open.
 - Track 14 and Track 18 remain open. Track 19 deletion and public release publication are not authorized by this result.
