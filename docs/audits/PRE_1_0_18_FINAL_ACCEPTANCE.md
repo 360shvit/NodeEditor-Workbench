@@ -1,6 +1,6 @@
 # Pre-1.0 Audit 18 — Final installed acceptance
 
-**Status:** BLOCKED — signed rc.8 candidate/material, installed identity, Apply/reopen, settings persistence, synthetic Layout preview/cancellation, scoped accessibility/diagnostics and installed updater fault tests confirmed; concurrency, remaining manual cases and release governance are open.
+**Status:** BLOCKED — signed rc.8 candidate/material, installed identity, Apply/reopen, settings persistence, synthetic Layout preview/cancellation, scoped accessibility/diagnostics, installed updater fault tests and selected uninstall/recovery/reinstall behavior confirmed; concurrency, remaining manual cases and release governance are open.
 **Prepared:** 2026-10-04, source baseline `c350ca6817aac94a21d4b999f79b9e097c7d84ca`.
 
 At preparation, published/installed `0.11.36-rc.5` and the same-version Track 15 build did not contain later dependency/notice changes. Do not install that same-version build as a new update or replace the published assets. The rc.6 candidate now contains the completed source audits and has a fresh SemVer, successful required CI and an approved protected signing build. Publication and final Stable promotion remain separate owner approvals.
@@ -36,7 +36,7 @@ For each run record date, exact source SHA, workflow/job and artifact identity, 
 | Network/interruption/retry | Scoped check/download fault gives recoverable failure; valid retry works; no unexpected restart | PARTIAL: rc.8 offline-check/online retry, check-time HTTP 503/recovery and truncated-download/full negative retry pass within scope. The last transfer completes to expected signature rejection; a valid installation after interruption remains NOT RUN. Installer-download HTTP 503 remains untested. See [rc.8 evidence and limits](RC8_INSTALLED_ACCEPTANCE.md) |
 | Download-time edits/Apply | Deterministically pause download, introduce edits/transaction, prove final installation gate holds | NOT RUN; a timing guess is insufficient |
 | Stable/Preview/downgrade | Stable rejects prerelease; lower/equal versions cannot install | PARTIAL: rc.8 owner confirms Stable rejection of a newer synthetic prerelease and no offer for equal/lower versions; local manifest requests and report support the sequence. Prior Preview positive/equal/lower evidence retained. Forced downgrade installation remains NOT RUN |
-| Uninstall/reinstall | Explicitly scheduled owner test; behavior for settings/project files matches the stated uninstall choice | NOT RUN; do not uninstall the owner's working app during source audit |
+| Uninstall/reinstall | Explicitly scheduled owner test; behavior for settings/project files matches the stated uninstall choice | PASS for rc.8 uninstall with delete-userdata enabled, verified manual profile recovery and same-candidate reinstall. Owner confirms registration, settings/Recents, fixture Value 2 and Preview no-offer; installed files match rc.8. Test copy/synthetic files stay unchanged; original-project edits between phases are owner-confirmed and separately snapshotted. Uninstall with delete-userdata disabled remains NOT RUN; see [scope and evidence](RC8_INSTALLED_ACCEPTANCE.md) |
 
 ## Manipulation-test boundary
 
