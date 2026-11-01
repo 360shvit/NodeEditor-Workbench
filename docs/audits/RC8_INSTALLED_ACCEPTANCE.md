@@ -1,6 +1,6 @@
 # Preview rc.8 — Windows Apply persistence acceptance
 
-**Updated:** 2026-10-31. **Status:** PASS for signed-candidate material verification, installed identity, synthetic Apply/reopen, documented settings persistence, Normalize preview/cancellation, scoped accessibility smoke, diagnostic export/content inspection, representative-project navigation, symbol-reference navigation, benign read-failure/recovery, offline update-check/retry and the scoped installed updater fault tests below. Track 09's Windows persistence blocker is closed; overall Track 18 acceptance remains open.
+**Updated:** 2026-11-01. **Status:** PASS for signed-candidate material verification, installed identity, synthetic Apply/reopen, documented settings persistence, Normalize preview/cancellation, scoped accessibility smoke, diagnostic export/content inspection, representative-project navigation, symbol-reference navigation, benign read-failure/recovery, offline update-check/retry, scoped installed updater fault tests and the selected uninstall/recovery/reinstall sequence below. Track 09's Windows persistence blocker is closed; overall Track 18 acceptance remains open.
 
 ## Candidate and automated evidence
 
@@ -152,6 +152,18 @@ The owner confirmed the final no-offer check, saving the report and closing the 
 **Normal post-cleanup online check, 2026-10-31:** The owner confirmed a regular app start without the test launcher and a successful Preview check with no newer offer, no connection error and no local test offer. This is owner-reported recovery to normal operation; no additional diagnostic report or packet capture was supplied.
 
 The exact signature-error text and UI usability/no-installer observations are owner-reported. The report and local proxy establish the corresponding requests/failure categories; proxy dispatch logs are not packet capture. A signature-only mutation with executable bytes, wrong-key case, successful valid retry installation, download-time edits/Apply concurrency and forced downgrade installation were not performed. The invalid signature stops before the final Apply/staged-change gate, so these results do not close that concurrency case.
+
+## Uninstall, profile recovery and reinstall
+
+On **2026-11-01**, the owner explicitly approved the uninstall/reinstall test and confirmed that Windows no longer listed the app after uninstalling it. The owner subsequently clarified that the **delete application/user data option was enabled**. Direct inspection found the installation directory and its four recorded files absent, and both application-profile directories removed. At that intermediate check, all **396 external project files** matched the immediate pre-uninstall snapshot. This is the observed deletion choice, not a failure of a tested retain-data option.
+
+The private pre-test profile backup contains **347 files / 80,187,650 bytes**, with each copied file checked against its source hash. After the script helper was blocked by the owner's PowerShell execution policy, the owner restored the two profile folders through Explorer. No execution-policy change was made. Before reinstalling or restarting the app, independent comparison confirmed that all **347 restored files** matched the backup exactly. Restored settings are evidence of recovery from that backup, not automatic retention by the uninstaller.
+
+The same signed rc.8 installer identified above was retained, hash-checked and independently signature-verified again before this test. The owner completed its manual reinstallation and confirmed About/Windows registration at rc.8, restored settings and Recents, the synthetic fixture's **Value 2** with empty Changes, and a Preview check reporting no newer update. Direct inspection then matched the installed **application, uninstaller, LICENSE and notices** to the four rc.8 hashes recorded above; executable FileVersion and ProductVersion both report `0.11.36-rc.8`.
+
+The **196-file test copy and four-file synthetic fixture** stayed unchanged through the tested sequence. The owner confirmed working on the original project in parallel between phases; its changes were preserved. A fresh pre-reinstall snapshot was therefore retained separately, and the final check matched all 396 external project files to that snapshot. This does not claim that the original project remained unchanged across the entire session or against its earlier October baseline.
+
+**PASS for the selected data-deletion behavior, verified profile recovery and manual same-candidate reinstall.** The retain-userdata option with deletion disabled remains **NOT RUN**. This is not a fresh updater E2E, forced downgrade, or proof of download-time concurrency. UI/registration observations are owner-reported; file removal, restoration, installed identity and scoped integrity comparisons were checked directly. Backups, local paths and per-file inventories remain private.
 
 ## Remaining acceptance boundaries
 
