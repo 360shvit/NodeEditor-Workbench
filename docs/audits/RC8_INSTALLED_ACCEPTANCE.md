@@ -1,6 +1,6 @@
 # Preview rc.8 — Windows Apply persistence acceptance
 
-**Updated:** 2026-11-04. **Status:** PASS for signed-candidate material verification, installed identity, synthetic Apply/reopen, documented settings persistence, Normalize preview/cancellation, scoped accessibility smoke, diagnostic export/content inspection, representative-project navigation, symbol-reference navigation, benign read-failure/recovery, offline update-check/retry, scoped installed updater fault tests the selected uninstall/recovery/reinstall sequence and the scoped installed performance observation below. Track 09's Windows persistence blocker is closed; overall Track 18 acceptance remains open.
+**Updated:** 2026-11-04. **Status:** PASS for signed-candidate material verification, installed identity, synthetic Apply/reopen, documented settings persistence, Normalize preview/cancellation, scoped accessibility smoke, diagnostic export/content inspection, representative-project navigation, symbol-reference navigation, benign read-failure/recovery, offline update-check/retry, scoped installed updater fault tests, the selected uninstall/recovery/reinstall sequence and the scoped installed performance observation below. Track 09's Windows persistence blocker is closed; overall Track 18 acceptance remains open.
 
 ## Candidate and automated evidence
 
