@@ -1,6 +1,6 @@
 # Preview rc.8 — Windows Apply persistence acceptance
 
-**Updated:** 2026-11-01. **Status:** PASS for signed-candidate material verification, installed identity, synthetic Apply/reopen, documented settings persistence, Normalize preview/cancellation, scoped accessibility smoke, diagnostic export/content inspection, representative-project navigation, symbol-reference navigation, benign read-failure/recovery, offline update-check/retry, scoped installed updater fault tests and the selected uninstall/recovery/reinstall sequence below. Track 09's Windows persistence blocker is closed; overall Track 18 acceptance remains open.
+**Updated:** 2026-11-04. **Status:** PASS for signed-candidate material verification, installed identity, synthetic Apply/reopen, documented settings persistence, Normalize preview/cancellation, scoped accessibility smoke, diagnostic export/content inspection, representative-project navigation, symbol-reference navigation, benign read-failure/recovery, offline update-check/retry, scoped installed updater fault tests, the selected uninstall/recovery/reinstall sequence and the scoped installed performance observation below. Track 09's Windows persistence blocker is closed; overall Track 18 acceptance remains open.
 
 ## Candidate and automated evidence
 
@@ -171,3 +171,23 @@ The **196-file test copy and four-file synthetic fixture** stayed unchanged thro
 - Prior rc.7 Discard/two-file-tab evidence and rc.4-to-rc.5 updater evidence are retained for their tested versions. This manual rc.8 installation is not a new updater E2E.
 - The scoped installed altered-payload, network/retry and Stable-rejection cases above are recorded in [Track 18](PRE_1_0_18_FINAL_ACCEPTANCE.md). Download-time concurrency, forced downgrade installation and remaining manual acceptance cases stay open.
 - Track 14 and Track 18 remain open. Track 19 deletion and public release publication are not authorized by this result.
+
+## Installed performance observation, 2026-11-03
+
+The owner ran a read-only collector against the normally installed rc.8 while using the existing disposable representative-project copy. The collector matched FileVersion `0.11.36-rc.8` and executable SHA-256 `419258ec96aa80b543060094eb218bedac75e7f91ce372390a26ad67439413e2`. It observed the application and six WebView2 descendants throughout: seven stable process identities, no collection/parse errors, **164 samples over 120.516 seconds**. The actual sample gap was median 0.736 seconds / maximum 0.822 seconds.
+
+The requested sequence was 20 seconds idle, 80 seconds of search, graph fit/pan/zoom and three close/Recents-reopen cycles, then 20 seconds idle, with Editing Off. The owner confirmed completing the measurement and fluid usability. This is an owner-operated interaction sequence with independently inspected process counters, not an automated interaction trace.
+
+| Phase | Samples | Private bytes: first / median / maximum / last (MiB) | Sum of working sets: maximum (MiB) |
+|---|---|---|---|
+| Idle before | 28 | 350.35 / 350.33 / 350.35 / 350.33 | 436.82 |
+| Interaction | 108 | 350.33 / 549.86 / 1130.66 / 549.68 | 650.95 |
+| Idle after | 28 | 549.68 / 472.34 / 549.68 / 472.32 | 508.00 |
+
+The final private total was 121.97 MiB above the first sample after falling from the sampled maximum; this short run cannot distinguish caches, delayed collection and persistent retention. No memory-leak clearance or new machine-dependent pass threshold is inferred. The maximum is the largest sampled simultaneous group total, not a guaranteed instantaneous peak. Summed working sets can double-count shared pages; the private-byte total is not a physical RAM total. Per-process lifetime peak counters are not added together as a simultaneous peak.
+
+Independent after-test hashes match **all 196 project-copy files / 7,566,927 bytes** to the pre-test baseline. The actively edited original project was not used for this comparison. Prior evidence identifies 1,955 project nodes and a displayed graph model of 36 nodes / 60 edges; these are not newly measured model counts.
+
+The raw memory collection is retained privately (464,901 bytes; SHA-256 `543c996b565885bee706d9834bf63147f25b526cd55f9a01b8c62da3f841524e`). The separately requested diagnostic export could not be located under the requested or a recent default name. The owner was unsure of its location; no new diagnostic error count, reload timing or camera timing is claimed from this run. Earlier inspected reports retain their original dates and scope. Presented-frame latency and long-duration memory behavior remain unmeasured. Source camera metrics measure time to React layout commit, not the displayed frame.
+
+**Result:** responsive navigation is owner-confirmed and the sampled process-memory observation is verified. This advances the performance row without claiming the complete Track 18 release gate is passed.
