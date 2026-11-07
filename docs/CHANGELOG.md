@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.11.36-rc.9 — Final Updater Acceptance (candidate, not published)
+
+- Prepare a correctly versioned signed candidate for an installed retry after an interrupted update download.
+- Retain the checked rc.8 runtime and dependency resolutions; update only release identity and generated mirrors.
+- Document the existing busy Settings dialog and distinguish its planned installed check from the unrun native Apply/pending-change overlap cases.
+- Candidate signing, installed tests and final acceptance remain pending. No public release, tag or updater feed is created by preparation.
+
 ## 0.11.36-rc.8 — Windows Apply Persistence (candidate, not published)
 
 - Fix Windows error 5 while persisting Apply recovery metadata, staged files and committed targets by using writable synchronization handles.
