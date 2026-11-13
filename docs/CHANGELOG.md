@@ -1,11 +1,12 @@
 # Changelog
 
-## 0.11.36-rc.9 — Final Updater Acceptance (candidate, not published)
+## 0.11.36-rc.9 — Final Updater Acceptance (Preview)
 
-- Prepare a correctly versioned signed candidate for an installed retry after an interrupted update download.
-- Retain the checked rc.8 runtime and dependency resolutions; update only release identity and generated mirrors.
-- Document the existing busy Settings dialog and distinguish its planned installed check from the unrun native Apply/pending-change overlap cases.
-- Candidate signing, installed tests and final acceptance remain pending. No public release, tag or updater feed is created by preparation.
+- Keep review actions reachable when multiple expanded file diffs exceed the dialog height: the body scrolls while the header and action footer remain visible.
+- Include the rc.7 Discard input reset and rc.8 Windows Apply persistence fixes in the next public Preview after rc.5; retain reviewed dependency resolutions.
+- Synchronize the release identity and embedded bundle for the signed rc.9 installer and Preview updater.
+- Record the installed rc.8 editor acceptance. The corrected installed dialog and extended rc.9 acceptance remain pending for Preview testing.
+- Keep the optional interrupted-download experiment separate: its certificate/proxy setup requires fresh approval. Native installed Apply/pending-change overlap and other explicitly unrun acceptance cases are not claimed as PASS.
 
 ## 0.11.36-rc.8 — Windows Apply Persistence (candidate, not published)
 
