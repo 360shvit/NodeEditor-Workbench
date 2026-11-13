@@ -1,11 +1,13 @@
 # Preview rc.9 — Final updater acceptance plan
 
 **Status:** PREPARED, NOT RUN. No candidate build, installed test or publication is claimed by this plan.
-**Prepared:** 2026-11-07.
+**Prepared:** 2026-11-07. **Preview scope updated:** 2026-11-13.
 **Source baseline:** main `77f317a9db9432f2835fbd6880f4007a932605bf`.
 **Starting installed version:** the verified rc.8 candidate. **Target:** `0.11.36-rc.9`, display `0.11.36-rc.9-r1`, milestone **Final Updater Acceptance**.
 
-This candidate changes release identity and its generated mirrors only. Application behavior, dependencies, public key, workflow permissions, runner pins and native updater gates are unchanged. Both lockfiles change only the root application version. The protected **Validate Release Candidate** workflow builds and signs from main without publishing. A tag push or public release is not part of this plan; the owner's deferred Stable-container/immutability decision remains in force.
+This candidate includes the rc.9 release identity and the review-dialog scrolling correction described in the [editor acceptance supplement](RC8_EDITOR_ACCEPTANCE_SUPPLEMENT.md). Expanded file diffs now scroll within the review body while the header and action footer remain reachable. The corrected installed dialog still needs a visual retest. Dependencies, public key, workflow permissions, runner pins and native updater gates are unchanged; both lockfiles change only the root application version.
+
+On 2026-11-13 the owner requested publication of the latest source as a Preview prerelease for extensive testing. That separately authorizes the reviewed rc.9 tag and **Publish Windows Release** workflow after required CI, with protected signing approval still required. Publication and installed rc.9 acceptance are not claimed here. The bounded local transfer experiment below remains PREPARED, NOT RUN and needs fresh owner approval before any certificate or proxy setup. The deferred Stable-container/immutability decision remains in force.
 
 ## Feasibility correction
 
@@ -15,14 +17,14 @@ The native implementation separately downloads and verifies the signature, obtai
 
 ## Candidate prerequisites
 
-1. Merge only after required checks pass for the exact identity commit. Record protected main SHA and the signed candidate run/job/artifact.
+1. Merge only after required checks pass for the exact reviewed candidate commit. Record protected main SHA and the signed candidate run/job/artifact.
 2. Obtain the owner's protected-environment approval. Independently verify installer/signature, public-key identity, version, embedded application, license/notices and release-surface hashes before execution.
 3. Retain rc.8 recovery material and snapshot the disposable project and app profile. Record installed application identity and Windows/WebView2 versions; never overwrite the actively edited original project.
 4. Prepare and test a separate bounded local transfer controller. It must serve the actual rc.9 signature and bytes under the compiled repository's exact HTTPS versioned URL. The manifest and embedded installer must agree on rc.9. Never reuse rc.8 bytes with invented newer metadata for a successful install.
 
 ## Proposed installed sequence — fresh owner approval required
 
-The October certificate/proxy authorization has expired. This plan authorizes no trust-store change or app installation. Present the concrete controller and cleanup behavior for approval only after candidate material and helper tests are ready. Use only Preview; do not create a QA channel or product. Public releases, tags and rolling manifests stay unchanged.
+The October certificate/proxy authorization has expired. This plan authorizes no trust-store change or app installation. Present the concrete controller and cleanup behavior for approval only after candidate material and helper tests are ready. Use only Preview; do not create a QA channel or product. This local experiment does not itself change public releases, tags or rolling manifests; the separately authorized Preview publication uses the protected publishing workflow.
 
 1. Start the unchanged installed rc.8 with the approved process-local routing and a disposable project with no pending changes. Check Preview for the real signed rc.9 candidate.
 2. Start the download and hold it after a recorded prefix. While held, try Escape, Close, Done and backdrop dismissal. Settings should remain open; the editor must not become accessible through those actions. Record the observed controls/message. This is a modal behavior test, not a final native pending-change test.
