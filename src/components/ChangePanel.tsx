@@ -295,97 +295,99 @@ export function ChangePanel() {
               <div><h3 id="change-review-title">Review changes</h3><small id="change-review-description">Validate the staged refactor, then export it safely or explicitly apply it to the opened project.</small></div>
               <button ref={reviewCloseButtonRef} onClick={() => setReviewOpen(false)} aria-label="Close change review"><LucideIcon name="x" size={15} /></button>
             </header>
-            <div className="review-validation">
-              <span className={validation.safe ? 'ok' : 'bad'}><LucideIcon name={validation.safe ? 'circle-check' : 'circle-x'} size={14} /> semantic preflight</span>
-              <span>{validation.addedErrors.length} new errors</span>
-              <span>{validation.addedWarnings.length} new warnings</span>
-              <span>{validation.removed.length} diagnostics resolved</span>
-              <span>{preview.changedFileIds.length} changed files</span>
-            </div>
+            <div className="output-review-body">
+              <div className="review-validation">
+                <span className={validation.safe ? 'ok' : 'bad'}><LucideIcon name={validation.safe ? 'circle-check' : 'circle-x'} size={14} /> semantic preflight</span>
+                <span>{validation.addedErrors.length} new errors</span>
+                <span>{validation.addedWarnings.length} new warnings</span>
+                <span>{validation.removed.length} diagnostics resolved</span>
+                <span>{preview.changedFileIds.length} changed files</span>
+              </div>
 
-            <section className="output-settings">
-              <div className="output-mode-row">
-                <div>
-                  <strong>What should Workbench do?</strong>
-                  <small>Exporting is the safe default. Applying to the opened project is always an explicit choice.</small>
-                </div>
-                <div className="output-mode-grid" role="group" aria-label="Output mode">
-                  <button className={`output-mode-card ${mode === 'changes-zip' ? 'active' : ''}`} onClick={() => setMode('changes-zip')}>
-                    <span><strong>Export Changes ZIP</strong><em>Recommended</em></span>
-                    <small>Only changed files. Original project stays untouched.</small>
-                  </button>
-                  <button className={`output-mode-card ${mode === 'project-copy' ? 'active' : ''}`} onClick={() => setMode('project-copy')}>
-                    <span><strong>Export Project Copy</strong></span>
-                    <small>Complete project in another folder, including unchanged files and assets.</small>
-                  </button>
-                  {workspace.writable && (
-                    <button className={`output-mode-card danger-choice ${mode === 'apply' ? 'active' : ''}`} onClick={() => setMode('apply')}>
-                      <span><strong>Apply to Project</strong></span>
-                      <small>Writes changed files directly into the opened project.</small>
+              <section className="output-settings">
+                <div className="output-mode-row">
+                  <div>
+                    <strong>What should Workbench do?</strong>
+                    <small>Exporting is the safe default. Applying to the opened project is always an explicit choice.</small>
+                  </div>
+                  <div className="output-mode-grid" role="group" aria-label="Output mode">
+                    <button className={`output-mode-card ${mode === 'changes-zip' ? 'active' : ''}`} onClick={() => setMode('changes-zip')}>
+                      <span><strong>Export Changes ZIP</strong><em>Recommended</em></span>
+                      <small>Only changed files. Original project stays untouched.</small>
                     </button>
-                  )}
-                </div>
-              </div>
-
-              {mode === 'changes-zip' && (
-                <div className="output-setting-row">
-                  <div><strong>ZIP name</strong><small>The archive keeps relative project paths so the changed files can be reviewed or copied back later.</small></div>
-                  <input
-                    className="output-name-input"
-                    value={zipName}
-                    onChange={(event) => { setZipName(event.target.value); setZipNameTouched(true); }}
-                    onBlur={() => setZipName(normalizeZipName(zipName, defaultZipName(workspace.label, 'changed')))}
-                  />
-                </div>
-              )}
-
-              {mode === 'project-copy' && (
-                <div className="output-setting-row">
-                  <div><strong>Export folder</strong><small>The selected folder becomes the root of a complete modified project copy. Relative paths are preserved.</small></div>
-                  <div className="output-folder-choice">
-                    <code>{targetFolder ? outputDirectoryLabel(targetFolder) : 'No folder selected'}</code>
-                    <button onClick={selectTargetFolder}>{targetFolder ? 'Change…' : 'Choose…'}</button>
+                    <button className={`output-mode-card ${mode === 'project-copy' ? 'active' : ''}`} onClick={() => setMode('project-copy')}>
+                      <span><strong>Export Project Copy</strong></span>
+                      <small>Complete project in another folder, including unchanged files and assets.</small>
+                    </button>
+                    {workspace.writable && (
+                      <button className={`output-mode-card danger-choice ${mode === 'apply' ? 'active' : ''}`} onClick={() => setMode('apply')}>
+                        <span><strong>Apply to Project</strong></span>
+                        <small>Writes changed files directly into the opened project.</small>
+                      </button>
+                    )}
                   </div>
                 </div>
-              )}
 
-              <div className="output-summary-grid">
-                <span><strong>Source</strong>{workspace.label}</span>
-                <span><strong>Access</strong>{workspace.writable ? 'Opened project · Read / Write' : 'Folder snapshot · Read only'}</span>
-                <span><strong>Result files</strong>{outputFileCount}</span>
-                <span><strong>Changed values</strong>{changeSet.changes.length}</span>
-              </div>
-
-              {preflightBusy && <div className="output-notice">Checking selected action…</div>}
-              {sourceConflicts.length > 0 && mode === 'apply' && (
-                <div className="output-notice bad"><strong>External changes detected.</strong><span>{sourceConflicts.length} changed source file(s) no longer match the version loaded by Workbench. Apply is blocked.</span><details><summary>Show files</summary>{sourceConflicts.map((path) => <code key={path}>{path}</code>)}</details></div>
-              )}
-              {targetCollisions.length > 0 && mode === 'project-copy' && (
-                <div className="output-notice warning"><strong>Export folder contains existing files.</strong><span>{targetCollisions.length} project file(s) already exist in {targetFolder ? outputDirectoryLabel(targetFolder) : 'the selected folder'}.</span><label><input type="checkbox" checked={allowOverwrite} onChange={(event) => setAllowOverwrite(event.target.checked)} /> I understand these target files will be overwritten.</label><details><summary>Show collisions</summary>{targetCollisions.slice(0, 50).map((path) => <code key={path}>{path}</code>)}</details></div>
-              )}
-            </section>
-
-            {(validation.added.length > 0 || validation.removed.length > 0) && (
-              <details className="diagnostic-diff">
-                <summary>Diagnostic diff</summary>
-                {validation.added.map((item, index) => <div className={`diagnostic-diff-row ${item.severity}`} key={`a-${index}`}>+ {item.message}</div>)}
-                {validation.removed.map((item, index) => <div className="diagnostic-diff-row resolved" key={`r-${index}`}>− {item.message}</div>)}
-              </details>
-            )}
-            <section className="apply-diff-review" aria-label="File diff review">
-              <div className="apply-diff-heading"><strong>File diff</strong><small>Read-only final review for Apply / Export. Edit or remove staged values in the Changes tab.</small></div>
-              {diffFiles.map((file) => (
-                <details className="apply-diff-file" key={file.path} open={diffFiles.length <= 3}>
-                  <summary><strong>{file.path}</strong><small>{file.lines.filter((line) => line.kind !== 'context').length} changed line(s)</small></summary>
-                  <div className="unified-diff">
-                    {file.lines.map((line, index) => <div className={`unified-diff-line ${line.kind}`} key={`${file.path}:${index}`}><span className="diff-line-number">{line.oldLine ?? ''}</span><span className="diff-line-number">{line.newLine ?? ''}</span><code>{line.kind === 'remove' ? '− ' : line.kind === 'add' ? '+ ' : '  '}{line.text}</code></div>)}
+                {mode === 'changes-zip' && (
+                  <div className="output-setting-row">
+                    <div><strong>ZIP name</strong><small>The archive keeps relative project paths so the changed files can be reviewed or copied back later.</small></div>
+                    <input
+                      className="output-name-input"
+                      value={zipName}
+                      onChange={(event) => { setZipName(event.target.value); setZipNameTouched(true); }}
+                      onBlur={() => setZipName(normalizeZipName(zipName, defaultZipName(workspace.label, 'changed')))}
+                    />
                   </div>
+                )}
+
+                {mode === 'project-copy' && (
+                  <div className="output-setting-row">
+                    <div><strong>Export folder</strong><small>The selected folder becomes the root of a complete modified project copy. Relative paths are preserved.</small></div>
+                    <div className="output-folder-choice">
+                      <code>{targetFolder ? outputDirectoryLabel(targetFolder) : 'No folder selected'}</code>
+                      <button onClick={selectTargetFolder}>{targetFolder ? 'Change…' : 'Choose…'}</button>
+                    </div>
+                  </div>
+                )}
+
+                <div className="output-summary-grid">
+                  <span><strong>Source</strong>{workspace.label}</span>
+                  <span><strong>Access</strong>{workspace.writable ? 'Opened project · Read / Write' : 'Folder snapshot · Read only'}</span>
+                  <span><strong>Result files</strong>{outputFileCount}</span>
+                  <span><strong>Changed values</strong>{changeSet.changes.length}</span>
+                </div>
+
+                {preflightBusy && <div className="output-notice">Checking selected action…</div>}
+                {sourceConflicts.length > 0 && mode === 'apply' && (
+                  <div className="output-notice bad"><strong>External changes detected.</strong><span>{sourceConflicts.length} changed source file(s) no longer match the version loaded by Workbench. Apply is blocked.</span><details><summary>Show files</summary>{sourceConflicts.map((path) => <code key={path}>{path}</code>)}</details></div>
+                )}
+                {targetCollisions.length > 0 && mode === 'project-copy' && (
+                  <div className="output-notice warning"><strong>Export folder contains existing files.</strong><span>{targetCollisions.length} project file(s) already exist in {targetFolder ? outputDirectoryLabel(targetFolder) : 'the selected folder'}.</span><label><input type="checkbox" checked={allowOverwrite} onChange={(event) => setAllowOverwrite(event.target.checked)} /> I understand these target files will be overwritten.</label><details><summary>Show collisions</summary>{targetCollisions.slice(0, 50).map((path) => <code key={path}>{path}</code>)}</details></div>
+                )}
+              </section>
+
+              {(validation.added.length > 0 || validation.removed.length > 0) && (
+                <details className="diagnostic-diff">
+                  <summary>Diagnostic diff</summary>
+                  {validation.added.map((item, index) => <div className={`diagnostic-diff-row ${item.severity}`} key={`a-${index}`}>+ {item.message}</div>)}
+                  {validation.removed.map((item, index) => <div className="diagnostic-diff-row resolved" key={`r-${index}`}>− {item.message}</div>)}
                 </details>
-              ))}
-            </section>
-            <div className={`apply-warning ${mode === 'apply' ? '' : 'export-warning'}`}>
-              <strong>{mode === 'apply' ? 'Apply modifies the opened project.' : mode === 'project-copy' ? 'Project Copy is non-destructive.' : 'Changes ZIP is non-destructive.'}</strong>
-              <span>{mode === 'apply' ? 'Workbench checks for external file changes first. After a successful write the project is reloaded and staged Undo/Redo history is cleared.' : 'The opened source project and staged Undo/Redo history stay unchanged after export.'}</span>
+              )}
+              <section className="apply-diff-review" aria-label="File diff review">
+                <div className="apply-diff-heading"><strong>File diff</strong><small>Read-only final review for Apply / Export. Edit or remove staged values in the Changes tab.</small></div>
+                {diffFiles.map((file) => (
+                  <details className="apply-diff-file" key={file.path} open={diffFiles.length <= 3}>
+                    <summary><strong>{file.path}</strong><small>{file.lines.filter((line) => line.kind !== 'context').length} changed line(s)</small></summary>
+                    <div className="unified-diff">
+                      {file.lines.map((line, index) => <div className={`unified-diff-line ${line.kind}`} key={`${file.path}:${index}`}><span className="diff-line-number">{line.oldLine ?? ''}</span><span className="diff-line-number">{line.newLine ?? ''}</span><code>{line.kind === 'remove' ? '− ' : line.kind === 'add' ? '+ ' : '  '}{line.text}</code></div>)}
+                    </div>
+                  </details>
+                ))}
+              </section>
+              <div className={`apply-warning ${mode === 'apply' ? '' : 'export-warning'}`}>
+                <strong>{mode === 'apply' ? 'Apply modifies the opened project.' : mode === 'project-copy' ? 'Project Copy is non-destructive.' : 'Changes ZIP is non-destructive.'}</strong>
+                <span>{mode === 'apply' ? 'Workbench checks for external file changes first. After a successful write the project is reloaded and staged Undo/Redo history is cleared.' : 'The opened source project and staged Undo/Redo history stay unchanged after export.'}</span>
+              </div>
             </div>
             <footer>
               {!validation.safe && <span className="bad">Action blocked: the proposed patch introduces new errors.</span>}
