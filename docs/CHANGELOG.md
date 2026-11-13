@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.11.36-rc.9 — Final Updater Acceptance (Preview)
+
+- Keep review actions reachable when multiple expanded file diffs exceed the dialog height: the body scrolls while the header and action footer remain visible.
+- Include the rc.7 Discard input reset and rc.8 Windows Apply persistence fixes in the next public Preview after rc.5; retain reviewed dependency resolutions.
+- Synchronize the release identity and embedded bundle for the signed rc.9 installer and Preview updater.
+- Record the installed rc.8 editor acceptance. The corrected installed dialog and extended rc.9 acceptance remain pending for Preview testing.
+- Keep the optional interrupted-download experiment separate: its certificate/proxy setup requires fresh approval. Native installed Apply/pending-change overlap and other explicitly unrun acceptance cases are not claimed as PASS.
+
 ## 0.11.36-rc.8 — Windows Apply Persistence (candidate, not published)
 
 - Fix Windows error 5 while persisting Apply recovery metadata, staged files and committed targets by using writable synchronization handles.
