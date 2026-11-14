@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import { compareSemver, isValidSemver } from './release-version.mjs';
 import { verifyUpdaterSignature } from './verify-updater-signature.mjs';
 import { checkReleasePublication, fetchPublicationJson } from './check-release-publication.mjs';
-import { verifyReleaseAssets } from './verify-release-assets.mjs';
+import { verifyReleaseAssets, verifyGitHubReleaseAssets } from './verify-release-assets.mjs';
 
 // Public verification vectors from the locked minisign-verify 0.2.5 tests (src/lib.rs).
 // No private key is present or generated. These are cryptographic fixtures, not installable artifacts.
@@ -89,18 +89,51 @@ const expectedAssets = [
   { name: 'installer.exe.sig', size: 23, sha256: 'b'.repeat(64) },
 ];
 const uploaded = expectedAssets.map(asset => ({ name: asset.name, size: asset.size, state: 'uploaded', digest: `sha256:${asset.sha256}`, browser_download_url: `https://github.com/${repository}/releases/download/v${version}/${asset.name}` }));
-const draftRelease = { id: 123, tag_name: `v${version}`, draft: true, prerelease: true, immutable: false, assets: uploaded };
-const verify = (release = draftRelease, options = {}) => verifyReleaseAssets({ repository, version, expectedAssets, draft: true, release, ...options });
+const canonicalUrl = `https://github.com/${repository}/releases/tag/v${version}`;
+const draftSlug = 'untagged-154bc4892f45dd3f49df';
+const draftAssets = uploaded.map(asset => ({ ...asset, browser_download_url: `https://github.com/${repository}/releases/download/${draftSlug}/${asset.name}` }));
+const draftRelease = { id: 123, tag_name: `v${version}`, html_url: `https://github.com/${repository}/releases/tag/${draftSlug}`, draft: true, prerelease: true, immutable: false, assets: draftAssets };
+const publishedRelease = { ...draftRelease, html_url: canonicalUrl, draft: false, immutable: true, assets: uploaded };
+const verify = (release = draftRelease, options = {}) => verifyReleaseAssets({ repository, version, expectedAssets, draft: true, expectedReleaseId: 123, release, ...options });
 assert.deepEqual(verify(), { id: 123, immutable: false });
-assert.deepEqual(verify({ ...draftRelease, draft: false, immutable: true }, { draft: false, expectedReleaseId: 123 }), { id: 123, immutable: true });
+assert.deepEqual(verify({ ...draftRelease, html_url: canonicalUrl, assets: uploaded }), { id: 123, immutable: false }, 'canonical draft URLs remain valid');
+assert.deepEqual(verify(publishedRelease, { draft: false }), { id: 123, immutable: true });
 for (const metadata of [{ tag_name: 'v1.0.0' }, { draft: false }, { prerelease: false }, { id: 0 }, { immutable: true }, { immutable: undefined }]) assert.throws(() => verify({ ...draftRelease, ...metadata }), /identity or publication state/);
 assert.throws(() => verify(draftRelease, { expectedReleaseId: 124 }), /identity changed/);
-assert.throws(() => verify({ ...draftRelease, assets: uploaded.slice(1) }), /inventory mismatch/);
-assert.throws(() => verify({ ...draftRelease, assets: [...uploaded, uploaded[0]] }), /inventory mismatch/);
-assert.throws(() => verify({ ...draftRelease, assets: [uploaded[0], uploaded[0]] }), /mismatch/);
-for (const change of [{ name: 'unexpected.exe' }, { state: 'new' }, { size: 18 }, { digest: null }, { digest: `sha256:${'c'.repeat(64)}` }, { browser_download_url: 'https://example.invalid/installer.exe' }]) assert.throws(() => verify({ ...draftRelease, assets: [{ ...uploaded[0], ...change }, uploaded[1]] }), /mismatch/);
+for (const id of [undefined, null, 0, -1, 1.5, '123', NaN]) assert.throws(() => verify(draftRelease, { expectedReleaseId: id }), /release ID/);
+assert.throws(() => verify({ ...draftRelease, assets: draftAssets.slice(1) }), /inventory mismatch/);
+assert.throws(() => verify({ ...draftRelease, assets: [...draftAssets, draftAssets[0]] }), /inventory mismatch/);
+assert.throws(() => verify({ ...draftRelease, assets: [draftAssets[0], draftAssets[0]] }), /mismatch/);
+for (const change of [{ name: 'unexpected.exe' }, { state: 'new' }, { size: 18 }, { digest: null }, { digest: `sha256:${'c'.repeat(64)}` }, { browser_download_url: 'https://example.invalid/installer.exe' }, { browser_download_url: uploaded[0].browser_download_url }, { browser_download_url: draftAssets[0].browser_download_url.replace(draftSlug, 'untagged-aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa') }, { browser_download_url: draftAssets[0].browser_download_url.replace(repository, 'other/repository') }]) assert.throws(() => verify({ ...draftRelease, assets: [{ ...draftAssets[0], ...change }, draftAssets[1]] }), /mismatch/);
+for (const html_url of [undefined, 'https://example.invalid/release', canonicalUrl.replace(repository, 'other/repository'), `https://github.com/${repository}/releases/tag/untagged-../v${version}`]) assert.throws(() => verify({ ...draftRelease, html_url }), /URL identity/);
+assert.throws(() => verify({ ...draftRelease, draft: false }, { draft: false }), /URL identity/, 'published releases must not retain temporary draft URLs');
+assert.throws(() => verify({ ...publishedRelease, assets: draftAssets }, { draft: false }), /mismatch/);
 for (const local of [[], [expectedAssets[0], expectedAssets[0]], [{ ...expectedAssets[0], name: '../installer.exe' }, expectedAssets[1]], [{ ...expectedAssets[0], sha256: '' }, expectedAssets[1]]]) assert.throws(() => verify(draftRelease, { expectedAssets: local }), /inventory/);
-assert.throws(() => verify({ ...draftRelease, draft: false }, { draft: false, version: '1.0.0' }), /identity/);
+assert.throws(() => verify(publishedRelease, { draft: false, version: '1.0.0' }), /identity/);
+
+// A draft is looked up by the ID returned from creation, never the published-tag
+// endpoint. Published verification must prove that the tag resolves to that ID.
+const verificationOptions = { repository, version, expectedAssets, expectedReleaseId: 123, draft: true };
+const verificationCalls = [];
+assert.deepEqual(await verifyGitHubReleaseAssets(verificationOptions, async (url, allow404) => {
+  verificationCalls.push(url);
+  assert.equal(allow404, false);
+  assert.equal(url, `https://api.github.com/repos/${repository}/releases/123`);
+  return draftRelease;
+}), { id: 123, immutable: false });
+assert.equal(verificationCalls.length, 1);
+const publishedCalls = [];
+await verifyGitHubReleaseAssets({ ...verificationOptions, draft: false }, async url => {
+  publishedCalls.push(url);
+  return publishedRelease;
+});
+assert.deepEqual(publishedCalls, [
+  `https://api.github.com/repos/${repository}/releases/123`,
+  `https://api.github.com/repos/${repository}/releases/tags/v${version}`,
+]);
+await assert.rejects(verifyGitHubReleaseAssets({ ...verificationOptions, draft: false }, async url => url.includes('/tags/') ? { ...publishedRelease, id: 124 } : publishedRelease), /identity changed/);
+await assert.rejects(verifyGitHubReleaseAssets(verificationOptions, async () => { throw new Error('HTTP 404'); }), /HTTP 404/);
+await assert.rejects(verifyGitHubReleaseAssets({ ...verificationOptions, expectedReleaseId: undefined }, async () => assert.fail('invalid ID must fail before network access')), /release ID/);
 
 const read = file => fs.readFileSync(file, 'utf8');
 const rust = read('src-tauri/src/main.rs');
@@ -129,11 +162,14 @@ assert.match(publish, /--verify-tag/);
 assert.match(publish, /ADVANCE_PREVIEW: \$\{\{ steps.publication.outputs.advance_preview \}\}/);
 assert.match(publish, /if \(\$env:ADVANCE_PREVIEW -eq 'true'\)/);
 assert.doesNotMatch(publish, /gh release create updater-/, 'publishing cannot implicitly create immutable rolling feeds');
+const draftIdCapture = publish.indexOf("gh release view $tag --json databaseId --jq '.databaseId'");
+const draftIdEnv = publish.indexOf('$env:EXPECTED_RELEASE_ID = $releaseId');
 const draftCheck = publish.indexOf('node scripts/verify-release-assets.mjs --draft');
 const publishDraft = publish.indexOf('gh release edit $tag --draft=false --verify-tag');
 const publishedCheck = publish.indexOf('node scripts/verify-release-assets.mjs --published');
 const firstRollingUpload = publish.indexOf('gh release upload updater-preview');
 const draftCreate = publish.indexOf("@('--draft', '--verify-tag'");
+assert.ok(draftCreate < draftIdCapture && draftIdCapture < draftIdEnv && draftIdEnv < draftCheck);
 assert.ok(draftCreate >= 0 && draftCreate < draftCheck && draftCheck < publishDraft && publishDraft < publishedCheck && publishedCheck < firstRollingUpload);
 assert.match(publish, /EXPECTED_RELEASE_ID: \$\{\{ steps.version_draft.outputs.release_id \}\}/);
 assert.match(publish, /verify-release-assets.mjs --draft\n\s+if \(\$LASTEXITCODE -ne 0\)/);
