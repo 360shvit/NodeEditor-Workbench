@@ -80,9 +80,9 @@ export interface DesktopWorldgenStageMetric {
   name: string;
   stage: number;
   durationMs: number;
-  preparationMs?: number;
-  executionMs?: number;
-  asyncProcessesStartMs?: number;
+  preparationMs?: number | null;
+  executionMs?: number | null;
+  asyncProcessesStartMs?: number | null;
 }
 
 export interface DesktopWorldgenNamedTimingMetric {
@@ -93,17 +93,17 @@ export interface DesktopWorldgenNamedTimingMetric {
 export interface DesktopWorldgenMemoryGridMetric {
   name: string;
   index: number;
-  memoryFootprintMb?: number;
-  bufferCount?: number;
+  memoryFootprintMb?: number | null;
+  bufferCount?: number | null;
 }
 
 export interface DesktopWorldgenContextDependencyMetric {
   name: string;
   stage: number;
-  outputBufferX?: number;
-  outputBufferZ?: number;
-  outputChunkX?: number;
-  outputChunkZ?: number;
+  outputBufferX?: number | null;
+  outputBufferZ?: number | null;
+  outputChunkX?: number | null;
+  outputChunkZ?: number | null;
 }
 
 export interface DesktopWorldgenPerformanceReport {
@@ -112,7 +112,7 @@ export interface DesktopWorldgenPerformanceReport {
   worldStructureName: string;
   totalMs: number;
   contentGenerationMs: number;
-  accessInitializationMs?: number;
+  accessInitializationMs?: number | null;
   dataTransferMs: number;
   dataTransferTimings: DesktopWorldgenNamedTimingMetric[];
   buffersMemoryMb: number;
@@ -130,7 +130,7 @@ export interface DesktopWorldgenPerformanceResult {
   bytesScanned: number;
   linesScanned: number;
   truncated: boolean;
-  report?: DesktopWorldgenPerformanceReport;
+  report?: DesktopWorldgenPerformanceReport | null;
 }
 
 declare global {

@@ -134,6 +134,9 @@ jobs:
           if ($contract.version.semver.Split('+')[0].Contains('-')) { $args += '--prerelease' }
           & gh @args
           if ($LASTEXITCODE -ne 0) { throw 'GitHub draft release creation failed; do not publish or retry over an existing draft.' }
+          $releaseId = gh release view $tag --json databaseId --jq '.databaseId'
+          if ($LASTEXITCODE -ne 0 -or $releaseId -notmatch '^[1-9][0-9]*$') { throw 'Cannot resolve the newly created draft release ID.' }
+          $env:EXPECTED_RELEASE_ID = $releaseId
           node scripts/verify-release-assets.mjs --draft
           if ($LASTEXITCODE -ne 0) { throw 'Draft asset verification failed; release remains unpublished.' }
       - name: Publish verified version draft and recheck assets
