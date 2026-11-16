@@ -11,20 +11,20 @@ import { useWorkbenchStore, type WorldgenPerformanceWorkbenchTab } from '../../s
 
 const REFRESH_INTERVAL_MS = 60_000;
 
-function formatMs(value: number | undefined): string {
-  return value === undefined ? '—' : `${value.toLocaleString(undefined, { maximumFractionDigits: 3 })} ms`;
+function formatMs(value: number | null | undefined): string {
+  return value == null ? '—' : `${value.toLocaleString(undefined, { maximumFractionDigits: 3 })} ms`;
 }
 
-function formatCount(value: number | undefined): string {
-  return value === undefined ? '—' : value.toLocaleString();
+function formatCount(value: number | null | undefined): string {
+  return value == null ? '—' : value.toLocaleString();
 }
 
-function formatMb(value: number | undefined): string {
-  return value === undefined ? '—' : `${value.toLocaleString(undefined, { maximumFractionDigits: 3 })} MB`;
+function formatMb(value: number | null | undefined): string {
+  return value == null ? '—' : `${value.toLocaleString(undefined, { maximumFractionDigits: 3 })} MB`;
 }
 
-function formatVector(x: number | undefined, z: number | undefined): string {
-  if (x === undefined || z === undefined) return '—';
+function formatVector(x: number | null | undefined, z: number | null | undefined): string {
+  if (x == null || z == null) return '—';
   return `{x=${x}, z=${z}}`;
 }
 

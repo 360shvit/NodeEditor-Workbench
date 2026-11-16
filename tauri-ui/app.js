@@ -21470,18 +21470,18 @@ define("support/releaseIdentity.generated", ["require", "exports"], function (re
     exports.RELEASE_REVISION_INTERNAL_ONLY = exports.UPDATER_DEFAULT_CHANNEL = exports.UPDATER_VERSION = exports.UPDATER_ENABLED = exports.UPDATER_PREPARED = exports.RELEASE_CANONICAL_RUN_REQUIRED = exports.RELEASE_FEATURE_FREEZE = exports.RELEASE_VALIDATION_PROFILE = exports.RELEASE_BUILD_ID = exports.RELEASE_MILESTONE_NAME = exports.RELEASE_MILESTONE = exports.RELEASE_DISPLAY_VERSION = exports.RELEASE_REVISION = exports.RELEASE_VERSION = void 0;
     // GENERATED from release-spec/release-contract.json by scripts/sync-release-contract.mjs.
     // Do not hand-edit release identity values here.
-    exports.RELEASE_VERSION = '0.11.36-rc.9';
+    exports.RELEASE_VERSION = '0.11.36-rc.10';
     exports.RELEASE_REVISION = 'r1';
-    exports.RELEASE_DISPLAY_VERSION = '0.11.36-rc.9-r1';
-    exports.RELEASE_MILESTONE = 'v0.11.36-rc.9';
-    exports.RELEASE_MILESTONE_NAME = 'Final Updater Acceptance';
-    exports.RELEASE_BUILD_ID = 'v0.11.36-rc.9-r1-final-updater-acceptance';
+    exports.RELEASE_DISPLAY_VERSION = '0.11.36-rc.10-r1';
+    exports.RELEASE_MILESTONE = 'v0.11.36-rc.10';
+    exports.RELEASE_MILESTONE_NAME = 'WorldGen Log Display Fix';
+    exports.RELEASE_BUILD_ID = 'v0.11.36-rc.10-r1-worldgen-log-display-fix';
     exports.RELEASE_VALIDATION_PROFILE = 'github-updater-deep-clean-v1';
     exports.RELEASE_FEATURE_FREEZE = false;
     exports.RELEASE_CANONICAL_RUN_REQUIRED = false;
     exports.UPDATER_PREPARED = true;
     exports.UPDATER_ENABLED = true;
-    exports.UPDATER_VERSION = '0.11.36-rc.9';
+    exports.UPDATER_VERSION = '0.11.36-rc.10';
     exports.UPDATER_DEFAULT_CHANNEL = 'stable';
     exports.RELEASE_REVISION_INTERNAL_ONLY = true;
 });
@@ -26097,18 +26097,18 @@ define("release/releaseIdentity", ["require", "exports"], function (require, exp
     exports.RELEASE_REVISION_INTERNAL_ONLY = exports.UPDATER_DEFAULT_CHANNEL = exports.UPDATER_VERSION = exports.UPDATER_ENABLED = exports.UPDATER_PREPARED = exports.RELEASE_CANONICAL_RUN_REQUIRED = exports.RELEASE_FEATURE_FREEZE = exports.RELEASE_VALIDATION_PROFILE = exports.RELEASE_BUILD_ID = exports.RELEASE_MILESTONE_NAME = exports.RELEASE_MILESTONE = exports.RELEASE_DISPLAY_VERSION = exports.RELEASE_REVISION = exports.RELEASE_VERSION = void 0;
     // GENERATED from release-spec/release-contract.json by scripts/sync-release-contract.mjs.
     // Do not hand-edit release identity values here.
-    exports.RELEASE_VERSION = '0.11.36-rc.9';
+    exports.RELEASE_VERSION = '0.11.36-rc.10';
     exports.RELEASE_REVISION = 'r1';
-    exports.RELEASE_DISPLAY_VERSION = '0.11.36-rc.9-r1';
-    exports.RELEASE_MILESTONE = 'v0.11.36-rc.9';
-    exports.RELEASE_MILESTONE_NAME = 'Final Updater Acceptance';
-    exports.RELEASE_BUILD_ID = 'v0.11.36-rc.9-r1-final-updater-acceptance';
+    exports.RELEASE_DISPLAY_VERSION = '0.11.36-rc.10-r1';
+    exports.RELEASE_MILESTONE = 'v0.11.36-rc.10';
+    exports.RELEASE_MILESTONE_NAME = 'WorldGen Log Display Fix';
+    exports.RELEASE_BUILD_ID = 'v0.11.36-rc.10-r1-worldgen-log-display-fix';
     exports.RELEASE_VALIDATION_PROFILE = 'github-updater-deep-clean-v1';
     exports.RELEASE_FEATURE_FREEZE = false;
     exports.RELEASE_CANONICAL_RUN_REQUIRED = false;
     exports.UPDATER_PREPARED = true;
     exports.UPDATER_ENABLED = true;
-    exports.UPDATER_VERSION = '0.11.36-rc.9';
+    exports.UPDATER_VERSION = '0.11.36-rc.10';
     exports.UPDATER_DEFAULT_CHANNEL = 'stable';
     exports.RELEASE_REVISION_INTERNAL_ONLY = true;
 });
@@ -28420,16 +28420,16 @@ define("features/worldgen-performance/WorldgenPerformanceTab", ["require", "expo
     exports.WorldgenPerformanceTab = WorldgenPerformanceTab;
     const REFRESH_INTERVAL_MS = 60_000;
     function formatMs(value) {
-        return value === undefined ? '—' : `${value.toLocaleString(undefined, { maximumFractionDigits: 3 })} ms`;
+        return value == null ? '—' : `${value.toLocaleString(undefined, { maximumFractionDigits: 3 })} ms`;
     }
     function formatCount(value) {
-        return value === undefined ? '—' : value.toLocaleString();
+        return value == null ? '—' : value.toLocaleString();
     }
     function formatMb(value) {
-        return value === undefined ? '—' : `${value.toLocaleString(undefined, { maximumFractionDigits: 3 })} MB`;
+        return value == null ? '—' : `${value.toLocaleString(undefined, { maximumFractionDigits: 3 })} MB`;
     }
     function formatVector(x, z) {
-        if (x === undefined || z === undefined)
+        if (x == null || z == null)
             return '—';
         return `{x=${x}, z=${z}}`;
     }

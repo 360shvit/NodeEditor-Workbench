@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
+import vm from 'node:vm';
 import { fileURLToPath } from 'node:url';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -117,3 +118,100 @@ assert.doesNotMatch(native, /rule == \"oldest\"/);
 assert.match(embedded, /Open log folder/);
 
 console.log('v0.11.27 WorldGen Performance monitor contract: PASS');
+
+// Execute the packaged component with native JSON-shaped results. Rust Option
+// fields serialize to null; they are not omitted like JS optional properties.
+async function renderWorldgenResult(sourceKind, optionalValue) {
+  const context = vm.createContext({
+    console, Promise, Set, Map, WeakMap, Object, Array, String, Number, Boolean,
+    Symbol, Error, TypeError, Date, Math, JSON, TextEncoder, TextDecoder, Blob,
+    URL, URLSearchParams, DOMException, performance: { now: () => 0 },
+    MessageChannel: class { constructor() { this.port1 = {}; this.port2 = { postMessage() {} }; } },
+    setTimeout, clearTimeout, setInterval: () => 1, clearInterval() {},
+  });
+  context.globalThis = context;
+  for (const name of ['amd-loader.js', 'preact-lite.js', 'compat-modules.js', 'app.js']) {
+    vm.runInContext(read(`tauri-ui/${name}`), context, { filename: name });
+  }
+  const bridge = context.require('io/desktopBridge');
+  const { useWorkbenchStore: store } = context.require('store');
+  const { WorldgenPerformanceTab: Component } = context.require('features/worldgen-performance/WorldgenPerformanceTab');
+  context.window = context;
+  context.__HYTALE_DESKTOP_BRIDGE__ = true;
+  const selection = { token: `fixture-${sourceKind}`, name: sourceKind === 'file' ? 'test.log' : 'logs', sourceKind };
+  bridge.desktopChooseWorldgenLog = async () => selection;
+  bridge.desktopChooseWorldgenLogFolder = async () => selection;
+  const report = {
+    timestamp: 'fixture', sampleCount: 1, worldStructureName: 'FixtureWorld',
+    totalMs: 12, contentGenerationMs: 10, accessInitializationMs: optionalValue,
+    dataTransferMs: 2, dataTransferTimings: [], buffersMemoryMb: 1,
+    memoryGrids: [{ name: 'FixtureGrid', index: 0, memoryFootprintMb: optionalValue, bufferCount: optionalValue }],
+    contextDependencies: [{ name: 'FixtureStage', stage: 0, outputBufferX: optionalValue, outputBufferZ: 2, outputChunkX: 3, outputChunkZ: optionalValue }],
+    totalCacheBufferRequests: 10, missedCacheBufferRequests: 0, missedTotalRatioPercent: 0,
+    stages: [{ name: 'TerrainStage', stage: 0, durationMs: 10, preparationMs: optionalValue, executionMs: optionalValue, asyncProcessesStartMs: optionalValue }],
+    rawReport: 'Fixture report',
+  };
+  const requests = [];
+  let nextReport = report;
+  bridge.desktopReadWorldgenPerformance = async token => {
+    requests.push(token);
+    return { name: 'test.log', bytesScanned: 100, linesScanned: 10, truncated: false, report: nextReport };
+  };
+  store.setState({ project: context.require('core').buildProject([]) });
+  store.getState().openWorldgenPerformanceTab();
+  const P = context.PreactLite;
+  const owner = { context: {}, setState() {} };
+  function render() {
+    const tab = store.getState().tabs.find(item => item.kind === 'worldgen-performance');
+    const vnode = { type: Component, props: { tab }, __c: owner };
+    P.options.__r(vnode);
+    const tree = Component(vnode.props);
+    P.options.diffed(vnode);
+    return tree;
+  }
+  function collect(vnode, type) {
+    if (vnode == null || typeof vnode !== 'object') return [];
+    if (Array.isArray(vnode)) return vnode.flatMap(child => collect(child, type));
+    return [...(vnode.type === type ? [vnode] : []), ...collect(vnode.props?.children, type)];
+  }
+  function textOf(vnode) {
+    if (vnode == null || typeof vnode === 'boolean') return '';
+    if (Array.isArray(vnode)) return vnode.map(textOf).join(' ');
+    return typeof vnode === 'object' ? textOf(vnode.props?.children) : String(vnode);
+  }
+  async function settle() { for (let index = 0; index < 6; index += 1) await Promise.resolve(); }
+  const button = collect(render(), 'button').find(item => textOf(item) === (sourceKind === 'file' ? 'Select log file' : 'Open log folder'));
+  assert.ok(button, 'the empty view exposes both native selection routes');
+  await settle();
+  button.props.onClick();
+  await settle();
+  render();
+  await settle();
+  const tree = render();
+  const text = textOf(tree);
+  assert.deepEqual(requests, [selection.token], 'selection starts a native scan for the selected source');
+  assert.match(text, /FixtureWorld/);
+  assert.match(text, /10 lines/);
+  const cells = collect(tree, 'td').map(textOf);
+  if (optionalValue == null) {
+    assert.equal(cells.filter(value => value === '—').length, 7, 'missing stage, memory, count and vector metrics render placeholders');
+    assert.doesNotMatch(text, /null|undefined/);
+  } else {
+    assert.equal(cells.filter(value => value === '0 ms').length, 3, 'zero timings remain valid measurements');
+    assert.ok(cells.includes('0 MB'));
+    assert.ok(cells.includes('0'));
+    assert.ok(cells.includes('{x=0, z=2}'));
+    assert.ok(cells.includes('{x=3, z=0}'));
+  }
+  // No-report is also a native null. Refresh must remain usable after loading.
+  nextReport = null;
+  collect(tree, 'button').find(item => textOf(item) === 'Refresh now').props.onClick();
+  await settle();
+  assert.match(textOf(render()), /No complete WorldGen performance report found/);
+  assert.equal(requests.length, 2);
+  P.options.unmount({ __c: owner });
+}
+for (const sourceKind of ['file', 'folder']) {
+  for (const value of [null, undefined, 0]) await renderWorldgenResult(sourceKind, value);
+}
+console.log('WorldGen packaged rendering: PASS (file/folder selection, native nulls, absent metrics, zero metrics, refresh/no-report)');

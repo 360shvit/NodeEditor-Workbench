@@ -1,6 +1,14 @@
 # Changelog
 
-## 0.11.36-rc.9 — Final Updater Acceptance (Preview)
+## 0.11.36-rc.10 — WorldGen Log Display Fix (Preview candidate)
+
+- Fix a UI crash after selecting a WorldGen log or log folder when optional timing, memory or count values are null. Missing values display as “—”; zero measurements remain visible.
+- Model native nullable report fields explicitly and exercise the packaged component through file/folder selection, missing metrics, zero metrics and refresh without a complete report.
+- Verify unpublished GitHub drafts by their numeric release ID and validate temporary draft asset URLs against that exact release. Published assets must still use canonical version URLs and match every local name, size and SHA-256 digest before updater feeds advance.
+- Supersede the unpublished rc.9 draft with a new version containing both corrections. Retain the rc.9 review-dialog scrolling fix; dependency versions and signing policy are unchanged.
+- Installed acceptance with the corrected signed build remains pending.
+
+## 0.11.36-rc.9 — Final Updater Acceptance (unpublished draft)
 
 - Keep review actions reachable when multiple expanded file diffs exceed the dialog height: the body scrolls while the header and action footer remain visible.
 - Include the rc.7 Discard input reset and rc.8 Windows Apply persistence fixes in the next public Preview after rc.5; retain reviewed dependency resolutions.

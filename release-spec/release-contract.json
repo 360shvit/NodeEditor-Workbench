@@ -5,12 +5,12 @@
     "identifier": "com.hytalegenerator.workbench"
   },
   "version": {
-    "semver": "0.11.36-rc.9",
+    "semver": "0.11.36-rc.10",
     "revision": "r1",
-    "display": "0.11.36-rc.9-r1",
-    "milestone": "v0.11.36-rc.9",
-    "milestoneName": "Final Updater Acceptance",
-    "buildId": "v0.11.36-rc.9-r1-final-updater-acceptance"
+    "display": "0.11.36-rc.10-r1",
+    "milestone": "v0.11.36-rc.10",
+    "milestoneName": "WorldGen Log Display Fix",
+    "buildId": "v0.11.36-rc.10-r1-worldgen-log-display-fix"
   },
   "validation": {
     "profile": "github-updater-deep-clean-v1",
@@ -20,7 +20,7 @@
   "updater": {
     "prepared": true,
     "enabled": true,
-    "integrationMilestone": "0.11.36-rc.9-r1",
+    "integrationMilestone": "0.11.36-rc.10-r1",
     "provider": "GitHub Releases",
     "framework": "Tauri v2 updater",
     "defaultChannel": "stable",
